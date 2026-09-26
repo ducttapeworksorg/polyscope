@@ -1,0 +1,74 @@
+# Polyscope
+
+A cross-platform desktop viewer for browsing and reading files and logs from many backends in one editor-like interface.
+
+## Language
+
+### Sources
+
+**Source Type**:
+A kind of backend Polyscope can read from (e.g. Local Filesystem, S3-compatible Storage, Kubernetes Files, Kubernetes Logs). New Source Types are added over time.
+_Avoid_: provider, connector, backend
+
+**Source**:
+One configured, user-named instance of a **Source Type**, holding its settings (and references to its secrets).
+_Avoid_: connection, mount, profile
+
+**Disconnected / Connected / Error**:
+The state of a **Source**. Every **Source** starts **Disconnected** when the app launches; no tabs or views are restored from a previous session. Expanding a **Disconnected** **Source** connects it; failing to connect puts it in **Error**. Disconnecting stops all **Follows** but leaves its tabs open.
+
+**Environment**:
+An optional, user-defined label (name + colour) attached to a **Source** to show what kind of system it points at (defaults: prod, staging, qa, dev). Shown on the **Source**, its tabs, and the status bar.
+_Avoid_: tag, stage, tier
+
+**Protected Environment**:
+An **Environment** flagged as needing extra care (e.g. prod).
+
+**File Source**:
+A **Source** whose content is a browsable hierarchy of folders and files.
+
+**Log Source**:
+A **Source** whose content is a hierarchy of workloads producing **Log Streams**.
+
+### Kubernetes
+
+**Workload**:
+A Kubernetes object with a pod template that owns pods (Deployment, StatefulSet, DaemonSet, Job, CronJob). Browsed within the single namespace fixed on the **Source**.
+
+**Log Stream**:
+The log output of one container in one pod, viewable as a snapshot or live-followed.
+
+**Previous Log**:
+The **Log Stream** of a container's prior (crashed or restarted) instance, shown only when the container has restarted.
+
+**Pod Status**:
+The health of a pod as shown in the tree: its phase or failure reason (Running, Pending, CrashLoopBackOff, OOMKilled…) plus its restart count when greater than zero.
+
+**Ready Count**:
+How many of a **Workload**'s pods are ready out of how many are desired (e.g. `2/3`).
+
+### Viewing
+
+**Follow**:
+Continuously appending new content to an open view as it is produced (live **Log Streams**, or growing files on Local and Kubernetes Files **Sources**). Not applicable to S3 objects.
+_Avoid_: tail, watch, stream (as a verb)
+
+**Large File**:
+A file above the size threshold (default 50 MB), opened in the **Large File Viewer** instead of the full editor.
+
+**Large File Viewer**:
+A read-only, end-first, paged viewer for **Large Files**, with backend-side search and minimal highlighting.
+
+## Relationships
+
+- A **Source** is an instance of exactly one **Source Type**
+- A **Source** has zero or one **Environment**; an **Environment** is shared by many **Sources**
+- Every **Source Type** is either a **File Source** type or a **Log Source** type
+- A Kubernetes Files **Source** targets exactly one **Workload** and one path; it shows each of that **Workload**'s pods as a separate folder (per-pod volumes differ), with a container level only when the pod has several containers
+- A Kubernetes Logs **Source** covers every **Workload** in its namespace
+- Kubernetes Files and Kubernetes Logs are separate **Source Types**, even though both point at a cluster
+- A **Log Stream** belongs to one container of one pod of one **Workload**
+
+## Flagged ambiguities
+
+- "source" was used for both the kind of backend and a configured instance — resolved: **Source Type** vs **Source**.
