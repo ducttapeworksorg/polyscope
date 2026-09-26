@@ -33,23 +33,34 @@ function LocalFields({ value, onChange }: FieldsProps<Extract<NewSource, { type:
   }
 
   return (
-    <div className="field">
-      <label className="field__label" htmlFor="source-root-path">
+    <>
+      <div className="field">
+        <label className="field__label" htmlFor="source-root-path">
         {t('localSource.rootPath')}
       </label>
-      <div className="field__row">
-        <input
-          id="source-root-path"
-          className="field__input field__input--path"
-          value={value.rootPath}
-          onChange={(e) => onChange({ ...value, rootPath: e.target.value })}
-          spellCheck={false}
-        />
-        <button type="button" className="button button--quiet" onClick={browse}>
-          {t('localSource.browse')}
-        </button>
+        <div className="field__row">
+          <input
+            id="source-root-path"
+            className="field__input field__input--path"
+            value={value.rootPath}
+            onChange={(e) => onChange({ ...value, rootPath: e.target.value })}
+            spellCheck={false}
+          />
+          <button type="button" className="button button--quiet" onClick={browse}>
+            {t('localSource.browse')}
+          </button>
+        </div>
       </div>
-    </div>
+      <label className="field field--check">
+        <input
+          type="checkbox"
+          checked={value.showHidden ?? true}
+          onChange={(e) => onChange({ ...value, showHidden: e.target.checked })}
+        />
+        <span className="field__label">{t('localSource.showHidden')}</span>
+        <span className="field__hint">{t('localSource.showHidden.hint')}</span>
+      </label>
+    </>
   )
 }
 
@@ -58,8 +69,8 @@ export const sourceTypeUi: SourceTypeUis = {
     label: 'sourceType.local',
     hint: 'sourceType.local.hint',
     Icon: HardDriveIcon,
-    blank: () => ({ type: 'local', name: '', rootPath: '' }),
-    settingsOf: (source) => ({ type: 'local', name: source.name, rootPath: source.rootPath }),
+    blank: () => ({ type: 'local', name: '', rootPath: '', showHidden: true }),
+    settingsOf: (source) => ({ type: 'local', name: source.name, rootPath: source.rootPath, showHidden: source.showHidden }),
     Fields: LocalFields
   }
 }

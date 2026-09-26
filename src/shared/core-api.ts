@@ -12,6 +12,8 @@ export interface NewLocalSource {
   type: 'local'
   name: string
   rootPath: string
+  /** Whether dotfiles and files marked hidden are listed; on unless turned off. */
+  showHidden?: boolean
 }
 
 /** The user-editable settings of a Source; its Source Type decides which fields exist. */
@@ -22,16 +24,25 @@ export interface SourceInfo {
   type: SourceTypeId
   name: string
   rootPath: string
+  showHidden: boolean
 }
 
 /** A path inside a Source: '/'-separated, relative to the Source root, '' for the root itself. */
 export type SourcePath = string
+
+/** Why an entry is shown but can't be expanded or opened. */
+export interface EntryProblem {
+  code: CoreErrorCode
+  message: string
+}
 
 /** A folder or file in a Source's tree. */
 export interface EntryNode {
   kind: 'folder' | 'file'
   name: string
   path: SourcePath
+  /** Set when the entry can't be expanded or opened, e.g. a symlink loop or no permission to read it. */
+  problem?: EntryProblem
 }
 
 /** Stands in for the children of `path` when they couldn't be listed; expanding `path` again retries. */
@@ -69,6 +80,9 @@ export type CoreErrorCode =
   | 'NOT_FOUND'
   | 'NOT_A_FOLDER'
   | 'NOT_A_FILE'
+  | 'PERMISSION_DENIED'
+  | 'SYMLINK_LOOP'
+  | 'INVALID_RANGE'
   | 'INVALID_ORDER'
   | 'INVALID_SETTINGS'
   | 'UNKNOWN'

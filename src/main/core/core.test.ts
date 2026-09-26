@@ -1,6 +1,8 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createCore } from './core'
 import { createSecretStore, type SecretCipher } from './secret-store'
@@ -25,7 +27,7 @@ describe('Local Filesystem Source', () => {
 
     const added = await core.addSource({ type: 'local', name: 'Logs', rootPath: dir })
 
-    expect(await core.listSources()).toEqual([{ id: added.id, type: 'local', name: 'Logs', rootPath: dir }])
+    expect(await core.listSources()).toEqual([{ id: added.id, type: 'local', name: 'Logs', rootPath: dir, showHidden: true }])
   })
 
   it('expands its root into folders first, then files, each sorted by name', async () => {
@@ -134,6 +136,212 @@ describe('browsing a Local Filesystem Source', () => {
   })
 })
 
+describe('Local Filesystem Sources in real-world folders', () => {
+  const windows = process.platform === 'win32'
+  // Permission bits are neither enforced on Windows nor against root.
+  const permissionsEnforced = !windows && process.getuid?.() !== 0
+  const locked: string[] = []
+
+  afterEach(async () => {
+    // Put permissions back so the temp directory can be removed.
+    await Promise.all(locked.splice(0).map((path) => chmod(path, 0o755)))
+  })
+
+  const lock = async (path: string) => {
+    locked.push(path)
+    await chmod(path, 0o000)
+  }
+
+  /** Links `path` to the folder `target`; Windows uses a junction, which needs no special privilege. */
+  const linkFolder = (target: string, path: string) => symlink(target, path, windows ? 'junction' : 'dir')
+
+  const connected = async (rootPath: string, options: { showHidden?: boolean } = {}) => {
+    const core = createCore()
+    const source = await core.addSource({ type: 'local', name: 'Logs', rootPath, ...options })
+    return { core, source, nodes: await core.connect(source.id) }
+  }
+
+  const names = (nodes: { name: string }[]) => nodes.map((n) => n.name)
+  const loop = { code: 'SYMLINK_LOOP', message: expect.any(String) }
+
+  describe('hidden files', () => {
+    beforeEach(async () => {
+      await writeFile(join(dir, '.env'), '')
+      await mkdir(join(dir, '.git'))
+      await writeFile(join(dir, 'app.log'), '')
+    })
+
+    it('are listed by default', async () => {
+      const { source, nodes } = await connected(dir)
+
+      expect(source.showHidden).toBe(true)
+      expect(names(nodes)).toEqual(['.git', '.env', 'app.log'])
+    })
+
+    it('are left out, dotfiles and dot-folders alike, when show hidden is off', async () => {
+      const { source, nodes } = await connected(dir, { showHidden: false })
+
+      expect(source.showHidden).toBe(false)
+      expect(names(nodes)).toEqual(['app.log'])
+    })
+
+    it.runIf(windows)('include files and folders with the Windows hidden attribute', async () => {
+      await writeFile(join(dir, 'thumbs.db'), '')
+      await mkdir(join(dir, 'cache'))
+      await promisify(execFile)('attrib', ['+h', join(dir, 'thumbs.db')])
+      await promisify(execFile)('attrib', ['+h', join(dir, 'cache')])
+
+      expect(names((await connected(dir)).nodes)).toEqual(['.git', 'cache', '.env', 'app.log', 'thumbs.db'])
+      expect(names((await connected(dir, { showHidden: false })).nodes)).toEqual(['app.log'])
+    })
+
+    it.runIf(windows)('are found by attribute in folders whose names cmd would otherwise misread', async () => {
+      const root = join(dir, '%PATH% & co')
+      await mkdir(root)
+      await writeFile(join(root, 'hidden.log'), '')
+      await writeFile(join(root, 'shown.log'), '')
+      await promisify(execFile)('attrib', ['+h', join(root, 'hidden.log')])
+
+      expect(names((await connected(root, { showHidden: false })).nodes)).toEqual(['shown.log'])
+    })
+
+    it('are listed again once show hidden is turned back on', async () => {
+      const { core, source } = await connected(dir, { showHidden: false })
+
+      await core.editSource(source.id, { type: 'local', name: 'Logs', rootPath: dir, showHidden: true })
+
+      expect(await core.connectionState(source.id)).toEqual({ state: 'disconnected' })
+      expect(names(await core.connect(source.id))).toEqual(['.git', '.env', 'app.log'])
+    })
+
+    it('are shown for Sources saved before show hidden existed', async () => {
+      await mkdir(dataDir())
+      const saved = { version: 1, sources: [{ id: 'old', type: 'local', name: 'Old', rootPath: dir }], groupOrder: ['local'] }
+      await writeFile(join(dataDir(), 'sources.json'), JSON.stringify(saved))
+      const core = createCore({ dataDir: dataDir() })
+
+      expect(await core.listSources()).toEqual([{ id: 'old', type: 'local', name: 'Old', rootPath: dir, showHidden: true }])
+      expect(names(await core.connect('old'))).toContain('.env')
+    })
+  })
+
+  describe('symlinks', () => {
+    it('are followed into linked folders', async () => {
+      const root = join(dir, 'root')
+      await mkdir(root)
+      await mkdir(join(dir, 'elsewhere'))
+      await writeFile(join(dir, 'elsewhere', 'app.log'), 'linked')
+      await linkFolder(join(dir, 'elsewhere'), join(root, 'linked'))
+
+      const { core, source, nodes } = await connected(root)
+
+      expect(nodes).toEqual([{ kind: 'folder', name: 'linked', path: 'linked' }])
+      expect(await core.expand(source.id, 'linked')).toEqual([{ kind: 'file', name: 'app.log', path: 'linked/app.log' }])
+      expect((await core.openFile(source.id, 'linked/app.log')).content).toBe('linked')
+    })
+
+    it('are followed to linked files', async (ctx) => {
+      const root = join(dir, 'root')
+      await mkdir(root)
+      await writeFile(join(dir, 'target.log'), 'linked')
+      // Windows only lets privileged users (or Developer Mode) create file symlinks.
+      const linked = await symlink(join(dir, 'target.log'), join(root, 'app.log'), 'file').then(
+        () => true,
+        () => false
+      )
+      if (!linked) return ctx.skip()
+
+      const { core, source, nodes } = await connected(root)
+
+      expect(nodes).toEqual([{ kind: 'file', name: 'app.log', path: 'app.log' }])
+      expect((await core.openFile(source.id, 'app.log')).content).toBe('linked')
+    })
+
+    it('that lead back to a folder containing them are shown as loops', async () => {
+      await mkdir(join(dir, 'app'))
+      await linkFolder(dir, join(dir, 'app', 'up'))
+      await linkFolder(join(dir, 'app'), join(dir, 'app', 'self'))
+      const { core, source } = await connected(dir)
+
+      expect(await core.expand(source.id, 'app')).toEqual([
+        { kind: 'folder', name: 'self', path: 'app/self', problem: loop },
+        { kind: 'folder', name: 'up', path: 'app/up', problem: loop }
+      ])
+    })
+
+    it('that loop back through another link are shown as loops', async () => {
+      const root = join(dir, 'root')
+      await mkdir(root)
+      await mkdir(join(dir, 'elsewhere'))
+      await linkFolder(join(dir, 'elsewhere'), join(root, 'out'))
+      await linkFolder(root, join(dir, 'elsewhere', 'back'))
+      const { core, source, nodes } = await connected(root)
+
+      expect(nodes).toEqual([{ kind: 'folder', name: 'out', path: 'out' }])
+      expect(await core.expand(source.id, 'out')).toEqual([{ kind: 'folder', name: 'back', path: 'out/back', problem: loop }])
+    })
+
+    it('to a sibling folder are not mistaken for loops', async () => {
+      await mkdir(join(dir, 'a'))
+      await mkdir(join(dir, 'b'))
+      await linkFolder(join(dir, 'b'), join(dir, 'a', 'to-b'))
+      const { core, source } = await connected(dir)
+
+      expect(await core.expand(source.id, 'a')).toEqual([{ kind: 'folder', name: 'to-b', path: 'a/to-b' }])
+    })
+
+    it.skipIf(windows)('that only point at each other are shown as loops', async () => {
+      await symlink('b', join(dir, 'a'))
+      await symlink('a', join(dir, 'b'))
+
+      expect((await connected(dir)).nodes).toEqual([
+        { kind: 'file', name: 'a', path: 'a', problem: loop },
+        { kind: 'file', name: 'b', path: 'b', problem: loop }
+      ])
+    })
+
+    it('whose target is missing are still listed', async () => {
+      await mkdir(join(dir, 'gone'))
+      await linkFolder(join(dir, 'gone'), join(dir, 'dangling'))
+      await rm(join(dir, 'gone'), { recursive: true })
+      const { core, source, nodes } = await connected(dir)
+
+      expect(nodes).toEqual([{ kind: 'file', name: 'dangling', path: 'dangling' }])
+      await expect(core.openFile(source.id, 'dangling')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    })
+  })
+
+  describe.runIf(permissionsEnforced)('unreadable entries', () => {
+    const denied = { code: 'PERMISSION_DENIED', message: expect.any(String) }
+
+    it('are listed with a permission error, alongside readable ones', async () => {
+      await mkdir(join(dir, 'private'))
+      await writeFile(join(dir, 'secret.log'), 'secret')
+      await writeFile(join(dir, 'app.log'), 'app')
+      await lock(join(dir, 'private'))
+      await lock(join(dir, 'secret.log'))
+
+      expect((await connected(dir)).nodes).toEqual([
+        { kind: 'folder', name: 'private', path: 'private', problem: denied },
+        { kind: 'file', name: 'app.log', path: 'app.log' },
+        { kind: 'file', name: 'secret.log', path: 'secret.log', problem: denied }
+      ])
+    })
+
+    it('can’t be expanded or opened, leaving the Source Connected', async () => {
+      await mkdir(join(dir, 'private'))
+      await writeFile(join(dir, 'secret.log'), 'secret')
+      const { core, source } = await connected(dir)
+      await lock(join(dir, 'private'))
+      await lock(join(dir, 'secret.log'))
+
+      expect(await core.expand(source.id, 'private')).toEqual([errorNode('private', 'PERMISSION_DENIED')])
+      await expect(core.openFile(source.id, 'secret.log')).rejects.toMatchObject({ code: 'PERMISSION_DENIED' })
+      expect(await core.connectionState(source.id)).toEqual({ state: 'connected' })
+    })
+  })
+})
+
 describe('adding a Local Filesystem Source', () => {
   it.each([
     ['a blank name', () => ({ name: '  ', rootPath: dir }), 'NAME_REQUIRED'],
@@ -167,7 +375,7 @@ describe('the Source registry', () => {
 
     const edited = await core.editSource(first.id, localSource(' Renamed ', other))
 
-    expect(edited).toEqual({ id: first.id, type: 'local', name: 'Renamed', rootPath: other })
+    expect(edited).toEqual({ id: first.id, type: 'local', name: 'Renamed', rootPath: other, showHidden: true })
     expect(await core.listSources()).toEqual([edited, second])
   })
 
@@ -204,7 +412,7 @@ describe('the Source registry', () => {
 
     const copy = await core.duplicateSource(logs.id)
 
-    expect(copy).toEqual({ id: expect.any(String), type: 'local', name: 'Logs copy', rootPath: dir })
+    expect(copy).toEqual({ id: expect.any(String), type: 'local', name: 'Logs copy', rootPath: dir, showHidden: true })
     expect(copy.id).not.toBe(logs.id)
     expect(await core.listSources()).toEqual([logs, copy, other])
   })

@@ -22,6 +22,9 @@ const asCoreError = (error: unknown) =>
   error instanceof CoreError ? error : new CoreError('UNKNOWN', error instanceof Error ? error.message : String(error))
 const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 
+/** Fills in settings added since a Source was saved with their defaults. */
+const withDefaults = (source: SourceInfo): SourceInfo => ({ ...source, showHidden: source.showHidden ?? true })
+
 export interface CoreOptions {
   /** Where the registry is saved between launches; without it, nothing outlives the core. */
   dataDir?: string
@@ -40,7 +43,7 @@ export function createCore(options: CoreOptions = {}): Core {
   // Sources are kept in each group's order; groups interleave freely and are sorted by groupOrder when listed.
   const { sources, groupOrder } = emptyRegistry()
   const loaded = store?.load().then((saved) => {
-    sources.push(...saved.sources)
+    sources.push(...saved.sources.map(withDefaults))
     groupOrder.splice(0, groupOrder.length, ...saved.groupOrder)
   })
   let settings: Settings = { ...defaultSettings }
@@ -89,13 +92,13 @@ export function createCore(options: CoreOptions = {}): Core {
   const listNodes = async (fileSource: FileSource, path: SourcePath) => {
     const entries = await fileSource.listChildren(path)
     return entries
-      .map((e): EntryNode => ({ kind: e.kind, name: e.name, path: joinPath(path, e.name) }))
+      .map((e): EntryNode => ({ kind: e.kind, name: e.name, path: joinPath(path, e.name), ...(e.problem && { problem: e.problem }) }))
       .sort((a, b) => (a.kind === b.kind ? byName.compare(a.name, b.name) : a.kind === 'folder' ? -1 : 1))
   }
 
   /** Opens a File Source for a Source's settings, once it's clear it can be reached. */
-  const reach = async ({ rootPath }: Pick<NewSource, 'rootPath'>) => {
-    const fileSource = createLocalFileSource(rootPath)
+  const reach = async ({ rootPath, showHidden = true }: Pick<NewSource, 'rootPath' | 'showHidden'>) => {
+    const fileSource = createLocalFileSource(rootPath, { showHidden })
     const root = await fileSource.stat('').catch(() => null)
     if (!root) throw new CoreError('ROOT_NOT_FOUND', `Root path does not exist: ${rootPath}`)
     if (root.kind !== 'folder') throw new CoreError('ROOT_NOT_A_FOLDER', `Root path is not a folder: ${rootPath}`)
@@ -103,7 +106,7 @@ export function createCore(options: CoreOptions = {}): Core {
   }
 
   /** Reaches a Source and lists its root: what connecting, or testing a connection, has to get through. */
-  const open = async (settings: Pick<NewSource, 'rootPath'>) => {
+  const open = async (settings: Pick<NewSource, 'rootPath' | 'showHidden'>) => {
     const fileSource = await reach(settings)
     return { fileSource, nodes: await listNodes(fileSource, '') }
   }
@@ -113,8 +116,9 @@ export function createCore(options: CoreOptions = {}): Core {
     const name = input.name.trim()
     if (!name) throw new CoreError('NAME_REQUIRED', 'A Source needs a name')
     const rootPath = input.rootPath.trim()
-    await reach({ rootPath })
-    return { type: input.type, name, rootPath }
+    const showHidden = input.showHidden ?? true
+    await reach({ rootPath, showHidden })
+    return { type: input.type, name, rootPath, showHidden }
   }
 
   /** Every setting but the name, in a form that compares equal whatever order the keys were saved in. */
@@ -242,7 +246,7 @@ export function createCore(options: CoreOptions = {}): Core {
     },
 
     async testConnection(input) {
-      await open({ rootPath: input.rootPath.trim() })
+      await open({ rootPath: input.rootPath.trim(), showHidden: input.showHidden })
     },
 
     async disconnect(sourceId) {
@@ -267,7 +271,7 @@ export function createCore(options: CoreOptions = {}): Core {
       const fileSource = fileSourceFor(sourceId)
       const info = await fileSource.stat(path)
       if (info.kind !== 'file') throw new CoreError('NOT_A_FILE', `Not a file: ${path}`)
-      const bytes = await fileSource.read(path)
+      const bytes = await fileSource.read(path, { offset: 0, length: info.size })
       return {
         path,
         name: path.slice(path.lastIndexOf('/') + 1),

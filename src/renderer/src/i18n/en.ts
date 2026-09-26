@@ -26,6 +26,8 @@ export const en = {
 
   'localSource.rootPath': 'Root path',
   'localSource.browse': 'Browse…',
+  'localSource.showHidden': 'Show hidden files',
+  'localSource.showHidden.hint': 'Dotfiles, and files marked hidden on Windows.',
 
   'sourceMenu.refresh': 'Refresh',
   'sourceMenu.disconnect': 'Disconnect',
@@ -85,6 +87,9 @@ export const en = {
   'error.NOT_FOUND': 'This item no longer exists.',
   'error.NOT_A_FOLDER': 'This is a file, not a folder.',
   'error.NOT_A_FILE': 'This is a folder, not a file.',
+  'error.PERMISSION_DENIED': 'You don’t have permission to read this.',
+  'error.SYMLINK_LOOP': 'This link leads back to a folder that contains it, so it isn’t expanded.',
+  'error.INVALID_RANGE': 'That part of the file can’t be read: {message}',
   'error.INVALID_ORDER': 'That can’t be moved there.',
   'error.INVALID_SETTINGS': 'Those settings aren’t valid: {message}',
   'error.UNKNOWN': 'Couldn’t complete that: {message}'

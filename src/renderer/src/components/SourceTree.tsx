@@ -172,6 +172,22 @@ export function SourceTree(props: Props) {
     }
     if (listing.nodes.length === 0) return [note(path, depth, t('tree.emptyFolder'))]
     return listing.nodes.flatMap((node) => {
+      if (node.problem) {
+        const reason = describeFailure(node.problem)
+        return [
+          row({
+            path: node.path,
+            depth,
+            label: node.name,
+            folder: false,
+            icon: <WarningIcon />,
+            onActivate: () => undefined,
+            status: <span className="tree-row__problem">{reason}</span>,
+            className: 'has-problem',
+            extra: { title: reason, 'aria-description': reason }
+          })
+        ]
+      }
       const isFolder = node.kind === 'folder'
       const self = row({
         path: node.path,

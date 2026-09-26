@@ -437,6 +437,27 @@ fieldset {
   font-size: var(--text-sm);
 }
 
+/* A checkbox with its label beside it and any hint beneath the label. */
+.field--check {
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+  align-items: center;
+  cursor: pointer;
+}
+
+.field--check input {
+  margin: 0;
+  accent-color: var(--glint);
+}
+
+.field--check .field__label {
+  color: var(--text);
+}
+
+.field--check .field__hint {
+  grid-column: 2;
+}
+
 .field__input[aria-invalid='true'] {
   border-color: var(--danger);
 }
@@ -671,6 +692,30 @@ fieldset {
 .tree-row__status--error,
 .tree-row--source.is-error .tree-row__icon {
   color: var(--danger);
+}
+
+/* An entry that's listed but can't be expanded or opened: its reason follows its name. */
+.tree-row.has-problem {
+  cursor: default;
+}
+
+.tree-row.has-problem .tree-row__icon {
+  color: var(--danger);
+}
+
+/* The name gives way to its reason only once the reason is fully truncated. */
+.tree-row.has-problem .tree-row__label {
+  flex: none;
+  max-width: 70%;
+}
+
+.tree-row__problem {
+  overflow: hidden;
+  min-width: 0;
+  padding-left: 6px;
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
 }
 
 .tree-note {
