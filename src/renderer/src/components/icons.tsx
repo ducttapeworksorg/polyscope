@@ -66,6 +66,13 @@ export const CloseIcon = () => (
   </svg>
 )
 
+export const GearIcon = () => (
+  <svg {...base}>
+    <circle cx="8" cy="8" r="2" />
+    <path d="M6.9 1.75h2.2l.35 1.7 1.2.7 1.65-.55 1.1 1.9-1.3 1.15v1.4l1.3 1.15-1.1 1.9-1.65-.55-1.2.7-.35 1.7H6.9l-.35-1.7-1.2-.7-1.65.55-1.1-1.9 1.3-1.15v-1.4L2.6 5.5l1.1-1.9 1.65.55 1.2-.7z" />
+  </svg>
+)
+
 /** The Polyscope mark: many small lenses inside one aperture. */
 export const ApertureMark = () => (
   <svg className="aperture" width="148" height="148" viewBox="0 0 148 148" aria-hidden="true" focusable="false">

@@ -1,6 +1,8 @@
 // Types shared by the core API (main process) and its callers (renderer, tests).
 // Everything here must be serialisable over IPC.
 
+import type { Settings } from './settings'
+
 export type SourceTypeId = 'local'
 
 /** Every Source Type, in the default order of its sidebar group. */
@@ -68,6 +70,7 @@ export type CoreErrorCode =
   | 'NOT_A_FOLDER'
   | 'NOT_A_FILE'
   | 'INVALID_ORDER'
+  | 'INVALID_SETTINGS'
   | 'UNKNOWN'
 
 export interface CoreApi {
@@ -93,6 +96,15 @@ export interface CoreApi {
   /** The children of a node in a Connected Source; if they can't be listed, a single error node instead. */
   expand(sourceId: string, path: SourcePath): Promise<TreeNode[]>
   openFile(sourceId: string, path: SourcePath): Promise<OpenedFile>
+  getSettings(): Promise<Settings>
+  /** Changes the given settings, keeping the rest; all of them together must still be valid. */
+  updateSettings(changes: Partial<Settings>): Promise<Settings>
+}
+
+/** What the core announces without being asked. Listeners run in the core's process; IPC forwards them. */
+export interface CoreEvents {
+  /** Calls `listener` with the new settings after each change is saved; returns a function that unsubscribes. */
+  onSettingsChanged(listener: (settings: Settings) => void): () => void
 }
 
 export type CoreMethod = keyof CoreApi
@@ -110,7 +122,9 @@ export const coreMethods: readonly CoreMethod[] = [
   'testConnection',
   'disconnect',
   'expand',
-  'openFile'
+  'openFile',
+  'getSettings',
+  'updateSettings'
 ]
 
 /** How a core call travels back over IPC: errors are values so their code survives. */

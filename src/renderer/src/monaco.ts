@@ -27,7 +27,7 @@ self.MonacoEnvironment = {
   }
 }
 
-// Mirrors the slate tokens in styles/app.css so the editor well is continuous with the chrome.
+// Each theme mirrors the slate tokens of its app theme in styles/app.css, so the editor well is continuous with the chrome.
 monaco.editor.defineTheme('polyscope-dark', {
   base: 'vs-dark',
   inherit: true,
@@ -49,6 +49,30 @@ monaco.editor.defineTheme('polyscope-dark', {
     'scrollbarSlider.background': '#8391a833',
     'scrollbarSlider.hoverBackground': '#8391a855',
     'scrollbarSlider.activeBackground': '#8391a877'
+  }
+})
+
+monaco.editor.defineTheme('polyscope-light', {
+  base: 'vs',
+  inherit: true,
+  rules: [],
+  colors: {
+    'editor.background': '#fbfcfd',
+    'editor.foreground': '#1f2735',
+    'editorLineNumber.foreground': '#a3adbc',
+    'editorLineNumber.activeForeground': '#4a5568',
+    'editor.lineHighlightBackground': '#f0f3f7',
+    'editor.lineHighlightBorder': '#00000000',
+    'editor.selectionBackground': '#c9d5e8',
+    'editor.inactiveSelectionBackground': '#dde4ef',
+    'editorCursor.foreground': '#141a25',
+    'editorIndentGuide.background1': '#e2e7ee',
+    'editorWidget.background': '#f1f4f8',
+    'editorWidget.border': '#c3ccd9',
+    'minimap.background': '#fbfcfd',
+    'scrollbarSlider.background': '#5a667933',
+    'scrollbarSlider.hoverBackground': '#5a667955',
+    'scrollbarSlider.activeBackground': '#5a667977'
   }
 })
 

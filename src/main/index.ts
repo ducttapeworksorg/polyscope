@@ -1,8 +1,9 @@
 import { join } from 'node:path'
-import { app, BrowserWindow, safeStorage, shell } from 'electron'
+import { app, BrowserWindow, nativeTheme, safeStorage, shell } from 'electron'
+import type { Theme } from '@shared/settings'
 import { createCore } from './core/core'
 import { createSecretStore } from './core/secret-store'
-import { registerCoreIpc, registerShellIpc } from './ipc'
+import { forwardCoreEvents, registerCoreIpc, registerShellIpc } from './ipc'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -10,7 +11,16 @@ let mainWindow: BrowserWindow | null = null
 const userDataDir = app.commandLine.getSwitchValue('user-data-dir')
 if (userDataDir) app.setPath('userData', userDataDir)
 
-function createWindow(): void {
+// The window's colour before the renderer paints, matching the editor well of each theme in app.css.
+const backgroundColor: Record<Theme, string> = { dark: '#1b2230', light: '#fbfcfd' }
+
+/** Makes native chrome (title bar, OS dialogs) and the window background follow the app's theme. */
+function applyNativeTheme(theme: Theme): void {
+  nativeTheme.themeSource = theme
+  mainWindow?.setBackgroundColor(backgroundColor[theme])
+}
+
+function createWindow(theme: Theme): void {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -18,7 +28,7 @@ function createWindow(): void {
     minHeight: 400,
     show: false,
     title: 'Polyscope',
-    backgroundColor: '#1b2230',
+    backgroundColor: backgroundColor[theme],
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -43,18 +53,23 @@ function createWindow(): void {
   else void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
 }
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
   const dataDir = app.getPath('userData')
   const cipher = {
     encrypt: (plain: string) => safeStorage.encryptString(plain),
     decrypt: (encrypted: Buffer) => safeStorage.decryptString(encrypted)
   }
-  registerCoreIpc(createCore({ dataDir, secrets: createSecretStore({ dataDir, cipher }) }))
+  const core = createCore({ dataDir, secrets: createSecretStore({ dataDir, cipher }) })
+  registerCoreIpc(core)
   registerShellIpc(() => mainWindow)
-  createWindow()
+  forwardCoreEvents(core, () => mainWindow)
+  core.onSettingsChanged(({ theme }) => applyNativeTheme(theme))
+  const { theme } = await core.getSettings()
+  applyNativeTheme(theme)
+  createWindow(theme)
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) void core.getSettings().then((settings) => createWindow(settings.theme))
   })
 })
 

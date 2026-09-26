@@ -1,5 +1,5 @@
 import { dialog, ipcMain, type BrowserWindow } from 'electron'
-import { coreMethods, type CoreApi, type CoreMethod, type CoreResult } from '@shared/core-api'
+import { coreMethods, type CoreApi, type CoreEvents, type CoreMethod, type CoreResult } from '@shared/core-api'
 import { CoreError } from './core/core-error'
 
 const isCoreMethod = (value: unknown): value is CoreMethod => coreMethods.includes(value as CoreMethod)
@@ -18,6 +18,11 @@ export function registerCoreIpc(core: CoreApi): void {
       return { ok: false, code: 'UNKNOWN', message: error instanceof Error ? error.message : String(error) }
     }
   })
+}
+
+/** Forwards the core's events to whichever window is open. */
+export function forwardCoreEvents(core: CoreEvents, getWindow: () => BrowserWindow | null): void {
+  core.onSettingsChanged((settings) => getWindow()?.webContents.send('core:settingsChanged', settings))
 }
 
 export function registerShellIpc(getWindow: () => BrowserWindow | null): void {

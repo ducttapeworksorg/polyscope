@@ -1,4 +1,4 @@
-import type { CoreApi, CoreErrorCode, CoreMethod } from '@shared/core-api'
+import type { CoreApi, CoreErrorCode, CoreEvents, CoreMethod } from '@shared/core-api'
 import { t } from './i18n'
 
 export class CoreCallError extends Error {
@@ -18,8 +18,8 @@ function call<M extends CoreMethod>(method: M) {
   }
 }
 
-/** The core API as seen from the renderer: every call crosses IPC to the main process. */
-export const core: CoreApi = {
+/** The core API as seen from the renderer: every call and event crosses IPC to the main process. */
+export const core: CoreApi & CoreEvents = {
   listSources: call('listSources'),
   addSource: call('addSource'),
   editSource: call('editSource'),
@@ -32,7 +32,10 @@ export const core: CoreApi = {
   testConnection: call('testConnection'),
   disconnect: call('disconnect'),
   expand: call('expand'),
-  openFile: call('openFile')
+  openFile: call('openFile'),
+  getSettings: call('getSettings'),
+  updateSettings: call('updateSettings'),
+  onSettingsChanged: (listener) => window.polyscope.onSettingsChanged(listener)
 }
 
 /** A user-facing message for a failure the core reported, thrown or not. */

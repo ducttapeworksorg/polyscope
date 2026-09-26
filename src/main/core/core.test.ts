@@ -526,3 +526,156 @@ describe('testing a connection', () => {
     await expect(core.testConnection(localSource('Logs', rootPath()))).rejects.toMatchObject({ code })
   })
 })
+
+describe('settings', () => {
+  const MB = 1024 * 1024
+  const defaults = {
+    largeFileThreshold: 50 * MB,
+    openAnywayLimit: 200 * MB,
+    cacheSizeCap: 2048 * MB,
+    defaultLastNLines: 10_000,
+    theme: 'dark'
+  }
+  const settingsFile = () => join(dataDir(), 'settings.json')
+
+  it('start with the defaults', async () => {
+    expect(await createCore().getSettings()).toEqual(defaults)
+    expect(await createCore({ dataDir: dataDir() }).getSettings()).toEqual(defaults)
+  })
+
+  it('change only what is given, returning the new settings', async () => {
+    const core = createCore()
+
+    const changed = await core.updateSettings({ theme: 'light', defaultLastNLines: 50_000 })
+
+    expect(changed).toEqual({ ...defaults, theme: 'light', defaultLastNLines: 50_000 })
+    expect(await core.getSettings()).toEqual(changed)
+  })
+
+  it.each([
+    ['a zero threshold', { largeFileThreshold: 0 }, 'largeFileThreshold'],
+    ['a fractional line count', { defaultLastNLines: 10.5 }, 'defaultLastNLines'],
+    ['a negative cache size', { cacheSizeCap: -1 }, 'cacheSizeCap'],
+    ['a line count that is not a number', { defaultLastNLines: '10' as unknown as number }, 'defaultLastNLines'],
+    ['an unknown theme', { theme: 'sepia' as 'dark' }, 'theme'],
+    ['an "open anyway" limit below the threshold', { openAnywayLimit: 40 * MB }, 'openAnywayLimit'],
+    ['a threshold above the "open anyway" limit', { largeFileThreshold: 300 * MB }, 'openAnywayLimit'],
+    ['a cache too small for the "open anyway" limit', { cacheSizeCap: 100 * MB }, 'cacheSizeCap']
+  ])('refuse %s, naming the setting and changing nothing', async (_, change, setting) => {
+    const core = createCore()
+
+    const failure = core.updateSettings(change)
+
+    await expect(failure).rejects.toMatchObject({ code: 'INVALID_SETTINGS' })
+    await expect(failure).rejects.toThrow(setting)
+    expect(await core.getSettings()).toEqual(defaults)
+  })
+
+  it('accept limits that are all raised together', async () => {
+    const core = createCore()
+    const raised = { largeFileThreshold: 300 * MB, openAnywayLimit: 1024 * MB, cacheSizeCap: 4096 * MB }
+
+    expect(await core.updateSettings(raised)).toEqual({ ...defaults, ...raised })
+  })
+
+  it('ignore keys that are not settings', async () => {
+    const core = createCore()
+
+    await core.updateSettings({ theme: 'light', bogus: 1 } as Partial<typeof defaults> as never)
+
+    expect(await core.getSettings()).toEqual({ ...defaults, theme: 'light' })
+  })
+
+  it('are restored in a later launch', async () => {
+    await createCore({ dataDir: dataDir() }).updateSettings({ theme: 'light', largeFileThreshold: 20 * MB })
+
+    expect(await createCore({ dataDir: dataDir() }).getSettings()).toEqual({
+      ...defaults,
+      theme: 'light',
+      largeFileThreshold: 20 * MB
+    })
+  })
+
+  it('fall back to the default for each saved value that is invalid, keeping the rest', async () => {
+    await mkdir(dataDir())
+    const saved = { theme: 'sepia', defaultLastNLines: 500, cacheSizeCap: 'lots', openAnywayLimit: 10 * MB }
+    await writeFile(settingsFile(), JSON.stringify(saved))
+
+    expect(await createCore({ dataDir: dataDir() }).getSettings()).toEqual({ ...defaults, defaultLastNLines: 500 })
+  })
+
+  it('keep the other saved values when the saved limits conflict with the defaults', async () => {
+    await mkdir(dataDir())
+    await writeFile(settingsFile(), JSON.stringify({ theme: 'light', defaultLastNLines: 500, largeFileThreshold: 300 * MB }))
+
+    expect(await createCore({ dataDir: dataDir() }).getSettings()).toEqual({ ...defaults, theme: 'light', defaultLastNLines: 500 })
+  })
+
+  it('start from the defaults when the settings file can’t be read at all', async () => {
+    await mkdir(settingsFile(), { recursive: true })
+    const core = createCore({ dataDir: dataDir() })
+
+    expect(await core.getSettings()).toEqual(defaults)
+    expect(await core.listSources()).toEqual([])
+  })
+
+  it.each([null, 'light', 42])('refuse a change that isn’t an object of settings (%s)', async (change) => {
+    await expect(createCore().updateSettings(change as never)).rejects.toMatchObject({ code: 'INVALID_SETTINGS' })
+  })
+
+  it('set an unreadable settings file aside and start from the defaults', async () => {
+    await mkdir(dataDir())
+    await writeFile(settingsFile(), '{ not json')
+
+    expect(await createCore({ dataDir: dataDir() }).getSettings()).toEqual(defaults)
+    const setAside = (await readdir(dataDir())).filter((f) => f.startsWith('settings.json.unreadable-'))
+    expect(setAside).toHaveLength(1)
+  })
+
+  it('keep settings it doesn’t know when saving', async () => {
+    await mkdir(dataDir())
+    await writeFile(settingsFile(), JSON.stringify({ fromALaterVersion: { x: 1 } }))
+
+    await createCore({ dataDir: dataDir() }).updateSettings({ theme: 'light' })
+
+    expect(JSON.parse(await readFile(settingsFile(), 'utf8'))).toMatchObject({ theme: 'light', fromALaterVersion: { x: 1 } })
+  })
+
+  it('are left unchanged, and nobody told, when a change can’t be saved', async () => {
+    const blocked = join(dir, 'blocked')
+    await writeFile(blocked, 'a file where the data directory should be')
+    const core = createCore({ dataDir: blocked })
+    const heard: unknown[] = []
+    core.onSettingsChanged((settings) => heard.push(settings))
+
+    await expect(core.updateSettings({ theme: 'light' })).rejects.toThrow()
+
+    expect(await core.getSettings()).toEqual(defaults)
+    expect(heard).toEqual([])
+  })
+
+  it('tell every listener about each change until it unsubscribes', async () => {
+    const core = createCore()
+    const first: unknown[] = []
+    const second: unknown[] = []
+    const unsubscribe = core.onSettingsChanged((settings) => first.push(settings))
+    core.onSettingsChanged((settings) => second.push(settings))
+
+    const light = await core.updateSettings({ theme: 'light' })
+    const fewerLines = await core.updateSettings({ defaultLastNLines: 1 })
+    unsubscribe()
+    const dark = await core.updateSettings({ theme: 'dark' })
+
+    expect(first).toEqual([light, fewerLines])
+    expect(second).toEqual([light, fewerLines, dark])
+  })
+
+  it('hand out copies that can’t change the core’s settings', async () => {
+    const core = createCore()
+
+    const settings = await core.getSettings()
+    settings.theme = 'light'
+
+    expect((await core.getSettings()).theme).toBe('dark')
+  })
+})

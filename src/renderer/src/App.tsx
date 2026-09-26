@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ConnectionState, EntryNode, SourceInfo } from '@shared/core-api'
+import type { Settings, Theme } from '@shared/settings'
 import { ApertureMark } from './components/icons'
+import { SettingsDialog } from './components/SettingsDialog'
 import { Sidebar } from './components/Sidebar'
 import { nodeKey } from './components/SourceTree'
 import { Tabs } from './components/Tabs'
@@ -8,6 +10,7 @@ import { Viewer } from './components/Viewer'
 import { core, describeError, describeFailure } from './core-client'
 import { t } from './i18n'
 import { uiFor } from './source-types'
+import { applyTheme } from './theme'
 import type { OpenTab } from './workspace'
 
 /** Whether two versions of a Source point at the same place, whatever they are called. */
@@ -22,6 +25,33 @@ export function App() {
   const [openError, setOpenError] = useState<string | null>(null)
   // Mirrors the core's per-Source connection state; a Source with no entry is Disconnected.
   const [connections, setConnections] = useState<ReadonlyMap<string, ConnectionState>>(new Map())
+  // Null until loaded; nothing is shown before then, so a saved theme never flashes the other one first.
+  const [settings, setSettings] = useState<Settings | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  // A theme being tried out in the Settings dialog, shown instead of the saved one until it closes.
+  const [previewTheme, setPreviewTheme] = useState<Theme | null>(null)
+
+  useEffect(() => {
+    const unsubscribe = core.onSettingsChanged(setSettings)
+    void core.getSettings().then(setSettings)
+    return unsubscribe
+  }, [])
+
+  const theme = previewTheme ?? settings?.theme
+  useEffect(() => {
+    if (theme) applyTheme(theme)
+  }, [theme])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === ',' && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey) {
+        event.preventDefault()
+        setSettingsOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   const setConnection = (sourceId: string, state: ConnectionState) =>
     setConnections((prev) => new Map(prev).set(sourceId, state))
@@ -104,6 +134,8 @@ export function App() {
     if (key === activeTab?.key) setActiveKey(remaining[Math.min(index, remaining.length - 1)]?.key ?? null)
   }
 
+  if (!settings) return null
+
   const StatusIcon = activeTab && uiFor(activeTab.source.type).Icon
   const activeConnection: ConnectionState = (activeTab && connections.get(activeTab.source.id)) || { state: 'disconnected' }
 
@@ -116,7 +148,21 @@ export function App() {
         onDisconnect={(source) => void disconnect(source)}
         onSourcesChanged={() => void reloadSources()}
         onOpenFile={openFile}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
+
+      {settingsOpen && (
+        <SettingsDialog
+          settings={settings}
+          onPreviewTheme={setPreviewTheme}
+          onSaved={(saved) => {
+            setSettings(saved)
+            setPreviewTheme(null)
+            setSettingsOpen(false)
+          }}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
 
       <main className="workbench">
         <Tabs tabs={tabs} activeKey={activeTab?.key ?? null} onActivate={setActiveKey} onClose={closeTab} />

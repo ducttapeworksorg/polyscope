@@ -1,10 +1,13 @@
 import type { CoreErrorCode } from '@shared/core-api'
+import type { SettingProblem } from '@shared/settings'
 
 export const en = {
   'sidebar.heading': 'Sources',
   'sidebar.add': 'Add Source',
   'sidebar.empty.title': 'No Sources yet',
   'sidebar.empty.body': 'Add a folder on this computer to browse its files.',
+  'sidebar.settings': 'Settings',
+  'sidebar.settingsTooltip': 'Settings ({shortcut})',
 
   'sourceType.local': 'Local Filesystem',
   'sourceType.local.hint': 'A folder on this computer',
@@ -43,6 +46,27 @@ export const en = {
 
   'tabs.close': 'Close {name}',
 
+  'settings.title': 'Settings',
+  'settings.appearance': 'Appearance',
+  'settings.theme': 'Theme',
+  'settings.theme.dark': 'Dark',
+  'settings.theme.light': 'Light',
+  'settings.files': 'Files',
+  'settings.largeFileThreshold': 'Large File threshold (MB)',
+  'settings.largeFileThreshold.hint': 'Larger files open in the Large File Viewer.',
+  'settings.openAnywayLimit': '“Open anyway” limit (MB)',
+  'settings.openAnywayLimit.hint': 'Large Files up to this size can still be opened in the editor.',
+  'settings.cacheSizeCap': 'Local cache size (MB)',
+  'settings.cacheSizeCap.hint': 'The least recently used files are removed beyond this.',
+  'settings.logs': 'Logs',
+  'settings.defaultLastNLines': 'Default “Last N lines”',
+  'settings.defaultLastNLines.hint': 'Lines a log view fetches and keeps, unless its Source remembers another number.',
+  'settings.save': 'Save',
+  'settings.problem.notPositiveWholeNumber': 'Enter a whole number greater than zero.',
+  'settings.problem.notATheme': 'Choose a theme.',
+  'settings.problem.belowLargeFileThreshold': 'Must be at least the Large File threshold.',
+  'settings.problem.belowOpenAnywayLimit': 'Must be at least the “open anyway” limit.',
+
   'viewer.empty.noSources': 'Add a Source to start browsing.',
   'viewer.empty.noTabs': 'Open a file from the sidebar to read it here.',
   'viewer.opening': 'Opening {name}…',
@@ -62,5 +86,6 @@ export const en = {
   'error.NOT_A_FOLDER': 'This is a file, not a folder.',
   'error.NOT_A_FILE': 'This is a folder, not a file.',
   'error.INVALID_ORDER': 'That can’t be moved there.',
+  'error.INVALID_SETTINGS': 'Those settings aren’t valid: {message}',
   'error.UNKNOWN': 'Couldn’t complete that: {message}'
-} satisfies Record<string, string> & Record<`error.${CoreErrorCode}`, string>
+} satisfies Record<string, string> & Record<`error.${CoreErrorCode}`, string> & Record<`settings.problem.${SettingProblem}`, string>

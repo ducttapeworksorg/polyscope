@@ -24,7 +24,6 @@ export function Viewer({ tabs, activeTab }: Props) {
       readOnly: true,
       domReadOnly: true,
       automaticLayout: true,
-      theme: 'polyscope-dark',
       fontFamily: editorFontFamily,
       fontSize: 13,
       lineHeight: 21,

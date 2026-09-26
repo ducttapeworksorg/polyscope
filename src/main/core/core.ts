@@ -1,10 +1,21 @@
 import { randomUUID } from 'node:crypto'
-import type { ConnectionState, CoreApi, EntryNode, NewSource, SourceInfo, SourcePath, SourceTypeId } from '@shared/core-api'
+import type {
+  ConnectionState,
+  CoreApi,
+  CoreEvents,
+  EntryNode,
+  NewSource,
+  SourceInfo,
+  SourcePath,
+  SourceTypeId
+} from '@shared/core-api'
+import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings } from '@shared/settings'
 import { CoreError } from './core-error'
 import type { FileSource } from './file-source'
 import { createLocalFileSource } from './local-file-source'
 import { createRegistryStore, emptyRegistry } from './registry-store'
 import { createSecretStore, type SecretStore } from './secret-store'
+import { createSettingsStore } from './settings-store'
 
 const utf8 = new TextDecoder()
 const asCoreError = (error: unknown) =>
@@ -20,8 +31,11 @@ export interface CoreOptions {
 
 const inMemory = { encrypt: (plain: string) => Buffer.from(plain), decrypt: (encrypted: Buffer) => encrypted.toString() }
 
-export function createCore(options: CoreOptions = {}): CoreApi {
+export type Core = CoreApi & CoreEvents
+
+export function createCore(options: CoreOptions = {}): Core {
   const store = options.dataDir ? createRegistryStore(options.dataDir) : null
+  const settingsStore = options.dataDir ? createSettingsStore(options.dataDir) : null
   const secrets = options.secrets ?? createSecretStore({ cipher: inMemory })
   // Sources are kept in each group's order; groups interleave freely and are sorted by groupOrder when listed.
   const { sources, groupOrder } = emptyRegistry()
@@ -29,6 +43,16 @@ export function createCore(options: CoreOptions = {}): CoreApi {
     sources.push(...saved.sources)
     groupOrder.splice(0, groupOrder.length, ...saved.groupOrder)
   })
+  let settings: Settings = { ...defaultSettings }
+  // Settings that can't be read at all leave the defaults in place rather than keep the app from starting.
+  const settingsLoaded = settingsStore?.load().then(
+    (saved) => (settings = saved),
+    () => undefined
+  )
+  const settingsListeners = new Set<(settings: Settings) => void>()
+  // Updates run one at a time, so each validates against the settings the previous one saved.
+  let settingsUpdate: Promise<unknown> = Promise.resolve()
+
   /** Applies a change to the registry and saves it; if saving fails, the change is undone. */
   const commit = async <T>(change: () => T): Promise<T> => {
     const before = { sources: [...sources], groupOrder: [...groupOrder] }
@@ -251,6 +275,37 @@ export function createCore(options: CoreOptions = {}): CoreApi {
         size: info.size,
         modifiedTime: info.modifiedTime
       }
+    },
+
+    async getSettings() {
+      await settingsLoaded
+      return { ...settings }
+    },
+
+    updateSettings(changes) {
+      const update = settingsUpdate.then(async () => {
+        await settingsLoaded
+        if (!isRecord(changes)) throw new CoreError('INVALID_SETTINGS', `Settings changes must be an object, not ${String(changes)}`)
+        const next = { ...settings, ...pickSettings(changes) }
+        const problems = Object.entries(settingProblems(next))
+        if (problems.length) {
+          const described = problems.map(([key, problem]) => `${key} (${problem})`).join(', ')
+          throw new CoreError('INVALID_SETTINGS', `Invalid settings: ${described}`)
+        }
+        await settingsStore?.save(next)
+        settings = next
+        for (const listener of settingsListeners) listener({ ...next })
+        return { ...next }
+      })
+      settingsUpdate = update.catch(() => undefined)
+      return update
+    },
+
+    onSettingsChanged(listener) {
+      // Wrapped, so the same function subscribed twice is told twice and unsubscribes independently.
+      const subscription = (next: Settings) => listener(next)
+      settingsListeners.add(subscription)
+      return () => settingsListeners.delete(subscription)
     }
   }
 }

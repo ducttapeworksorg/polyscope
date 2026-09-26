@@ -5,7 +5,7 @@ import { t } from '../i18n'
 import { uiFor } from '../source-types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ContextMenu, type MenuItem } from './ContextMenu'
-import { PlusIcon } from './icons'
+import { GearIcon, PlusIcon } from './icons'
 import { SourceDialog } from './SourceDialog'
 import { SourceTree } from './SourceTree'
 
@@ -20,6 +20,7 @@ interface Props {
   /** Something about the Sources changed; the caller reloads them from the core. */
   onSourcesChanged(): void
   onOpenFile(source: SourceInfo, node: EntryNode): void
+  onOpenSettings(): void
 }
 
 interface Group {
@@ -55,8 +56,9 @@ const isAfter = (event: DragEvent<HTMLElement>) => {
 }
 
 const disconnected: ConnectionState = { state: 'disconnected' }
+const settingsShortcut = navigator.userAgent.includes('Mac') ? '⌘,' : 'Ctrl+,'
 
-export function Sidebar({ sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile }: Props) {
+export function Sidebar({ sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile, onOpenSettings }: Props) {
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const [menu, setMenu] = useState<{ label: string; items: MenuItem[]; x: number; y: number } | null>(null)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
@@ -164,17 +166,28 @@ export function Sidebar({ sources, connections, onConnect, onDisconnect, onSourc
     <nav className="sidebar" aria-label={t('sidebar.heading')}>
       <header className="sidebar__header">
         <h2 className="sidebar__heading">{t('sidebar.heading')}</h2>
-        {!isEmpty && (
+        <span className="sidebar__actions">
+          {!isEmpty && (
+            <button
+              type="button"
+              className="icon-button"
+              aria-label={t('sidebar.add')}
+              title={t('sidebar.add')}
+              onClick={() => setDialog({ kind: 'add' })}
+            >
+              <PlusIcon />
+            </button>
+          )}
           <button
             type="button"
             className="icon-button"
-            aria-label={t('sidebar.add')}
-            title={t('sidebar.add')}
-            onClick={() => setDialog({ kind: 'add' })}
+            aria-label={t('sidebar.settings')}
+            title={t('sidebar.settingsTooltip', { shortcut: settingsShortcut })}
+            onClick={onOpenSettings}
           >
-            <PlusIcon />
+            <GearIcon />
           </button>
-        )}
+        </span>
       </header>
 
       {error && (
