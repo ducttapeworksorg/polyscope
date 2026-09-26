@@ -28,7 +28,8 @@ interface Props {
   onContextMenu(event: MouseEvent<HTMLElement>, label: string, items: MenuItem[]): void
   selectedKey: string | null
   onSelect(key: string): void
-  onOpenFile(source: SourceInfo, node: EntryNode): void
+  /** Opens a file in the preview tab, or in a tab of its own when pinned. */
+  onOpenFile(source: SourceInfo, node: EntryNode, options?: { pinned: boolean }): void
   /** Extra attributes for the Source's own row, e.g. for dragging it. */
   sourceRowProps?: HTMLAttributes<HTMLDivElement>
   /** Extra attributes for the whole tree, e.g. to make it a drop target. */
@@ -51,6 +52,8 @@ interface RowProps {
   icon: ReactNode
   folder: boolean
   onActivate(): void
+  /** What a double-click does beyond activating twice, e.g. pinning a file's tab. */
+  onDoubleActivate?(): void
   menuItems?: MenuItem[]
   status?: ReactNode
   /** Size and modified time, dimmed after the name. */
@@ -131,7 +134,7 @@ export function SourceTree(props: Props) {
     setExpanded((prev) => new Set(prev).add(''))
   }
 
-  const row = ({ path, depth, label, icon, folder, onActivate, menuItems, status, details, className = '', extra }: RowProps) => {
+  const row = ({ path, depth, label, icon, folder, onActivate, onDoubleActivate, menuItems, status, details, className = '', extra }: RowProps) => {
     const key = nodeKey(source.id, path)
     const isExpanded = folder && expanded.has(path)
     const activate = () => {
@@ -158,6 +161,7 @@ export function SourceTree(props: Props) {
         className={`tree-row ${className} ${extra?.className ?? ''}`}
         style={depthStyle(depth)}
         onClick={activate}
+        onDoubleClick={onDoubleActivate}
         onKeyDown={onKeyDown}
         onContextMenu={openMenu}
       >
@@ -233,6 +237,7 @@ export function SourceTree(props: Props) {
         folder: isFolder,
         icon: <MaterialIcon icon={node.icon} theme={theme} open={isFolder && expanded.has(node.path)} />,
         onActivate: () => (isFolder ? toggle(node.path) : onOpenFile(source, node)),
+        onDoubleActivate: isFolder ? undefined : () => onOpenFile(source, node, { pinned: true }),
         menuItems: isFolder ? [{ label: t('sourceMenu.refresh'), onSelect: () => refresh(node.path) }] : undefined,
         details: showDetails ? details(node) : undefined,
         extra: { title: tooltip(node) }

@@ -5,7 +5,7 @@ import { core, describeError } from '../core-client'
 import { t } from '../i18n'
 import { uiFor } from '../source-types'
 import { ConfirmDialog } from './ConfirmDialog'
-import { ContextMenu, type MenuItem } from './ContextMenu'
+import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
 import { DetailsIcon, GearIcon, PlusIcon } from './icons'
 import { SourceDialog } from './SourceDialog'
 import { SourceTree } from './SourceTree'
@@ -20,7 +20,8 @@ interface Props {
   onDisconnect(source: SourceInfo): void
   /** Something about the Sources changed; the caller reloads them from the core. */
   onSourcesChanged(): void
-  onOpenFile(source: SourceInfo, node: EntryNode): void
+  /** Opens a file in the preview tab, or in a tab of its own when pinned. */
+  onOpenFile(source: SourceInfo, node: EntryNode, options?: { pinned: boolean }): void
   onOpenSettings(): void
   /** Whether tree rows show their size and modified time. */
   showDetails: boolean
@@ -67,12 +68,11 @@ export function Sidebar(props: Props) {
   const { sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile, onOpenSettings } = props
   const { showDetails, onToggleDetails, theme } = props
   const [dialog, setDialog] = useState<Dialog | null>(null)
-  const [menu, setMenu] = useState<{ label: string; items: MenuItem[]; x: number; y: number } | null>(null)
+  const { menu, open: openContextMenu, close: closeMenu } = useContextMenu<{ label: string; items: MenuItem[] }>()
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [dragging, setDragging] = useState<Dragging | null>(null)
   const [dropAt, setDropAt] = useState<DropAt | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const menuTrigger = useRef<HTMLElement | null>(null)
   const groups = groupByType(sources)
 
   const run = async (action: () => Promise<unknown>) => {
@@ -85,19 +85,7 @@ export function Sidebar(props: Props) {
     onSourcesChanged()
   }
 
-  const closeMenu = useCallback(() => {
-    setMenu(null)
-    menuTrigger.current?.focus()
-  }, [])
-
-  const openMenu = (event: MouseEvent<HTMLElement>, label: string, items: MenuItem[]) => {
-    event.preventDefault()
-    menuTrigger.current = event.currentTarget
-    // Opened from the keyboard (menu key, Shift+F10) the event has no pointer position.
-    const fromKeyboard = event.clientX === 0 && event.clientY === 0
-    const rect = event.currentTarget.getBoundingClientRect()
-    setMenu({ label, items, x: fromKeyboard ? rect.left + 24 : event.clientX, y: fromKeyboard ? rect.bottom : event.clientY })
-  }
+  const openMenu = (event: MouseEvent<HTMLElement>, label: string, items: MenuItem[]) => openContextMenu(event, { label, items })
 
   const endDrag = () => {
     setDragging(null)

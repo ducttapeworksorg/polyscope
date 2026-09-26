@@ -770,8 +770,21 @@ fieldset {
   height: 36px;
   background: var(--slate-800);
   border-bottom: 1px solid var(--line);
+}
+
+.tabs__list {
+  display: flex;
+  flex: 1;
+  min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+}
+
+.tabs__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding: 0 6px;
 }
 
 .tab {
@@ -805,6 +818,11 @@ fieldset {
 .tab__label {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The preview tab: the next file opened replaces it, until it's pinned. */
+.tab.is-preview .tab__label {
+  font-style: italic;
 }
 
 .tab__close {

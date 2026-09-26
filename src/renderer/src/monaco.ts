@@ -4,6 +4,7 @@ import CssWorker from 'monaco-editor/languages/features/css/css.worker?worker'
 import HtmlWorker from 'monaco-editor/languages/features/html/html.worker?worker'
 import JsonWorker from 'monaco-editor/languages/features/json/json.worker?worker'
 import TsWorker from 'monaco-editor/languages/features/typescript/ts.worker?worker'
+import { t } from './i18n'
 
 self.MonacoEnvironment = {
   getWorker(_workerId, label) {
@@ -75,6 +76,24 @@ monaco.editor.defineTheme('polyscope-light', {
     'scrollbarSlider.activeBackground': '#5a667977'
   }
 })
+
+export interface Language {
+  id: string
+  name: string
+}
+
+/** The language Monaco highlights a file as, going by its exact name, then its longest matching extension. */
+export function languageFor(fileName: string): Language {
+  const name = fileName.toLowerCase()
+  let best: { language: monaco.languages.ILanguageExtensionPoint; length: number } | undefined
+  for (const language of monaco.languages.getLanguages()) {
+    const length = language.filenames?.some((f) => f.toLowerCase() === name)
+      ? Infinity
+      : Math.max(0, ...(language.extensions ?? []).filter((ext) => name.endsWith(ext.toLowerCase())).map((ext) => ext.length))
+    if (length > (best?.length ?? 0)) best = { language, length }
+  }
+  return best ? { id: best.language.id, name: best.language.aliases?.[0] ?? best.language.id } : { id: 'plaintext', name: t('language.plainText') }
+}
 
 export const editorFontFamily = "'Red Hat Mono Variable', ui-monospace, monospace"
 

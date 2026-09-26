@@ -66,7 +66,7 @@ describe('Local Filesystem Source', () => {
     ])
   })
 
-  it('opens a file with its text content, size and modified time', async () => {
+  it('opens a file with its text content, encoding, size and modified time', async () => {
     const text = 'first line\nsecond line — ünïcode\n'
     await mkdir(join(dir, 'app'))
     await writeFile(join(dir, 'app', 'server.log'), text)
@@ -77,9 +77,21 @@ describe('Local Filesystem Source', () => {
 
     const file = await core.openFile(source.id, 'app/server.log')
 
-    expect(file).toMatchObject({ path: 'app/server.log', name: 'server.log', content: text, size: 37 })
+    expect(file).toMatchObject({ path: 'app/server.log', name: 'server.log', content: text, encoding: 'utf-8', size: 37 })
     expect(file.modifiedTime).toBeGreaterThan(before - 60_000)
     expect(file.modifiedTime).toBeLessThanOrEqual(Date.now())
+  })
+
+  it('reads a file afresh each time it is opened, so a reload shows what it holds now', async () => {
+    await writeFile(join(dir, 'app.log'), 'one\n')
+    const core = createCore()
+    const source = await core.addSource({ type: 'local', name: 'Logs', rootPath: dir })
+    await core.connect(source.id)
+    await core.openFile(source.id, 'app.log')
+
+    await writeFile(join(dir, 'app.log'), 'one\ntwo\n')
+
+    expect(await core.openFile(source.id, 'app.log')).toMatchObject({ content: 'one\ntwo\n', size: 8 })
   })
 })
 

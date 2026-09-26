@@ -1,0 +1,123 @@
+import { describe, expect, it } from 'vitest'
+import type { OpenedFile, SourceInfo } from '@shared/core-api'
+import {
+  activateTab,
+  closeAllTabs,
+  closeOtherTabs,
+  closeTab,
+  emptyWorkspace,
+  openTab,
+  pinTab,
+  replaceFile,
+  type Workspace
+} from './workspace'
+
+const source: SourceInfo = { id: 's', type: 'local', name: 'Logs', rootPath: '/logs', showHidden: true }
+const file = (path: string, content = ''): OpenedFile => ({
+  path,
+  name: path,
+  content,
+  encoding: 'utf-8',
+  size: content.length,
+  modifiedTime: 0
+})
+const tab = (key: string) => ({ key, source, file: file(key) })
+
+/** Each tab as its key, with a '*' when it's the preview tab and brackets around the active one. */
+const shape = ({ tabs, activeKey }: Workspace) =>
+  tabs.map(({ key, pinned }) => {
+    const label = pinned ? key : `${key}*`
+    return key === activeKey ? `[${label}]` : label
+  })
+
+const open = (...keys: string[]) => keys.reduce((ws, key) => pinTab(openTab(ws, tab(key)), key), emptyWorkspace)
+
+describe('preview tabs', () => {
+  it('opens a file as the active preview tab', () => {
+    expect(shape(openTab(emptyWorkspace, tab('a')))).toEqual(['[a*]'])
+  })
+
+  it('replaces the preview tab, in place, with the next file opened', () => {
+    const ws = openTab(openTab(open('a', 'b'), tab('p')), tab('q'))
+
+    expect(shape(openTab(activateTab(ws, 'a'), tab('r')))).toEqual(['a', 'b', '[r*]'])
+  })
+
+  it('opens a pinned file as a pinned tab', () => {
+    expect(shape(openTab(emptyWorkspace, tab('a'), { pinned: true }))).toEqual(['[a]'])
+  })
+
+  it('keeps the preview tab when a pinned file opens beside it', () => {
+    const ws = openTab(openTab(emptyWorkspace, tab('p')), tab('a'), { pinned: true })
+
+    expect(shape(ws)).toEqual(['p*', '[a]'])
+  })
+
+  it('pins a preview tab, so the next file opens in a new tab', () => {
+    const ws = pinTab(openTab(emptyWorkspace, tab('a')), 'a')
+
+    expect(shape(openTab(ws, tab('b')))).toEqual(['a', '[b*]'])
+  })
+
+  it('opens a new tab right after the active one', () => {
+    expect(shape(openTab(activateTab(open('a', 'b'), 'a'), tab('c')))).toEqual(['a', '[c*]', 'b'])
+  })
+
+  it('just activates a file that is already open, keeping its contents', () => {
+    const ws = openTab(open('a', 'b'), { ...tab('a'), file: file('a', 'newer') })
+
+    expect(shape(ws)).toEqual(['[a]', 'b'])
+    expect(ws.tabs[0]!.file.content).toBe('')
+  })
+
+  it('pins a preview tab that is opened again as pinned, and never unpins one', () => {
+    const preview = openTab(emptyWorkspace, tab('a'))
+
+    expect(shape(openTab(preview, tab('a'), { pinned: true }))).toEqual(['[a]'])
+    expect(shape(openTab(open('a'), tab('a')))).toEqual(['[a]'])
+  })
+})
+
+describe('closing tabs', () => {
+  it('activates the tab that takes the closed one’s place, or the one before it at the end', () => {
+    const ws = activateTab(open('a', 'b', 'c'), 'b')
+
+    expect(shape(closeTab(ws, 'b'))).toEqual(['a', '[c]'])
+    expect(shape(closeTab(closeTab(ws, 'b'), 'c'))).toEqual(['[a]'])
+    expect(shape(closeTab(open('a'), 'a'))).toEqual([])
+  })
+
+  it('keeps the active tab when another one closes', () => {
+    expect(shape(closeTab(activateTab(open('a', 'b', 'c'), 'c'), 'a'))).toEqual(['b', '[c]'])
+  })
+
+  it('closes every other tab, leaving that one active', () => {
+    expect(shape(closeOtherTabs(open('a', 'b', 'c'), 'b'))).toEqual(['[b]'])
+  })
+
+  it('closes all tabs', () => {
+    expect(closeAllTabs(open('a', 'b'))).toEqual(emptyWorkspace)
+  })
+
+  it('ignores a tab that is not open', () => {
+    const ws = open('a', 'b')
+
+    expect(closeTab(ws, 'x')).toBe(ws)
+    expect(closeOtherTabs(ws, 'x')).toBe(ws)
+  })
+})
+
+describe('reloading tabs', () => {
+  it('replaces a tab’s file, keeping its place, pin and focus', () => {
+    const ws = replaceFile(activateTab(open('a', 'b'), 'a'), 'b', file('b', 'fresh'))
+
+    expect(shape(ws)).toEqual(['[a]', 'b'])
+    expect(ws.tabs[1]!.file.content).toBe('fresh')
+  })
+
+  it('ignores a file for a tab closed while it was being read', () => {
+    const ws = open('a')
+
+    expect(replaceFile(ws, 'x', file('x'))).toBe(ws)
+  })
+})

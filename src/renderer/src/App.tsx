@@ -1,17 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ConnectionState, EntryNode, SourceInfo } from '@shared/core-api'
+import type { ConnectionState, EntryNode, OpenedFile, SourceInfo } from '@shared/core-api'
 import type { Settings, Theme } from '@shared/settings'
 import { ApertureMark } from './components/icons'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Sidebar } from './components/Sidebar'
 import { nodeKey } from './components/SourceTree'
+import { StatusBar } from './components/StatusBar'
 import { Tabs } from './components/Tabs'
 import { Viewer } from './components/Viewer'
 import { core, describeError, describeFailure } from './core-client'
 import { t } from './i18n'
-import { uiFor } from './source-types'
 import { applyTheme } from './theme'
-import type { OpenTab } from './workspace'
+import {
+  activateTab,
+  closeAllTabs,
+  closeOtherTabs,
+  closeTab,
+  emptyWorkspace,
+  openTab,
+  pinTab,
+  replaceFile,
+  type Workspace
+} from './workspace'
 
 /** Whether two versions of a Source point at the same place, whatever they are called. */
 const sameTarget = (a: SourceInfo, b: SourceInfo) => a.type === b.type && a.rootPath === b.rootPath
@@ -19,8 +29,11 @@ const sameTarget = (a: SourceInfo, b: SourceInfo) => a.type === b.type && a.root
 export function App() {
   const [sources, setSources] = useState<SourceInfo[]>([])
   const sourcesRef = useRef<SourceInfo[]>([])
-  const [tabs, setTabs] = useState<OpenTab[]>([])
-  const [activeKey, setActiveKey] = useState<string | null>(null)
+  const [workspace, setWorkspace] = useState<Workspace>(emptyWorkspace)
+  // Files being opened, by tab key, so a double-click's second click waits for the first instead of reading again.
+  const pendingOpens = useRef(new Map<string, Promise<OpenedFile>>())
+  // The file asked for last; a slower read of one asked for earlier doesn't take over from it.
+  const latestOpen = useRef<string | null>(null)
   const [opening, setOpening] = useState<string | null>(null)
   const [openError, setOpenError] = useState<string | null>(null)
   // Mirrors the core's per-Source connection state; a Source with no entry is Disconnected.
@@ -96,42 +109,63 @@ export function App() {
       return kept
     })
     // Tabs follow a rename, but close when their Source is deleted or now points somewhere else.
-    setTabs((prev) =>
-      prev.flatMap((tab) => {
+    setWorkspace((prev) => {
+      const tabs = prev.tabs.flatMap((tab) => {
         const source = byId.get(tab.source.id)
         return source && sameTarget(source, tab.source) ? [{ ...tab, source }] : []
       })
-    )
+      // If the active tab closed along with its Source, the first remaining tab takes over.
+      const activeKey = tabs.some((tab) => tab.key === prev.activeKey) ? prev.activeKey : (tabs[0]?.key ?? null)
+      return { tabs, activeKey }
+    })
   }, [])
 
   useEffect(() => {
     void reloadSources()
   }, [reloadSources])
 
-  // If the active tab closed along with its Source, the first remaining tab takes over.
-  const activeTab = tabs.find((tab) => tab.key === activeKey) ?? tabs[0] ?? null
+  const { tabs } = workspace
+  const activeTab = tabs.find((tab) => tab.key === workspace.activeKey) ?? null
 
-  const openFile = async (source: SourceInfo, node: EntryNode) => {
+  /** Reads a file to open it, sharing the read with any other click opening the same file meanwhile. */
+  const readForOpening = (key: string, sourceId: string, path: string) => {
+    let pending = pendingOpens.current.get(key)
+    if (!pending) {
+      pending = core.openFile(sourceId, path).finally(() => pendingOpens.current.delete(key))
+      pendingOpens.current.set(key, pending)
+    }
+    return pending
+  }
+
+  const openFile = async (source: SourceInfo, node: EntryNode, { pinned = false } = {}) => {
     const key = nodeKey(source.id, node.path)
     setOpenError(null)
-    if (tabs.some((tab) => tab.key === key)) return setActiveKey(key)
+    latestOpen.current = key
+    const open = tabs.find((tab) => tab.key === key)
+    if (open) return setWorkspace((ws) => openTab(ws, open, { pinned }))
     setOpening(node.name)
     try {
-      const file = await core.openFile(source.id, node.path)
-      setTabs((prev) => (prev.some((tab) => tab.key === key) ? prev : [...prev, { key, source, file }]))
-      setActiveKey(key)
+      const file = await readForOpening(key, source.id, node.path)
+      if (latestOpen.current === key) setWorkspace((ws) => openTab(ws, { key, source, file }, { pinned }))
     } catch (error) {
-      setOpenError(describeError(error))
+      if (latestOpen.current === key) setOpenError(describeError(error))
     } finally {
-      setOpening(null)
+      if (latestOpen.current === key) setOpening(null)
     }
   }
 
-  const closeTab = (key: string) => {
-    const index = tabs.findIndex((tab) => tab.key === key)
-    const remaining = tabs.filter((tab) => tab.key !== key)
-    setTabs(remaining)
-    if (key === activeTab?.key) setActiveKey(remaining[Math.min(index, remaining.length - 1)]?.key ?? null)
+  // Reloading counts as working with the tab, so it's pinned rather than left for the next preview.
+  const reloadTab = async (key: string) => {
+    const tab = tabs.find((open) => open.key === key)
+    if (!tab) return
+    setOpenError(null)
+    setWorkspace((ws) => pinTab(ws, key))
+    try {
+      const file = await core.openFile(tab.source.id, tab.file.path)
+      setWorkspace((ws) => replaceFile(ws, key, file))
+    } catch (error) {
+      setOpenError(describeError(error))
+    }
   }
 
   // The new value arrives through onSettingsChanged; if it can't be saved, the toggle stays as it was.
@@ -141,7 +175,6 @@ export function App() {
 
   if (!settings) return null
 
-  const StatusIcon = activeTab && uiFor(activeTab.source.type).Icon
   const activeConnection: ConnectionState = (activeTab && connections.get(activeTab.source.id)) || { state: 'disconnected' }
 
   return (
@@ -173,7 +206,16 @@ export function App() {
       )}
 
       <main className="workbench">
-        <Tabs tabs={tabs} activeKey={activeTab?.key ?? null} onActivate={setActiveKey} onClose={closeTab} />
+        <Tabs
+          tabs={tabs}
+          activeKey={activeTab?.key ?? null}
+          onActivate={(key) => setWorkspace((ws) => activateTab(ws, key))}
+          onPin={(key) => setWorkspace((ws) => pinTab(ws, key))}
+          onReload={(key) => void reloadTab(key)}
+          onClose={(key) => setWorkspace((ws) => closeTab(ws, key))}
+          onCloseOthers={(key) => setWorkspace((ws) => closeOtherTabs(ws, key))}
+          onCloseAll={() => setWorkspace(closeAllTabs)}
+        />
         {openError && (
           <p className="workbench__error" role="alert">
             {openError}
@@ -208,18 +250,7 @@ export function App() {
         </div>
       </main>
 
-      <footer className="statusbar">
-        {activeTab && StatusIcon && (
-          <>
-            <span className="statusbar__item">
-              <StatusIcon />
-              {activeTab.source.name}
-            </span>
-            <span className="statusbar__item statusbar__item--path">{activeTab.file.path}</span>
-          </>
-        )}
-        <span className="statusbar__item statusbar__item--end">{t('status.readOnly')}</span>
-      </footer>
+      <StatusBar activeTab={activeTab} />
     </div>
   )
 }

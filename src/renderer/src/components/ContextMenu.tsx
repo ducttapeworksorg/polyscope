@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
 
 export interface MenuItem {
   label: string
@@ -11,6 +11,31 @@ interface Props {
   y: number
   items: MenuItem[]
   onClose(): void
+}
+
+/**
+ * Where a context menu is open and what it's for: `open` places it at the pointer, or below the
+ * element when opened from the keyboard; `close` hands focus back to that element.
+ */
+export function useContextMenu<T>() {
+  const [menu, setMenu] = useState<(T & { x: number; y: number }) | null>(null)
+  const trigger = useRef<HTMLElement | null>(null)
+
+  const close = useCallback(() => {
+    setMenu(null)
+    trigger.current?.focus()
+  }, [])
+
+  const open = (event: MouseEvent<HTMLElement>, about: T) => {
+    event.preventDefault()
+    trigger.current = event.currentTarget
+    // Opened from the keyboard (menu key, Shift+F10) the event has no pointer position.
+    const fromKeyboard = event.clientX === 0 && event.clientY === 0
+    const rect = event.currentTarget.getBoundingClientRect()
+    setMenu({ ...about, x: fromKeyboard ? rect.left + 24 : event.clientX, y: fromKeyboard ? rect.bottom : event.clientY })
+  }
+
+  return { menu, open, close }
 }
 
 /** A menu at a point; closes on Escape, on picking an item, or on any press outside it. */

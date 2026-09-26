@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { editorFontFamily, monaco } from '../monaco'
+import { editorFontFamily, languageFor, monaco } from '../monaco'
 import type { OpenTab } from '../workspace'
 
 interface Props {
@@ -9,6 +9,8 @@ interface Props {
 
 interface TabModel {
   model: monaco.editor.ITextModel
+  /** The file the model holds; a reload brings a new one. */
+  file: OpenTab['file']
   viewState: monaco.editor.ICodeEditorViewState | null
 }
 
@@ -68,12 +70,17 @@ export function Viewer({ tabs, activeTab }: Props) {
 
     let entry = models.get(activeTab.key)
     if (!entry) {
-      const uri = monaco.Uri.from({ scheme: 'polyscope', authority: activeTab.source.id, path: `/${activeTab.file.path}` })
-      // No explicit language: Monaco infers it from the file extension in the URI.
-      entry = { model: monaco.editor.createModel(activeTab.file.content, undefined, uri), viewState: null }
+      const { source, file } = activeTab
+      const uri = monaco.Uri.from({ scheme: 'polyscope', authority: source.id, path: `/${file.path}` })
+      entry = { model: monaco.editor.createModel(file.content, languageFor(file.name).id, uri), file, viewState: null }
       models.set(activeTab.key, entry)
     }
     editor.setModel(entry.model)
+    if (entry.file !== activeTab.file) {
+      // Reloaded: new content, but the reader stays where they were.
+      entry.model.setValue(activeTab.file.content)
+      entry.file = activeTab.file
+    }
     if (entry.viewState) editor.restoreViewState(entry.viewState)
     shownKeyRef.current = activeTab.key
   }, [tabs, activeTab])

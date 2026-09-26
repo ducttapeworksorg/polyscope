@@ -49,6 +49,12 @@ export const en = {
   'tree.modified': 'Modified {time}',
 
   'tabs.close': 'Close {name}',
+  'tabs.closeTab': 'Close',
+  'tabs.closeOthers': 'Close Others',
+  'tabs.closeAll': 'Close All',
+  'tabs.reload': 'Reload',
+  'tabs.preview': 'Preview',
+  'tabs.menuLabel': 'Actions for {name}',
 
   'settings.title': 'Settings',
   'settings.appearance': 'Appearance',
@@ -80,6 +86,11 @@ export const en = {
   'viewer.reconnecting': 'Reconnecting…',
 
   'status.readOnly': 'Read-only',
+  'status.size': 'Size',
+  'status.modified': 'Modified',
+  'status.encoding': 'Encoding',
+  'status.language': 'Language',
+  'language.plainText': 'Plain Text',
 
   'error.NAME_REQUIRED': 'Enter a name for this Source.',
   'error.ROOT_NOT_FOUND': 'That folder doesn’t exist.',

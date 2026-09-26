@@ -75,6 +75,8 @@ export interface OpenedFile {
   path: SourcePath
   name: string
   content: string
+  /** How the bytes were decoded into `content`, e.g. 'utf-8'. */
+  encoding: string
   size: number
   modifiedTime: number
 }

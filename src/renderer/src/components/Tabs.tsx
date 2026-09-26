@@ -1,49 +1,91 @@
 import type { OpenTab } from '../workspace'
 import { t } from '../i18n'
-import { CloseIcon, FileIcon } from './icons'
+import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
+import { CloseIcon, FileIcon, ReloadIcon } from './icons'
 
 interface Props {
   tabs: OpenTab[]
   activeKey: string | null
   onActivate(key: string): void
+  onPin(key: string): void
+  onReload(key: string): void
   onClose(key: string): void
+  onCloseOthers(key: string): void
+  onCloseAll(): void
 }
 
-export function Tabs({ tabs, activeKey, onActivate, onClose }: Props) {
+export function Tabs({ tabs, activeKey, onActivate, onPin, onReload, onClose, onCloseOthers, onCloseAll }: Props) {
+  const { menu, open: openMenu, close: closeMenu } = useContextMenu<{ tab: OpenTab }>()
+
   if (tabs.length === 0) return null
+
+  const menuItems = ({ key }: OpenTab): MenuItem[] => [
+    { label: t('tabs.reload'), onSelect: () => onReload(key) },
+    { label: t('tabs.closeTab'), onSelect: () => onClose(key) },
+    ...(tabs.length > 1 ? [{ label: t('tabs.closeOthers'), onSelect: () => onCloseOthers(key) }] : []),
+    { label: t('tabs.closeAll'), onSelect: onCloseAll }
+  ]
+
   return (
-    <div className="tabs" role="tablist">
-      {tabs.map((tab) => {
-        const active = tab.key === activeKey
-        return (
-          <div
-            key={tab.key}
-            role="tab"
-            tabIndex={active ? 0 : -1}
-            aria-selected={active}
-            title={`${tab.source.name}: ${tab.file.path}`}
-            className={`tab ${active ? 'is-active' : ''}`}
-            onClick={() => onActivate(tab.key)}
-            onAuxClick={(e) => e.button === 1 && onClose(tab.key)}
-          >
-            <span className="tab__icon">
-              <FileIcon />
-            </span>
-            <span className="tab__label">{tab.file.name}</span>
-            <button
-              type="button"
-              className="tab__close"
-              aria-label={t('tabs.close', { name: tab.file.name })}
-              onClick={(e) => {
-                e.stopPropagation()
-                onClose(tab.key)
-              }}
+    <div className="tabs">
+      <div className="tabs__list" role="tablist">
+        {tabs.map((tab) => {
+          const active = tab.key === activeKey
+          return (
+            <div
+              key={tab.key}
+              role="tab"
+              tabIndex={active ? 0 : -1}
+              aria-selected={active}
+              aria-description={tab.pinned ? undefined : t('tabs.preview')}
+              title={`${tab.source.name}: ${tab.file.path}`}
+              className={`tab ${active ? 'is-active' : ''} ${tab.pinned ? '' : 'is-preview'}`}
+              onClick={() => onActivate(tab.key)}
+              onDoubleClick={() => onPin(tab.key)}
+              onAuxClick={(e) => e.button === 1 && onClose(tab.key)}
+              onContextMenu={(e) => openMenu(e, { tab })}
             >
-              <CloseIcon />
-            </button>
-          </div>
-        )
-      })}
+              <span className="tab__icon">
+                <FileIcon />
+              </span>
+              <span className="tab__label">{tab.file.name}</span>
+              <button
+                type="button"
+                className="tab__close"
+                aria-label={t('tabs.close', { name: tab.file.name })}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onClose(tab.key)
+                }}
+              >
+                <CloseIcon />
+              </button>
+            </div>
+          )
+        })}
+      </div>
+      {activeKey && (
+        <div className="tabs__actions">
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={t('tabs.reload')}
+            title={t('tabs.reload')}
+            onClick={() => onReload(activeKey)}
+          >
+            <ReloadIcon />
+          </button>
+        </div>
+      )}
+      {menu && (
+        <ContextMenu
+          label={t('tabs.menuLabel', { name: menu.tab.file.name })}
+          x={menu.x}
+          y={menu.y}
+          onClose={closeMenu}
+          items={menuItems(menu.tab)}
+        />
+      )}
     </div>
   )
 }

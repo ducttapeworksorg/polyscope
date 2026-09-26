@@ -61,6 +61,13 @@ export const CloseIcon = () => (
   </svg>
 )
 
+export const ReloadIcon = () => (
+  <svg {...base}>
+    <path d="M13 8a5 5 0 1 1-1.5-3.55" />
+    <path d="M12.25 2v2.75H9.5" />
+  </svg>
+)
+
 export const GearIcon = () => (
   <svg {...base}>
     <circle cx="8" cy="8" r="2" />

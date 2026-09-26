@@ -81,6 +81,62 @@ test('show file sizes and modified times, and hide them for good from the sideba
   await expect(relaunched.getByRole('button', { name: 'Show sizes and modified times' })).toHaveAttribute('aria-pressed', 'false')
 })
 
+test('preview and pinned tabs, reload, closing, and the status bar', async () => {
+  const window = await app.firstWindow()
+  const logs = join(dir, 'root', 'logs')
+  await writeFile(join(logs, 'other.log'), 'INFO other\n')
+  await writeFile(join(logs, 'settings.json'), '{ "level": "info" }\n')
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  const tabs = window.getByRole('tab')
+  const tab = (name: string) => window.getByRole('tab', { name })
+
+  // Single clicks share one preview tab, shown in italics.
+  await window.getByRole('treeitem', { name: /^app\.log/ }).click()
+  await expect(tab('app.log')).toHaveClass(/is-preview/)
+  await expect(tab('app.log').locator('.tab__label')).toHaveCSS('font-style', 'italic')
+  await window.getByRole('treeitem', { name: /^other\.log/ }).click()
+  await expect(tabs).toHaveCount(1)
+  await expect(tab('other.log')).toHaveAttribute('aria-selected', 'true')
+
+  // Double-clicking the tab pins it, so the next file gets a tab of its own; a tree double-click opens pinned.
+  await tab('other.log').dblclick()
+  await expect(tab('other.log')).not.toHaveClass(/is-preview/)
+  await window.getByRole('treeitem', { name: /^app\.log/ }).click()
+  await expect(tabs).toHaveCount(2)
+  await window.getByRole('treeitem', { name: /^settings\.json/ }).dblclick()
+  await expect(tabs).toHaveCount(2)
+  await expect(tab('settings.json')).not.toHaveClass(/is-preview/)
+  await expect(tabs.nth(1)).toHaveAccessibleName(/^settings\.json/)
+
+  // The status bar describes the active tab.
+  const statusBar = window.getByRole('contentinfo')
+  await expect(statusBar).toContainText('20 B')
+  await expect(statusBar).toContainText('UTF-8')
+  await expect(statusBar).toContainText('JSON')
+  await tab('other.log').click()
+  await expect(statusBar).toContainText('11 B')
+  await expect(statusBar).toContainText('Plain Text')
+
+  // Reload reads the file again.
+  await writeFile(join(logs, 'other.log'), 'INFO other\nWARN reloaded\n')
+  await window.getByRole('button', { name: 'Reload' }).click()
+  await expect(window.getByTestId('editor')).toContainText('WARN reloaded')
+  await expect(statusBar).toContainText('25 B')
+
+  const tabMenu = async (name: string) => {
+    await tab(name).click({ button: 'right' })
+    return window.getByRole('menu', { name: `Actions for ${name}` })
+  }
+  await (await tabMenu('other.log')).getByRole('menuitem', { name: 'Close Others' }).click()
+  await expect(tabs).toHaveCount(1)
+  await expect(tab('other.log')).toBeVisible()
+  await window.getByRole('treeitem', { name: /^app\.log/ }).click()
+  await (await tabMenu('app.log')).getByRole('menuitem', { name: 'Close All' }).click()
+  await expect(tabs).toHaveCount(0)
+})
+
 test('edit, duplicate, reorder and delete Sources', async () => {
   const window = await app.firstWindow()
   await addSource(window, 'Fixture', join(dir, 'root'))

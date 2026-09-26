@@ -288,6 +288,7 @@ export function createCore(options: CoreOptions = {}): Core {
         path,
         name: path.slice(path.lastIndexOf('/') + 1),
         content: utf8.decode(bytes),
+        encoding: 'utf-8',
         size: info.size,
         modifiedTime: info.modifiedTime
       }
