@@ -1,0 +1,24 @@
+#!/bin/sh
+# Rejects commit messages that don't follow Conventional Commits:
+#   <type>[optional scope][!]: <description>
+# https://www.conventionalcommits.org/
+
+msg_file="$1"
+subject=$(grep -v '^#' "$msg_file" | sed '/^[[:space:]]*$/d' | head -n 1)
+
+# Let git-generated messages through.
+case "$subject" in
+  "Merge "* | "Revert \""* | "fixup! "* | "squash! "* | "amend! "*) exit 0 ;;
+esac
+
+types='feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert'
+pattern="^($types)(\([a-z0-9._/-]+\))?!?: [^ ].*"
+
+if ! printf '%s\n' "$subject" | grep -Eq "$pattern"; then
+  echo "commit-msg: subject does not follow Conventional Commits." >&2
+  echo "  got:      $subject" >&2
+  echo "  expected: <type>[(scope)][!]: <description>" >&2
+  echo "  types:    $(echo "$types" | tr '|' ' ')" >&2
+  echo "  e.g.      feat(parser): support nested arrays" >&2
+  exit 1
+fi
