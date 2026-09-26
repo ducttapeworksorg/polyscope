@@ -1,0 +1,596 @@
+/*
+ * Polyscope: slate glass.
+ * The chrome is deliberately colourless. Hue is reserved for meaning: Environment colours
+ * (tab borders, badges, status bar) and syntax inside the editor. Focus and selection use
+ * a pale "glint" rather than a brand accent so nothing competes with a red prod border.
+ */
+
+:root {
+  --slate-950: #141a25; /* status bar, deepest chrome */
+  --slate-900: #171d29; /* sidebar */
+  --slate-850: #1b2230; /* editor well */
+  --slate-800: #212a3a; /* tab strip, raised surfaces */
+  --slate-700: #2b3548; /* hover, selection */
+  --slate-600: #364257; /* borders on inputs */
+  --line: #262f40; /* hairlines between regions */
+  --guide: #354054; /* tree indent guides */
+
+  --text: #d5dce8;
+  --text-dim: #8591a7;
+  --text-faint: #5d697f;
+  --glint: #eef2f8; /* focus ring, active markers */
+  --danger: #f08a8a; /* error text only */
+
+  --font-ui: 'Atkinson Hyperlegible Next Variable', system-ui, sans-serif;
+  --font-mono: 'Red Hat Mono Variable', ui-monospace, monospace;
+
+  /* Type scale: 11 / 12 / 13 / 15, one step apart; UI body is 13. */
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+
+  --row: 24px;
+  --indent: 14px;
+  --sidebar-width: 288px;
+
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--slate-850);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--text-md);
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow: hidden;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 1px solid var(--glint);
+  outline-offset: -1px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* ---------- Layout ---------- */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) 24px;
+  height: 100%;
+}
+
+.workbench {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.statusbar {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 760px) {
+  :root {
+    --sidebar-width: 220px;
+  }
+}
+
+/* ---------- Controls ---------- */
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.icon-button:hover {
+  background: var(--slate-700);
+  color: var(--text);
+}
+
+.button {
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.button--primary {
+  background: var(--text);
+  color: var(--slate-900);
+  font-weight: 600;
+}
+
+.button--primary:hover {
+  background: var(--glint);
+}
+
+.button--primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.button--primary:focus-visible {
+  outline-offset: 2px;
+}
+
+.button--quiet {
+  background: transparent;
+  border-color: var(--slate-600);
+  color: var(--text);
+}
+
+.button--quiet:hover {
+  background: var(--slate-700);
+}
+
+.link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* ---------- Sidebar ---------- */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--slate-900);
+  border-right: 1px solid var(--line);
+}
+
+.sidebar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 38px;
+  padding: 0 8px 0 14px;
+  flex: none;
+}
+
+.sidebar__heading {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.sidebar__sources {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 12px;
+}
+
+.sidebar__empty {
+  padding: 8px 14px 16px;
+}
+
+.sidebar__empty-title {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+
+.sidebar__empty-body {
+  margin: 0 0 14px;
+  color: var(--text-dim);
+  max-width: 30ch;
+}
+
+/* ---------- Add Source form ---------- */
+
+.add-source {
+  display: grid;
+  gap: 10px;
+  margin: 0 8px 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--slate-850);
+}
+
+.add-source__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 2px;
+  font-size: var(--text-md);
+  font-weight: 600;
+}
+
+.add-source__title svg {
+  color: var(--text-dim);
+}
+
+.field {
+  display: grid;
+  gap: 4px;
+}
+
+.field__label {
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+}
+
+.field__row {
+  display: flex;
+  gap: 6px;
+}
+
+.field__input {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--slate-600);
+  border-radius: 4px;
+  background: var(--slate-900);
+  user-select: text;
+}
+
+.field__input::placeholder {
+  color: var(--text-faint);
+}
+
+.field__input:focus {
+  outline: none;
+  border-color: var(--glint);
+}
+
+/* Paths are data: they read in the same mono face as file content. */
+.field__input--path {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.add-source__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.add-source__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+/* ---------- Tree ---------- */
+
+.source-tree + .source-tree {
+  margin-top: 2px;
+}
+
+.tree-row,
+.tree-note {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: var(--row);
+  padding-left: calc(6px + var(--depth) * var(--indent));
+  padding-right: 10px;
+}
+
+/* Indent guides: one hairline per ancestor level, centred under that level's twisty. */
+.tree-row::before,
+.tree-note::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 calc(6px + var(--indent) / 2);
+  width: calc(var(--depth) * var(--indent));
+  background: linear-gradient(to right, var(--guide) 1px, transparent 1px) 0 0 / var(--indent) 100% repeat-x;
+  pointer-events: none;
+}
+
+.tree-row {
+  gap: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tree-row:hover {
+  background: rgb(255 255 255 / 0.035);
+}
+
+.tree-row[aria-selected='true'] {
+  background: var(--slate-700);
+}
+
+.tree-row[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: var(--glint);
+}
+
+.tree-row__twisty {
+  display: inline-grid;
+  place-items: center;
+  width: var(--indent);
+  flex: none;
+  color: var(--text-dim);
+}
+
+.tree-row__twisty svg {
+  width: 12px;
+  height: 12px;
+  transition: transform 120ms ease-out;
+}
+
+.tree-row__twisty.is-open svg {
+  transform: rotate(90deg);
+}
+
+.tree-row__icon {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  color: var(--text-dim);
+}
+
+.tree-row__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-row--source {
+  height: 28px;
+  font-weight: 600;
+}
+
+.tree-row--source .tree-row__icon {
+  color: var(--text);
+}
+
+.tree-note {
+  padding-left: calc(6px + var(--depth) * var(--indent) + var(--indent) + 4px);
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+  font-style: italic;
+}
+
+.tree-note--error {
+  gap: 8px;
+  font-style: normal;
+  color: var(--danger);
+}
+
+.tree-note__message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Tabs ---------- */
+
+.tabs {
+  display: flex;
+  flex: none;
+  height: 36px;
+  background: var(--slate-800);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab {
+  /* Environment colour slots in here later; the active tab shows glint until then. */
+  --tab-marker: transparent;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 240px;
+  padding: 0 6px 0 12px;
+  border-right: 1px solid var(--line);
+  border-top: 2px solid var(--tab-marker);
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tab.is-active {
+  --tab-marker: var(--glint);
+  background: var(--slate-850);
+  color: var(--text);
+  margin-bottom: -1px;
+}
+
+.tab__icon {
+  display: inline-grid;
+  flex: none;
+}
+
+.tab__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab__close {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.tab.is-active .tab__close,
+.tab:hover .tab__close,
+.tab__close:focus-visible {
+  visibility: visible;
+}
+
+.tab__close:hover {
+  background: var(--slate-700);
+  color: var(--text);
+}
+
+/* ---------- Viewer ---------- */
+
+.workbench__error {
+  margin: 0;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line);
+  color: var(--danger);
+  font-size: var(--text-sm);
+}
+
+.viewer {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.viewer__editor {
+  position: absolute;
+  inset: 0;
+}
+
+.viewer__empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 22px;
+  color: var(--text-dim);
+  font-size: var(--text-lg);
+  text-align: center;
+}
+
+.viewer__empty p {
+  margin: 0;
+  max-width: 34ch;
+}
+
+/* The mark: seven lenses in one aperture. They settle in once, then stay still. */
+.aperture {
+  overflow: visible;
+}
+
+.aperture-ring {
+  fill: none;
+  stroke: var(--slate-700);
+  stroke-width: 1.5;
+}
+
+.aperture-ring--inner {
+  stroke: var(--line);
+}
+
+.aperture-lens {
+  fill: rgb(255 255 255 / 0.018);
+  stroke: var(--slate-600);
+  stroke-width: 1.25;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: lens-settle 520ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.aperture-lens--centre {
+  stroke: var(--text-faint);
+}
+
+@keyframes lens-settle {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aperture-lens {
+    animation: none;
+  }
+
+  .tree-row__twisty svg {
+    transition: none;
+  }
+}
+
+/* ---------- Status bar ---------- */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 12px;
+  background: var(--slate-950);
+  border-top: 1px solid var(--line);
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.statusbar__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.statusbar__item svg {
+  width: 13px;
+  height: 13px;
+}
+
+.statusbar__item--path {
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.statusbar__item--end {
+  margin-left: auto;
+}

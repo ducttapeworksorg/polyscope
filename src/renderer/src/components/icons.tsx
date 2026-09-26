@@ -1,0 +1,79 @@
+import type { SVGProps } from 'react'
+
+// 16px line icons drawn on a 16-unit grid; stroke follows currentColor.
+const base: SVGProps<SVGSVGElement> = {
+  width: 16,
+  height: 16,
+  viewBox: '0 0 16 16',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 1.25,
+  strokeLinecap: 'round',
+  strokeLinejoin: 'round',
+  'aria-hidden': true,
+  focusable: false
+}
+
+export const ChevronIcon = () => (
+  <svg {...base}>
+    <path d="M6 4l4 4-4 4" />
+  </svg>
+)
+
+export const FolderIcon = ({ open }: { open: boolean }) =>
+  open ? (
+    <svg {...base}>
+      <path d="M1.75 12.5V3.75c0-.4.35-.75.75-.75h3.1l1.4 1.5h5.25c.4 0 .75.35.75.75v1.5" />
+      <path d="M1.75 12.5l1.9-5.1c.1-.25.35-.4.6-.4h10c.35 0 .6.35.5.7l-1.6 4.4c-.1.25-.35.4-.6.4H1.75z" />
+    </svg>
+  ) : (
+    <svg {...base}>
+      <path d="M1.75 12.25V3.75c0-.4.35-.75.75-.75h3.1l1.4 1.5h6.5c.4 0 .75.35.75.75v7c0 .4-.35.75-.75.75H2.5c-.4 0-.75-.35-.75-.75z" />
+    </svg>
+  )
+
+export const FileIcon = () => (
+  <svg {...base}>
+    <path d="M9.25 1.75H4.5c-.4 0-.75.35-.75.75v11c0 .4.35.75.75.75h7c.4 0 .75-.35.75-.75V4.75z" />
+    <path d="M9.25 1.75v3h3" />
+  </svg>
+)
+
+export const HardDriveIcon = () => (
+  <svg {...base}>
+    <rect x="1.75" y="8.75" width="12.5" height="4.5" rx="1" />
+    <path d="M1.75 9.75l1.9-5.4c.1-.3.4-.6.8-.6h7.1c.4 0 .7.3.8.6l1.9 5.4" />
+    <path d="M11.5 11h.01M9.5 11h.01" strokeWidth={1.75} />
+  </svg>
+)
+
+export const PlusIcon = () => (
+  <svg {...base}>
+    <path d="M8 3v10M3 8h10" />
+  </svg>
+)
+
+export const CloseIcon = () => (
+  <svg {...base}>
+    <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />
+  </svg>
+)
+
+/** The Polyscope mark: many small lenses inside one aperture. */
+export const ApertureMark = () => (
+  <svg className="aperture" width="148" height="148" viewBox="0 0 148 148" aria-hidden="true" focusable="false">
+    <circle className="aperture-ring" cx="74" cy="74" r="70" />
+    <circle className="aperture-ring aperture-ring--inner" cx="74" cy="74" r="62" />
+    {[
+      [74, 74],
+      [74, 38],
+      [105.2, 56],
+      [105.2, 92],
+      [74, 110],
+      [42.8, 92],
+      [42.8, 56]
+    ].map(([cx, cy], i) => (
+      <circle key={i} className={i === 0 ? 'aperture-lens aperture-lens--centre' : 'aperture-lens'} cx={cx} cy={cy} r="17" style={{ animationDelay: `${i * 70}ms` }} />
+    ))}
+  </svg>
+)
