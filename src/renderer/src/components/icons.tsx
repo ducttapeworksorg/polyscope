@@ -20,18 +20,6 @@ export const ChevronIcon = () => (
   </svg>
 )
 
-export const FolderIcon = ({ open }: { open: boolean }) =>
-  open ? (
-    <svg {...base}>
-      <path d="M1.75 12.5V3.75c0-.4.35-.75.75-.75h3.1l1.4 1.5h5.25c.4 0 .75.35.75.75v1.5" />
-      <path d="M1.75 12.5l1.9-5.1c.1-.25.35-.4.6-.4h10c.35 0 .6.35.5.7l-1.6 4.4c-.1.25-.35.4-.6.4H1.75z" />
-    </svg>
-  ) : (
-    <svg {...base}>
-      <path d="M1.75 12.25V3.75c0-.4.35-.75.75-.75h3.1l1.4 1.5h6.5c.4 0 .75.35.75.75v7c0 .4-.35.75-.75.75H2.5c-.4 0-.75-.35-.75-.75z" />
-    </svg>
-  )
-
 export const FileIcon = () => (
   <svg {...base}>
     <path d="M9.25 1.75H4.5c-.4 0-.75.35-.75.75v11c0 .4.35.75.75.75h7c.4 0 .75-.35.75-.75V4.75z" />
@@ -51,6 +39,13 @@ export const WarningIcon = () => (
   <svg {...base}>
     <path d="M8 2.25l6.25 11H1.75z" />
     <path d="M8 6.5v3M8 11.25h.01" />
+  </svg>
+)
+
+/** Rows of names with their details alongside, for showing or hiding tree details. */
+export const DetailsIcon = () => (
+  <svg {...base}>
+    <path d="M2 4h6M2 8h6M2 12h6M11 4h3M11 8h3M11 12h3" />
   </svg>
 )
 

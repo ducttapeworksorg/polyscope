@@ -3,6 +3,10 @@ import type { EntryProblem, SourcePath } from '@shared/core-api'
 export interface FileEntry {
   kind: 'folder' | 'file'
   name: string
+  /** In bytes, when listing finds it out along the way. */
+  size?: number
+  /** Milliseconds since the epoch, when listing finds it out along the way. */
+  modifiedTime?: number
   /** Set when the entry is listed but can't be expanded or opened, e.g. a symlink loop or no permission. */
   problem?: EntryProblem
 }

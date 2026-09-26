@@ -9,11 +9,14 @@ import {
   type ReactNode
 } from 'react'
 import type { ConnectionState, EntryNode, ErrorNode, SourceInfo, SourcePath } from '@shared/core-api'
+import type { Theme } from '@shared/settings'
 import { core, describeError, describeFailure } from '../core-client'
 import { t } from '../i18n'
+import { formatDateTime, formatRelativeTime, formatSize } from '../i18n/format'
 import { uiFor } from '../source-types'
 import type { MenuItem } from './ContextMenu'
-import { ChevronIcon, FileIcon, FolderIcon, WarningIcon } from './icons'
+import { ChevronIcon, WarningIcon } from './icons'
+import { MaterialIcon } from './MaterialIcon'
 
 interface Props {
   source: SourceInfo
@@ -30,6 +33,9 @@ interface Props {
   sourceRowProps?: HTMLAttributes<HTMLDivElement>
   /** Extra attributes for the whole tree, e.g. to make it a drop target. */
   treeProps?: HTMLAttributes<HTMLDivElement>
+  /** Whether entries show their size and modified time after their name. */
+  showDetails: boolean
+  theme: Theme
 }
 
 export const nodeKey = (sourceId: string, path: SourcePath) => `${sourceId}:${path}`
@@ -47,15 +53,30 @@ interface RowProps {
   onActivate(): void
   menuItems?: MenuItem[]
   status?: ReactNode
+  /** Size and modified time, dimmed after the name. */
+  details?: ReactNode
   className?: string
   extra?: HTMLAttributes<HTMLDivElement>
 }
 
 const depthStyle = (depth: number) => ({ '--depth': depth }) as CSSProperties
 
+/** The current time, updated every minute while `ticking`, so relative times like '5 min. ago' keep up. */
+function useNow(ticking: boolean) {
+  const [now, setNow] = useState(Date.now)
+  useEffect(() => {
+    if (!ticking) return
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 60_000)
+    return () => clearInterval(timer)
+  }, [ticking])
+  return now
+}
+
 export function SourceTree(props: Props) {
   const { source, connection, onConnect, sourceMenuItems, onContextMenu, selectedKey, onSelect, onOpenFile } = props
-  const { sourceRowProps, treeProps } = props
+  const { sourceRowProps, treeProps, showDetails, theme } = props
+  const now = useNow(showDetails)
   const [expanded, setExpanded] = useState<ReadonlySet<SourcePath>>(new Set())
   const [listings, setListings] = useState<ReadonlyMap<SourcePath, Listing>>(new Map())
   // Bumped whenever the connection is lost, so listings still on their way from it are ignored.
@@ -110,7 +131,7 @@ export function SourceTree(props: Props) {
     setExpanded((prev) => new Set(prev).add(''))
   }
 
-  const row = ({ path, depth, label, icon, folder, onActivate, menuItems, status, className = '', extra }: RowProps) => {
+  const row = ({ path, depth, label, icon, folder, onActivate, menuItems, status, details, className = '', extra }: RowProps) => {
     const key = nodeKey(source.id, path)
     const isExpanded = folder && expanded.has(path)
     const activate = () => {
@@ -143,9 +164,25 @@ export function SourceTree(props: Props) {
         <span className={`tree-row__twisty ${isExpanded ? 'is-open' : ''}`}>{folder && <ChevronIcon />}</span>
         <span className="tree-row__icon">{icon}</span>
         <span className="tree-row__label">{label}</span>
+        {details}
         {status}
       </div>
     )
+  }
+
+  /** Size and relative modified time, each only if the Source reported it. */
+  const details = ({ size, modifiedTime }: EntryNode) =>
+    size === undefined && modifiedTime === undefined ? undefined : (
+      <span className="tree-row__details">
+        {size !== undefined && <span>{formatSize(size)}</span>}
+        {modifiedTime !== undefined && <span>{formatRelativeTime(modifiedTime, now)}</span>}
+      </span>
+    )
+
+  /** Where the entry really is and, when known, exactly when it was last modified. */
+  const tooltip = (node: EntryNode) => {
+    const where = uiFor(source.type).fullPath(source, node.path)
+    return node.modifiedTime === undefined ? where : `${where}\n${t('tree.modified', { time: formatDateTime(node.modifiedTime) })}`
   }
 
   const note = (path: SourcePath, depth: number, children: ReactNode, className = '') => (
@@ -194,9 +231,11 @@ export function SourceTree(props: Props) {
         depth,
         label: node.name,
         folder: isFolder,
-        icon: isFolder ? <FolderIcon open={expanded.has(node.path)} /> : <FileIcon />,
+        icon: <MaterialIcon icon={node.icon} theme={theme} open={isFolder && expanded.has(node.path)} />,
         onActivate: () => (isFolder ? toggle(node.path) : onOpenFile(source, node)),
-        menuItems: isFolder ? [{ label: t('sourceMenu.refresh'), onSelect: () => refresh(node.path) }] : undefined
+        menuItems: isFolder ? [{ label: t('sourceMenu.refresh'), onSelect: () => refresh(node.path) }] : undefined,
+        details: showDetails ? details(node) : undefined,
+        extra: { title: tooltip(node) }
       })
       return isFolder && expanded.has(node.path) ? [self, ...renderChildren(node.path, depth + 1)] : [self]
     })

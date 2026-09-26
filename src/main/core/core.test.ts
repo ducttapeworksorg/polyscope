@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import type { TreeNode } from '@shared/core-api'
 import { createCore } from './core'
 import { createSecretStore, type SecretCipher } from './secret-store'
 
@@ -12,6 +13,13 @@ let dir: string
 const localSource = (name: string, rootPath = dir) => ({ type: 'local' as const, name, rootPath })
 const dataDir = () => join(dir, 'user-data')
 const errorNode = (path: string, code: string) => ({ kind: 'error', path, code, message: expect.any(String) })
+/** Nodes without their icon and metadata, for tests about what's listed rather than how it's shown. */
+const entries = (nodes: TreeNode[]) =>
+  nodes.map((node) => {
+    if (node.kind === 'error') return node
+    const { icon: _, size: __, modifiedTime: ___, ...rest } = node
+    return rest
+  })
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'polyscope-core-'))
@@ -38,7 +46,7 @@ describe('Local Filesystem Source', () => {
     const core = createCore()
     const source = await core.addSource({ type: 'local', name: 'Logs', rootPath: dir })
 
-    expect(await core.connect(source.id)).toEqual([
+    expect(entries(await core.connect(source.id))).toEqual([
       { kind: 'folder', name: 'alpha', path: 'alpha' },
       { kind: 'folder', name: 'zeta', path: 'zeta' },
       { kind: 'file', name: 'A.txt', path: 'A.txt' },
@@ -53,7 +61,7 @@ describe('Local Filesystem Source', () => {
     const source = await core.addSource({ type: 'local', name: 'Logs', rootPath: dir })
     await core.connect(source.id)
 
-    expect(await core.expand(source.id, 'app/current')).toEqual([
+    expect(entries(await core.expand(source.id, 'app/current'))).toEqual([
       { kind: 'file', name: 'server.log', path: 'app/current/server.log' }
     ])
   })
@@ -72,6 +80,84 @@ describe('Local Filesystem Source', () => {
     expect(file).toMatchObject({ path: 'app/server.log', name: 'server.log', content: text, size: 37 })
     expect(file.modifiedTime).toBeGreaterThan(before - 60_000)
     expect(file.modifiedTime).toBeLessThanOrEqual(Date.now())
+  })
+})
+
+describe('tree metadata and icons', () => {
+  const connected = async (rootPath = dir) => {
+    const core = createCore()
+    const source = await core.addSource(localSource('Logs', rootPath))
+    return { core, source, nodes: await core.connect(source.id) }
+  }
+  const recently = () => ({ before: Date.now() - 60_000 })
+  const isRecent = (time: number | undefined, { before }: { before: number }) =>
+    time !== undefined && time > before && time <= Date.now()
+
+  it('gives files their size and modified time', async () => {
+    const since = recently()
+    await writeFile(join(dir, 'app.log'), 'twelve bytes')
+
+    const [file] = (await connected()).nodes
+
+    expect(file).toMatchObject({ kind: 'file', name: 'app.log', size: 12 })
+    expect(isRecent(file?.modifiedTime, since)).toBe(true)
+  })
+
+  it('gives folders the modified time their backend reports, but never a size', async () => {
+    const since = recently()
+    await mkdir(join(dir, 'app'))
+
+    const [folder] = (await connected()).nodes
+
+    expect(folder).not.toHaveProperty('size')
+    expect(isRecent(folder?.modifiedTime, since)).toBe(true)
+  })
+
+  it('gives nested entries their metadata too', async () => {
+    await mkdir(join(dir, 'app'))
+    await writeFile(join(dir, 'app', 'server.log'), 'abc')
+    const { core, source } = await connected()
+
+    expect(await core.expand(source.id, 'app')).toEqual([
+      { kind: 'file', name: 'server.log', path: 'app/server.log', icon: 'log', size: 3, modifiedTime: expect.any(Number) }
+    ])
+  })
+
+  it('leaves out metadata it can’t read rather than make it up', async () => {
+    await mkdir(join(dir, 'gone'))
+    await symlink(join(dir, 'gone'), join(dir, 'dangling'), process.platform === 'win32' ? 'junction' : 'dir')
+    await rm(join(dir, 'gone'), { recursive: true })
+
+    const [dangling] = (await connected()).nodes
+
+    expect(dangling).toEqual({ kind: 'file', name: 'dangling', path: 'dangling', icon: 'file' })
+  })
+
+  it('gives files the Material Icon Theme icon for their name or extension', async () => {
+    for (const name of ['package.json', 'server.log', 'APP.LOG', 'types.d.ts', 'notes.md', 'Dockerfile', 'data.xyz123', 'noextension']) {
+      await writeFile(join(dir, name), '')
+    }
+
+    const icons = Object.fromEntries((await connected()).nodes.map((n) => [n.name, n.icon]))
+
+    expect(icons).toEqual({
+      'package.json': 'nodejs',
+      'server.log': 'log',
+      'APP.LOG': 'log',
+      'types.d.ts': 'typescript-def',
+      'notes.md': 'markdown',
+      Dockerfile: 'docker',
+      'data.xyz123': 'file',
+      noextension: 'file'
+    })
+  })
+
+  it('gives folders the Material Icon Theme icon for their name', async () => {
+    for (const name of ['src', 'Logs', '.git', 'somewhere']) await mkdir(join(dir, name))
+
+    const icons = Object.fromEntries((await connected()).nodes.map((n) => [n.name, n.icon]))
+
+    expect(icons).toEqual({ src: 'folder-src', Logs: 'folder-log', '.git': 'folder-git', somewhere: 'folder' })
   })
 })
 
@@ -99,7 +185,7 @@ describe('browsing a Local Filesystem Source', () => {
     await mkdir(join(dir, 'root', '..data'))
     await writeFile(join(dir, 'root', '..data', 'x.log'), 'inside')
 
-    expect(await core.expand(source.id, '..data')).toEqual([{ kind: 'file', name: 'x.log', path: '..data/x.log' }])
+    expect(entries(await core.expand(source.id, '..data'))).toEqual([{ kind: 'file', name: 'x.log', path: '..data/x.log' }])
     expect((await core.openFile(source.id, '..data/x.log')).content).toBe('inside')
   })
 
@@ -125,7 +211,7 @@ describe('browsing a Local Filesystem Source', () => {
 
     expect(await core.connectionState(source.id)).toEqual({ state: 'connected' })
     expect(await core.expand(source.id, 'later')).toEqual([])
-    expect(await core.expand(source.id, '')).toEqual([{ kind: 'folder', name: 'app', path: 'app' }, { kind: 'folder', name: 'later', path: 'later' }])
+    expect(entries(await core.expand(source.id, ''))).toEqual([{ kind: 'folder', name: 'app', path: 'app' }, { kind: 'folder', name: 'later', path: 'later' }])
   })
 
   it('refuses to expand a file or open a folder', async () => {
@@ -235,8 +321,8 @@ describe('Local Filesystem Sources in real-world folders', () => {
 
       const { core, source, nodes } = await connected(root)
 
-      expect(nodes).toEqual([{ kind: 'folder', name: 'linked', path: 'linked' }])
-      expect(await core.expand(source.id, 'linked')).toEqual([{ kind: 'file', name: 'app.log', path: 'linked/app.log' }])
+      expect(entries(nodes)).toEqual([{ kind: 'folder', name: 'linked', path: 'linked' }])
+      expect(entries(await core.expand(source.id, 'linked'))).toEqual([{ kind: 'file', name: 'app.log', path: 'linked/app.log' }])
       expect((await core.openFile(source.id, 'linked/app.log')).content).toBe('linked')
     })
 
@@ -253,7 +339,7 @@ describe('Local Filesystem Sources in real-world folders', () => {
 
       const { core, source, nodes } = await connected(root)
 
-      expect(nodes).toEqual([{ kind: 'file', name: 'app.log', path: 'app.log' }])
+      expect(entries(nodes)).toEqual([{ kind: 'file', name: 'app.log', path: 'app.log' }])
       expect((await core.openFile(source.id, 'app.log')).content).toBe('linked')
     })
 
@@ -263,7 +349,7 @@ describe('Local Filesystem Sources in real-world folders', () => {
       await linkFolder(join(dir, 'app'), join(dir, 'app', 'self'))
       const { core, source } = await connected(dir)
 
-      expect(await core.expand(source.id, 'app')).toEqual([
+      expect(entries(await core.expand(source.id, 'app'))).toEqual([
         { kind: 'folder', name: 'self', path: 'app/self', problem: loop },
         { kind: 'folder', name: 'up', path: 'app/up', problem: loop }
       ])
@@ -277,8 +363,8 @@ describe('Local Filesystem Sources in real-world folders', () => {
       await linkFolder(root, join(dir, 'elsewhere', 'back'))
       const { core, source, nodes } = await connected(root)
 
-      expect(nodes).toEqual([{ kind: 'folder', name: 'out', path: 'out' }])
-      expect(await core.expand(source.id, 'out')).toEqual([{ kind: 'folder', name: 'back', path: 'out/back', problem: loop }])
+      expect(entries(nodes)).toEqual([{ kind: 'folder', name: 'out', path: 'out' }])
+      expect(entries(await core.expand(source.id, 'out'))).toEqual([{ kind: 'folder', name: 'back', path: 'out/back', problem: loop }])
     })
 
     it('to a sibling folder are not mistaken for loops', async () => {
@@ -287,14 +373,14 @@ describe('Local Filesystem Sources in real-world folders', () => {
       await linkFolder(join(dir, 'b'), join(dir, 'a', 'to-b'))
       const { core, source } = await connected(dir)
 
-      expect(await core.expand(source.id, 'a')).toEqual([{ kind: 'folder', name: 'to-b', path: 'a/to-b' }])
+      expect(entries(await core.expand(source.id, 'a'))).toEqual([{ kind: 'folder', name: 'to-b', path: 'a/to-b' }])
     })
 
     it.skipIf(windows)('that only point at each other are shown as loops', async () => {
       await symlink('b', join(dir, 'a'))
       await symlink('a', join(dir, 'b'))
 
-      expect((await connected(dir)).nodes).toEqual([
+      expect(entries((await connected(dir)).nodes)).toEqual([
         { kind: 'file', name: 'a', path: 'a', problem: loop },
         { kind: 'file', name: 'b', path: 'b', problem: loop }
       ])
@@ -306,7 +392,7 @@ describe('Local Filesystem Sources in real-world folders', () => {
       await rm(join(dir, 'gone'), { recursive: true })
       const { core, source, nodes } = await connected(dir)
 
-      expect(nodes).toEqual([{ kind: 'file', name: 'dangling', path: 'dangling' }])
+      expect(entries(nodes)).toEqual([{ kind: 'file', name: 'dangling', path: 'dangling' }])
       await expect(core.openFile(source.id, 'dangling')).rejects.toMatchObject({ code: 'NOT_FOUND' })
     })
   })
@@ -321,7 +407,7 @@ describe('Local Filesystem Sources in real-world folders', () => {
       await lock(join(dir, 'private'))
       await lock(join(dir, 'secret.log'))
 
-      expect((await connected(dir)).nodes).toEqual([
+      expect(entries((await connected(dir)).nodes)).toEqual([
         { kind: 'folder', name: 'private', path: 'private', problem: denied },
         { kind: 'file', name: 'app.log', path: 'app.log' },
         { kind: 'file', name: 'secret.log', path: 'secret.log', problem: denied }
@@ -402,7 +488,7 @@ describe('the Source registry', () => {
     await core.editSource(source.id, localSource('Logs', other))
 
     expect(await core.connectionState(source.id)).toEqual({ state: 'disconnected' })
-    expect(await core.connect(source.id)).toEqual([{ kind: 'file', name: 'moved.log', path: 'moved.log' }])
+    expect(entries(await core.connect(source.id))).toEqual([{ kind: 'file', name: 'moved.log', path: 'moved.log' }])
   })
 
   it('duplicates a Source under a distinct name, right after the original', async () => {
@@ -435,7 +521,7 @@ describe('the Source registry', () => {
 
     const copy = await core.duplicateSource(logs.id)
 
-    expect(await core.connect(copy.id)).toEqual([{ kind: 'file', name: 'a.log', path: 'a.log' }])
+    expect(entries(await core.connect(copy.id))).toEqual([{ kind: 'file', name: 'a.log', path: 'a.log' }])
     await expect(core.duplicateSource('nope')).rejects.toMatchObject({ code: 'SOURCE_NOT_FOUND' })
   })
 
@@ -512,7 +598,7 @@ describe('Source registry persistence', () => {
 
     expect(saved.map((s) => s.name)).toEqual(['Renamed', 'A'])
     expect(await after.listSources()).toEqual(saved)
-    expect(await after.connect(a.id)).toEqual([{ kind: 'file', name: 'a.log', path: 'a.log' }])
+    expect(entries(await after.connect(a.id))).toEqual([{ kind: 'file', name: 'a.log', path: 'a.log' }])
   })
 
   it('restores a Source whose root has since disappeared', async () => {
@@ -622,7 +708,7 @@ describe('connecting a Source', () => {
     const source = await core.addSource(localSource('Logs'))
 
     expect(await core.connectionState(source.id)).toEqual({ state: 'disconnected' })
-    expect(await core.connect(source.id)).toEqual([{ kind: 'file', name: 'a.log', path: 'a.log' }])
+    expect(entries(await core.connect(source.id))).toEqual([{ kind: 'file', name: 'a.log', path: 'a.log' }])
     expect(await core.connectionState(source.id)).toEqual({ state: 'connected' })
   })
 
@@ -742,7 +828,8 @@ describe('settings', () => {
     openAnywayLimit: 200 * MB,
     cacheSizeCap: 2048 * MB,
     defaultLastNLines: 10_000,
-    theme: 'dark'
+    theme: 'dark',
+    showTreeDetails: true
   }
   const settingsFile = () => join(dataDir(), 'settings.json')
 
@@ -766,6 +853,7 @@ describe('settings', () => {
     ['a negative cache size', { cacheSizeCap: -1 }, 'cacheSizeCap'],
     ['a line count that is not a number', { defaultLastNLines: '10' as unknown as number }, 'defaultLastNLines'],
     ['an unknown theme', { theme: 'sepia' as 'dark' }, 'theme'],
+    ['tree details shown as neither true nor false', { showTreeDetails: 'no' as unknown as boolean }, 'showTreeDetails'],
     ['an "open anyway" limit below the threshold', { openAnywayLimit: 40 * MB }, 'openAnywayLimit'],
     ['a threshold above the "open anyway" limit', { largeFileThreshold: 300 * MB }, 'openAnywayLimit'],
     ['a cache too small for the "open anyway" limit', { cacheSizeCap: 100 * MB }, 'cacheSizeCap']
@@ -795,18 +883,15 @@ describe('settings', () => {
   })
 
   it('are restored in a later launch', async () => {
-    await createCore({ dataDir: dataDir() }).updateSettings({ theme: 'light', largeFileThreshold: 20 * MB })
+    const changes = { theme: 'light' as const, largeFileThreshold: 20 * MB, showTreeDetails: false }
+    await createCore({ dataDir: dataDir() }).updateSettings(changes)
 
-    expect(await createCore({ dataDir: dataDir() }).getSettings()).toEqual({
-      ...defaults,
-      theme: 'light',
-      largeFileThreshold: 20 * MB
-    })
+    expect(await createCore({ dataDir: dataDir() }).getSettings()).toEqual({ ...defaults, ...changes })
   })
 
   it('fall back to the default for each saved value that is invalid, keeping the rest', async () => {
     await mkdir(dataDir())
-    const saved = { theme: 'sepia', defaultLastNLines: 500, cacheSizeCap: 'lots', openAnywayLimit: 10 * MB }
+    const saved = { theme: 'sepia', defaultLastNLines: 500, cacheSizeCap: 'lots', openAnywayLimit: 10 * MB, showTreeDetails: 1 }
     await writeFile(settingsFile(), JSON.stringify(saved))
 
     expect(await createCore({ dataDir: dataDir() }).getSettings()).toEqual({ ...defaults, defaultLastNLines: 500 })

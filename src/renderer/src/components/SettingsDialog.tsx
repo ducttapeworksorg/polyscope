@@ -37,7 +37,9 @@ export function SettingsDialog({ settings, onPreviewTheme, onSaved, onClose }: P
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
+  // Settings this dialog doesn't edit, like the sidebar's details toggle, are kept as they are.
   const edited: Settings = {
+    ...settings,
     theme,
     ...(Object.fromEntries(fields.map(({ key, unit }) => [key, parseWhole(texts[key]) * unit])) as Record<NumberSetting, number>)
   }

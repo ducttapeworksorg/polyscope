@@ -1,11 +1,12 @@
 import { useCallback, useRef, useState, type DragEvent, type HTMLAttributes, type MouseEvent } from 'react'
 import type { ConnectionState, EntryNode, SourceInfo, SourceTypeId } from '@shared/core-api'
+import type { Theme } from '@shared/settings'
 import { core, describeError } from '../core-client'
 import { t } from '../i18n'
 import { uiFor } from '../source-types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ContextMenu, type MenuItem } from './ContextMenu'
-import { GearIcon, PlusIcon } from './icons'
+import { DetailsIcon, GearIcon, PlusIcon } from './icons'
 import { SourceDialog } from './SourceDialog'
 import { SourceTree } from './SourceTree'
 
@@ -21,6 +22,10 @@ interface Props {
   onSourcesChanged(): void
   onOpenFile(source: SourceInfo, node: EntryNode): void
   onOpenSettings(): void
+  /** Whether tree rows show their size and modified time. */
+  showDetails: boolean
+  onToggleDetails(): void
+  theme: Theme
 }
 
 interface Group {
@@ -58,7 +63,9 @@ const isAfter = (event: DragEvent<HTMLElement>) => {
 const disconnected: ConnectionState = { state: 'disconnected' }
 const settingsShortcut = navigator.userAgent.includes('Mac') ? '⌘,' : 'Ctrl+,'
 
-export function Sidebar({ sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile, onOpenSettings }: Props) {
+export function Sidebar(props: Props) {
+  const { sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile, onOpenSettings } = props
+  const { showDetails, onToggleDetails, theme } = props
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const [menu, setMenu] = useState<{ label: string; items: MenuItem[]; x: number; y: number } | null>(null)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
@@ -171,6 +178,18 @@ export function Sidebar({ sources, connections, onConnect, onDisconnect, onSourc
             <button
               type="button"
               className="icon-button"
+              aria-label={t('sidebar.showDetails')}
+              aria-pressed={showDetails}
+              title={t('sidebar.showDetails')}
+              onClick={onToggleDetails}
+            >
+              <DetailsIcon />
+            </button>
+          )}
+          {!isEmpty && (
+            <button
+              type="button"
+              className="icon-button"
               aria-label={t('sidebar.add')}
               title={t('sidebar.add')}
               onClick={() => setDialog({ kind: 'add' })}
@@ -234,6 +253,8 @@ export function Sidebar({ sources, connections, onConnect, onDisconnect, onSourc
                   onOpenFile={onOpenFile}
                   sourceRowProps={sourceRowProps(source)}
                   treeProps={treeProps(source, group)}
+                  showDetails={showDetails}
+                  theme={theme}
                 />
               ))}
             </section>

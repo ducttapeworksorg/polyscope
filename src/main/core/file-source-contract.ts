@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SourcePath } from '@shared/core-api'
-import type { FileSource } from './file-source'
+import type { FileEntry, FileSource } from './file-source'
 
 /** What a File Source under test starts with: each file's content by path, or null for an empty folder. */
 export type SeedTree = Record<SourcePath, string | Uint8Array | null>
@@ -18,6 +18,8 @@ function bytes(length: number) {
   return content
 }
 const byName = (a: { name: string }, b: { name: string }) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+/** What was listed, leaving out the optional metadata. */
+const kindsAndNames = (entries: FileEntry[]) => entries.map(({ kind, name }) => ({ kind, name })).toSorted(byName)
 
 /**
  * The behaviour every File Source must show. A Source Type's tests call this with a function
@@ -37,7 +39,7 @@ export function describeFileSourceContract(name: string, seed: (tree: SeedTree) 
     describe('listing', () => {
       it('lists the files and folders in the root', () =>
         withSource({ 'a.log': 'a', 'logs/b.log': 'b', empty: null }, async (source) => {
-          expect((await source.listChildren('')).toSorted(byName)).toEqual([
+          expect(kindsAndNames(await source.listChildren(''))).toEqual([
             { kind: 'file', name: 'a.log' },
             { kind: 'folder', name: 'empty' },
             { kind: 'folder', name: 'logs' }
@@ -46,10 +48,19 @@ export function describeFileSourceContract(name: string, seed: (tree: SeedTree) 
 
       it('lists a nested folder', () =>
         withSource({ 'app/current/server.log': 'x', 'app/current/old': null }, async (source) => {
-          expect((await source.listChildren('app/current')).toSorted(byName)).toEqual([
+          expect(kindsAndNames(await source.listChildren('app/current'))).toEqual([
             { kind: 'folder', name: 'old' },
             { kind: 'file', name: 'server.log' }
           ])
+        }))
+
+      it('lists sizes and modified times, where it gives them, that agree with stat', () =>
+        withSource({ 'a.log': 'twelve bytes', logs: null }, async (source) => {
+          for (const entry of await source.listChildren('')) {
+            const info = await source.stat(entry.name)
+            if (entry.size !== undefined && entry.kind === 'file') expect(entry.size).toBe(info.size)
+            if (entry.modifiedTime !== undefined) expect(entry.modifiedTime).toBe(info.modifiedTime)
+          }
         }))
 
       it('lists an empty folder as empty', () =>

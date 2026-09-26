@@ -11,6 +11,7 @@ import type {
 } from '@shared/core-api'
 import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings } from '@shared/settings'
 import { CoreError } from './core-error'
+import { fileIcon, folderIcon } from './file-icons'
 import type { FileSource } from './file-source'
 import { createLocalFileSource } from './local-file-source'
 import { createRegistryStore, emptyRegistry } from './registry-store'
@@ -92,7 +93,18 @@ export function createCore(options: CoreOptions = {}): Core {
   const listNodes = async (fileSource: FileSource, path: SourcePath) => {
     const entries = await fileSource.listChildren(path)
     return entries
-      .map((e): EntryNode => ({ kind: e.kind, name: e.name, path: joinPath(path, e.name), ...(e.problem && { problem: e.problem }) }))
+      .map(
+        (e): EntryNode => ({
+          kind: e.kind,
+          name: e.name,
+          path: joinPath(path, e.name),
+          icon: e.kind === 'folder' ? folderIcon(e.name) : fileIcon(e.name),
+          // A folder's size says nothing useful about what's in it, so only files show one.
+          ...(e.kind === 'file' && e.size !== undefined && { size: e.size }),
+          ...(e.modifiedTime !== undefined && { modifiedTime: e.modifiedTime }),
+          ...(e.problem && { problem: e.problem })
+        })
+      )
       .sort((a, b) => (a.kind === b.kind ? byName.compare(a.name, b.name) : a.kind === 'folder' ? -1 : 1))
   }
 

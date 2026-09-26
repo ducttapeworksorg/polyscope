@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { constants, type Dirent } from 'node:fs'
+import { constants, type Dirent, type Stats } from 'node:fs'
 import { access, open, readdir, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
@@ -87,7 +87,7 @@ export function createLocalFileSource(rootPath: string, { showHidden }: LocalFil
     return { code, message }
   }
 
-  /** Where a listed entry is headed, following symlinks, and whether it can be read. */
+  /** Where a listed entry is headed, following symlinks, whether it can be read, and its size and modified time. */
   const describeEntry = async (
     dirent: Dirent,
     folder: string,
@@ -97,31 +97,35 @@ export function createLocalFileSource(rootPath: string, { showHidden }: LocalFil
     const { name } = dirent
     const absolute = join(folder, name)
     const entryPath = folderPath ? `${folderPath}/${name}` : name
-    let kind: FileEntry['kind'] = dirent.isDirectory() ? 'folder' : 'file'
-    if (dirent.isSymbolicLink()) {
-      try {
-        kind = (await stat(absolute)).isDirectory() ? 'folder' : 'file'
-      } catch (error) {
-        // A link whose target is missing still shows up, and says so when it's opened.
-        if (errnoOf(error) === 'ENOENT') return { kind: 'file', name }
-        return { kind: 'file', name, problem: problemOf(error, entryPath) }
+    let info: Stats | undefined
+    try {
+      info = await stat(absolute)
+    } catch (error) {
+      // A link whose target is missing still shows up, and says so when it's opened.
+      if (dirent.isSymbolicLink()) {
+        return errnoOf(error) === 'ENOENT' ? { kind: 'file', name } : { kind: 'file', name, problem: problemOf(error, entryPath) }
       }
+      // Anything else goes on without metadata (e.g. a file Windows keeps locked) and is still checked for access.
+    }
+    const kind: FileEntry['kind'] = (info ?? dirent).isDirectory() ? 'folder' : 'file'
+    const entry: FileEntry = info ? { kind, name, size: info.size, modifiedTime: info.mtimeMs } : { kind, name }
+    if (dirent.isSymbolicLink() && kind === 'folder') {
       try {
-        if (kind === 'folder' && (await ancestors()).has(await realpath(absolute))) {
+        if ((await ancestors()).has(await realpath(absolute))) {
           const message = `${entryPath}: links back to a folder that contains it`
-          return { kind, name, problem: { code: 'SYMLINK_LOOP', message } }
+          return { ...entry, problem: { code: 'SYMLINK_LOOP', message } }
         }
       } catch (error) {
         // Only this entry is affected, e.g. when its link changed since it was listed.
-        return { kind, name, problem: problemOf(error, entryPath) }
+        return { ...entry, problem: problemOf(error, entryPath) }
       }
     }
     try {
       await access(absolute, kind === 'folder' ? constants.R_OK | constants.X_OK : constants.R_OK)
     } catch (error) {
-      return { kind, name, problem: problemOf(error, entryPath) }
+      return { ...entry, problem: problemOf(error, entryPath) }
     }
-    return { kind, name }
+    return entry
   }
 
   return {

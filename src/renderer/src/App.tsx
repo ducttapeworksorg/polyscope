@@ -134,6 +134,11 @@ export function App() {
     if (key === activeTab?.key) setActiveKey(remaining[Math.min(index, remaining.length - 1)]?.key ?? null)
   }
 
+  // The new value arrives through onSettingsChanged; if it can't be saved, the toggle stays as it was.
+  const toggleTreeDetails = async () => {
+    if (settings) await core.updateSettings({ showTreeDetails: !settings.showTreeDetails }).catch(() => undefined)
+  }
+
   if (!settings) return null
 
   const StatusIcon = activeTab && uiFor(activeTab.source.type).Icon
@@ -149,6 +154,9 @@ export function App() {
         onSourcesChanged={() => void reloadSources()}
         onOpenFile={openFile}
         onOpenSettings={() => setSettingsOpen(true)}
+        showDetails={settings.showTreeDetails}
+        onToggleDetails={() => void toggleTreeDetails()}
+        theme={previewTheme ?? settings.theme}
       />
 
       {settingsOpen && (

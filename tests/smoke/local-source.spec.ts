@@ -56,6 +56,31 @@ test('add a Local Filesystem Source, browse it, read a file, and find it again a
   await expect(relaunched.getByRole('tab')).toHaveCount(0)
 })
 
+test('show file sizes and modified times, and hide them for good from the sidebar', async () => {
+  const window = await app.firstWindow()
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  const file = window.getByRole('treeitem', { name: /^app\.log/ })
+
+  await expect(file).toContainText('26 B')
+  await expect(file).toContainText('now')
+  const escaped = join(dir, 'root', 'logs', 'app.log').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  await expect(file).toHaveAttribute('title', new RegExp(`^${escaped}\\nModified `))
+  await expect(file.locator('img')).toHaveAttribute('src', /log.*\.svg/)
+
+  const toggle = window.getByRole('button', { name: 'Show sizes and modified times' })
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false')
+  await expect(file).not.toContainText('26 B')
+
+  await app.close()
+  app = await launch()
+  const relaunched = await app.firstWindow()
+  await expect(relaunched.getByRole('button', { name: 'Show sizes and modified times' })).toHaveAttribute('aria-pressed', 'false')
+})
+
 test('edit, duplicate, reorder and delete Sources', async () => {
   const window = await app.firstWindow()
   await addSource(window, 'Fixture', join(dir, 'root'))

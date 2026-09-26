@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react'
-import type { NewSource, SourceInfo, SourceTypeId } from '@shared/core-api'
+import type { NewSource, SourceInfo, SourcePath, SourceTypeId } from '@shared/core-api'
 import { HardDriveIcon } from './components/icons'
 import { t, type MessageKey } from './i18n'
 
@@ -17,6 +17,8 @@ export interface SourceTypeUi<S extends NewSource> {
   blank(): S
   /** The editable settings of an existing Source. */
   settingsOf(source: SourceInfo): S
+  /** Where an entry really is, as the user would recognise it: a path on disk, an object key, and so on. */
+  fullPath(source: SourceInfo, path: SourcePath): string
   /** The fields specific to this Source Type; the Source's name is edited by the dialog itself. */
   Fields: ComponentType<FieldsProps<S>>
 }
@@ -24,6 +26,13 @@ export interface SourceTypeUi<S extends NewSource> {
 type SourceTypeUis = { [T in SourceTypeId]: SourceTypeUi<Extract<NewSource, { type: T }>> }
 
 const lastSegment = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path
+
+/** A Source path on disk under `rootPath`, written with the separator the root path uses. */
+function pathOnDisk(rootPath: string, path: SourcePath) {
+  if (!path) return rootPath
+  const sep = rootPath.includes('\\') ? '\\' : '/'
+  return `${rootPath.replace(/[\\/]+$/, '')}${sep}${path.split('/').join(sep)}`
+}
 
 function LocalFields({ value, onChange }: FieldsProps<Extract<NewSource, { type: 'local' }>>) {
   const browse = async () => {
@@ -71,6 +80,7 @@ export const sourceTypeUi: SourceTypeUis = {
     Icon: HardDriveIcon,
     blank: () => ({ type: 'local', name: '', rootPath: '', showHidden: true }),
     settingsOf: (source) => ({ type: 'local', name: source.name, rootPath: source.rootPath, showHidden: source.showHidden }),
+    fullPath: (source, path) => pathOnDisk(source.rootPath, path),
     Fields: LocalFields
   }
 }

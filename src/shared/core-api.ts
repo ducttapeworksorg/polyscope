@@ -36,11 +36,20 @@ export interface EntryProblem {
   message: string
 }
 
+/** The name of an icon in Material Icon Theme's `icons` folder, without '.svg'. */
+export type IconKey = string
+
 /** A folder or file in a Source's tree. */
 export interface EntryNode {
   kind: 'folder' | 'file'
   name: string
   path: SourcePath
+  /** The Material Icon Theme icon for the entry, e.g. 'log' or 'folder-src'; a folder's open icon adds '-open'. */
+  icon: IconKey
+  /** In bytes; files only, and only when the backend reports it. */
+  size?: number
+  /** Milliseconds since the epoch; only when the backend reports it, never made up. */
+  modifiedTime?: number
   /** Set when the entry can't be expanded or opened, e.g. a symlink loop or no permission to read it. */
   problem?: EntryProblem
 }

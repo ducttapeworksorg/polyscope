@@ -15,9 +15,11 @@ export interface Settings {
   /** How many lines a log view fetches and keeps, unless its Source remembers another number. */
   defaultLastNLines: number
   theme: Theme
+  /** Whether tree rows show their size and modified time; toggled from the sidebar. */
+  showTreeDetails: boolean
 }
 
-export type NumberSetting = Exclude<keyof Settings, 'theme'>
+export type NumberSetting = Exclude<keyof Settings, 'theme' | 'showTreeDetails'>
 
 /** The limits measured in bytes, which have to agree with one another. */
 export const sizeSettings = ['largeFileThreshold', 'openAnywayLimit', 'cacheSizeCap'] as const satisfies NumberSetting[]
@@ -31,12 +33,14 @@ export const defaultSettings: Readonly<Settings> = {
   openAnywayLimit: 200 * MB,
   cacheSizeCap: 2048 * MB,
   defaultLastNLines: 10_000,
-  theme: 'dark'
+  theme: 'dark',
+  showTreeDetails: true
 }
 
 export type SettingProblem =
   | 'notPositiveWholeNumber'
   | 'notATheme'
+  | 'notTrueOrFalse'
   /** The "open anyway" limit is below the Large File threshold, so it could never apply. */
   | 'belowLargeFileThreshold'
   /** The cache is too small to hold a file of the "open anyway" limit. */
@@ -61,6 +65,7 @@ export function settingProblems(settings: Settings): SettingProblems {
     if (!isPositiveWholeNumber(settings[key])) problems[key] = 'notPositiveWholeNumber'
   }
   if (!themes.includes(settings.theme)) problems.theme = 'notATheme'
+  if (typeof settings.showTreeDetails !== 'boolean') problems.showTreeDetails = 'notTrueOrFalse'
   // Limits are only compared once each is a number at all.
   if (!problems.openAnywayLimit && !problems.largeFileThreshold && settings.openAnywayLimit < settings.largeFileThreshold) {
     problems.openAnywayLimit = 'belowLargeFileThreshold'

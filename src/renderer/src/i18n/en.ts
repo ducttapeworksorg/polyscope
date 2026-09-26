@@ -8,6 +8,7 @@ export const en = {
   'sidebar.empty.body': 'Add a folder on this computer to browse its files.',
   'sidebar.settings': 'Settings',
   'sidebar.settingsTooltip': 'Settings ({shortcut})',
+  'sidebar.showDetails': 'Show sizes and modified times',
 
   'sourceType.local': 'Local Filesystem',
   'sourceType.local.hint': 'A folder on this computer',
@@ -45,6 +46,7 @@ export const en = {
   'tree.menuLabel': 'Actions for {name}',
   'tree.connecting': 'Connecting…',
   'tree.connectFailed': 'Couldn’t connect: {message}',
+  'tree.modified': 'Modified {time}',
 
   'tabs.close': 'Close {name}',
 
@@ -66,6 +68,7 @@ export const en = {
   'settings.save': 'Save',
   'settings.problem.notPositiveWholeNumber': 'Enter a whole number greater than zero.',
   'settings.problem.notATheme': 'Choose a theme.',
+  'settings.problem.notTrueOrFalse': 'Turn this on or off.',
   'settings.problem.belowLargeFileThreshold': 'Must be at least the Large File threshold.',
   'settings.problem.belowOpenAnywayLimit': 'Must be at least the “open anyway” limit.',
 
