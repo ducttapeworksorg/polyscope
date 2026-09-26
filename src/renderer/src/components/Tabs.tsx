@@ -21,7 +21,7 @@ export function Tabs({ tabs, activeKey, onActivate, onClose }: Props) {
             role="tab"
             tabIndex={active ? 0 : -1}
             aria-selected={active}
-            title={`${tab.sourceName}: ${tab.file.path}`}
+            title={`${tab.source.name}: ${tab.file.path}`}
             className={`tab ${active ? 'is-active' : ''}`}
             onClick={() => onActivate(tab.key)}
             onAuxClick={(e) => e.button === 1 && onClose(tab.key)}

@@ -1,44 +1,162 @@
 import { randomUUID } from 'node:crypto'
-import type { CoreApi, SourceInfo, SourcePath, TreeNode } from '@shared/core-api'
+import type { CoreApi, NewSource, SourceInfo, SourcePath, SourceTypeId, TreeNode } from '@shared/core-api'
 import { CoreError } from './core-error'
 import type { FileSource } from './file-source'
 import { createLocalFileSource } from './local-file-source'
+import { createRegistryStore, emptyRegistry } from './registry-store'
+import { createSecretStore, type SecretStore } from './secret-store'
 
 const utf8 = new TextDecoder()
 const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 
-export function createCore(): CoreApi {
-  const sources: SourceInfo[] = []
+export interface CoreOptions {
+  /** Where the registry is saved between launches; without it, nothing outlives the core. */
+  dataDir?: string
+  /** Where Sources' secrets are kept; defaults to memory only. */
+  secrets?: SecretStore
+}
+
+const inMemory = { encrypt: (plain: string) => Buffer.from(plain), decrypt: (encrypted: Buffer) => encrypted.toString() }
+
+export function createCore(options: CoreOptions = {}): CoreApi {
+  const store = options.dataDir ? createRegistryStore(options.dataDir) : null
+  const secrets = options.secrets ?? createSecretStore({ cipher: inMemory })
+  // Sources are kept in each group's order; groups interleave freely and are sorted by groupOrder when listed.
+  const { sources, groupOrder } = emptyRegistry()
+  const loaded = store?.load().then((saved) => {
+    sources.push(...saved.sources)
+    groupOrder.splice(0, groupOrder.length, ...saved.groupOrder)
+  })
+  /** Applies a change to the registry and saves it; if saving fails, the change is undone. */
+  const commit = async <T>(change: () => T): Promise<T> => {
+    const before = { sources: [...sources], groupOrder: [...groupOrder] }
+    const result = change()
+    try {
+      await store?.save({ sources, groupOrder })
+    } catch (error) {
+      sources.splice(0, sources.length, ...before.sources)
+      groupOrder.splice(0, groupOrder.length, ...before.groupOrder)
+      throw error
+    }
+    return result
+  }
+  // Opened lazily and dropped whenever a Source's settings change.
   const fileSources = new Map<string, FileSource>()
 
+  const sourceFor = (sourceId: string) => {
+    const source = sources.find((s) => s.id === sourceId)
+    if (!source) throw new CoreError('SOURCE_NOT_FOUND', `No Source with id ${sourceId}`)
+    return source
+  }
+
   const fileSourceFor = (sourceId: string) => {
-    const fileSource = fileSources.get(sourceId)
-    if (!fileSource) throw new CoreError('SOURCE_NOT_FOUND', `No Source with id ${sourceId}`)
+    const source = sourceFor(sourceId)
+    let fileSource = fileSources.get(source.id)
+    if (!fileSource) fileSources.set(source.id, (fileSource = createLocalFileSource(source.rootPath)))
     return fileSource
+  }
+
+  /** Checks new or edited settings and returns them normalised, without an id. */
+  const validate = async (input: NewSource): Promise<Omit<SourceInfo, 'id'>> => {
+    const name = input.name.trim()
+    if (!name) throw new CoreError('NAME_REQUIRED', 'A Source needs a name')
+    const rootPath = input.rootPath.trim()
+    const root = await createLocalFileSource(rootPath).stat('').catch(() => null)
+    if (!root) throw new CoreError('ROOT_NOT_FOUND', `Root path does not exist: ${rootPath}`)
+    if (root.kind !== 'folder') throw new CoreError('ROOT_NOT_A_FOLDER', `Root path is not a folder: ${rootPath}`)
+    return { type: input.type, name, rootPath }
+  }
+
+  const copyName = (name: string) => {
+    const taken = new Set(sources.map((s) => s.name))
+    let candidate = `${name} copy`
+    for (let n = 2; taken.has(candidate); n++) candidate = `${name} copy ${n}`
+    return candidate
+  }
+
+  const checkIndex = (index: number, length: number) => {
+    if (!Number.isInteger(index) || index < 0 || index >= length) {
+      throw new CoreError('INVALID_ORDER', `Position ${index} is outside 0–${length - 1}`)
+    }
   }
 
   const joinPath = (parent: SourcePath, name: string) => (parent ? `${parent}/${name}` : name)
 
   return {
     async listSources() {
-      return sources.map((s) => ({ ...s }))
+      await loaded
+      const rank = (s: SourceInfo) => groupOrder.indexOf(s.type)
+      return sources.toSorted((a, b) => rank(a) - rank(b)).map((s) => ({ ...s }))
     },
 
     async addSource(input) {
-      const name = input.name.trim()
-      if (!name) throw new CoreError('NAME_REQUIRED', 'A Source needs a name')
-      const fileSource = createLocalFileSource(input.rootPath)
-      const root = await fileSource.stat('').catch(() => null)
-      if (!root) throw new CoreError('ROOT_NOT_FOUND', `Root path does not exist: ${input.rootPath}`)
-      if (root.kind !== 'folder') throw new CoreError('ROOT_NOT_A_FOLDER', `Root path is not a folder: ${input.rootPath}`)
-
-      const source: SourceInfo = { id: randomUUID(), type: input.type, name, rootPath: input.rootPath }
-      sources.push(source)
-      fileSources.set(source.id, fileSource)
+      await loaded
+      const source: SourceInfo = { id: randomUUID(), ...(await validate(input)) }
+      await commit(() => sources.push(source))
       return { ...source }
     },
 
+    async editSource(sourceId, input) {
+      await loaded
+      sourceFor(sourceId) // an unknown Source is reported before any invalid settings
+      const source: SourceInfo = { id: sourceId, ...(await validate(input)) }
+      await commit(() => (sources[sources.indexOf(sourceFor(sourceId))] = source))
+      fileSources.delete(sourceId)
+      return { ...source }
+    },
+
+    async duplicateSource(sourceId) {
+      await loaded
+      const id = randomUUID()
+      await secrets.copy(sourceFor(sourceId).id, id)
+      try {
+        // Looked up again: the registry may have changed while the secrets were copied.
+        const original = sourceFor(sourceId)
+        const copy: SourceInfo = { ...original, id, name: copyName(original.name) }
+        await commit(() => sources.splice(sources.indexOf(original) + 1, 0, copy))
+        return { ...copy }
+      } catch (error) {
+        await secrets.remove(id)
+        throw error
+      }
+    },
+
+    async deleteSource(sourceId) {
+      await loaded
+      sourceFor(sourceId)
+      // Secrets go first: if that fails the Source is still there to delete again.
+      await secrets.remove(sourceId)
+      await commit(() => sources.splice(sources.indexOf(sourceFor(sourceId)), 1))
+      fileSources.delete(sourceId)
+    },
+
+    async moveSource(sourceId, index) {
+      await loaded
+      const source = sourceFor(sourceId)
+      const siblings = sources.filter((s) => s.type === source.type && s !== source)
+      checkIndex(index, siblings.length + 1)
+      await commit(() => {
+        sources.splice(sources.indexOf(source), 1)
+        const anchor = siblings[index] ?? siblings.at(-1)
+        const at = !anchor ? sources.length : sources.indexOf(anchor) + (index === siblings.length ? 1 : 0)
+        sources.splice(at, 0, source)
+      })
+    },
+
+    async moveSourceGroup(type, index) {
+      await loaded
+      const shown = groupOrder.filter((t) => sources.some((s) => s.type === t))
+      if (!shown.includes(type)) throw new CoreError('INVALID_ORDER', `No Sources of type ${type} to move`)
+      checkIndex(index, shown.length)
+      const reordered: SourceTypeId[] = shown.filter((t) => t !== type)
+      reordered.splice(index, 0, type)
+      // Groups without Sources aren't shown, so they simply follow the ones that are.
+      const hidden = groupOrder.filter((t) => !shown.includes(t))
+      await commit(() => groupOrder.splice(0, groupOrder.length, ...reordered, ...hidden))
+    },
+
     async expand(sourceId, path) {
+      await loaded
       const entries = await fileSourceFor(sourceId).listChildren(path)
       return entries
         .map((e): TreeNode => ({ kind: e.kind, name: e.name, path: joinPath(path, e.name) }))
@@ -46,6 +164,7 @@ export function createCore(): CoreApi {
     },
 
     async openFile(sourceId, path) {
+      await loaded
       const fileSource = fileSourceFor(sourceId)
       const info = await fileSource.stat(path)
       if (info.kind !== 'file') throw new CoreError('NOT_A_FILE', `Not a file: ${path}`)

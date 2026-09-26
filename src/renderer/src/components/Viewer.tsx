@@ -69,7 +69,7 @@ export function Viewer({ tabs, activeTab }: Props) {
 
     let entry = models.get(activeTab.key)
     if (!entry) {
-      const uri = monaco.Uri.from({ scheme: 'polyscope', authority: activeTab.sourceId, path: `/${activeTab.file.path}` })
+      const uri = monaco.Uri.from({ scheme: 'polyscope', authority: activeTab.source.id, path: `/${activeTab.file.path}` })
       // No explicit language: Monaco infers it from the file extension in the URI.
       entry = { model: monaco.editor.createModel(activeTab.file.content, undefined, uri), viewState: null }
       models.set(activeTab.key, entry)

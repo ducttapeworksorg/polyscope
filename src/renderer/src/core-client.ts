@@ -22,6 +22,11 @@ function call<M extends CoreMethod>(method: M) {
 export const core: CoreApi = {
   listSources: call('listSources'),
   addSource: call('addSource'),
+  editSource: call('editSource'),
+  duplicateSource: call('duplicateSource'),
+  deleteSource: call('deleteSource'),
+  moveSource: call('moveSource'),
+  moveSourceGroup: call('moveSourceGroup'),
   expand: call('expand'),
   openFile: call('openFile')
 }

@@ -1,14 +1,19 @@
-import { useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
+import { useState, type CSSProperties, type HTMLAttributes, type KeyboardEvent, type ReactNode } from 'react'
 import type { SourceInfo, SourcePath, TreeNode } from '@shared/core-api'
 import { core, describeError } from '../core-client'
 import { t } from '../i18n'
-import { ChevronIcon, FileIcon, FolderIcon, HardDriveIcon } from './icons'
+import { uiFor } from '../source-types'
+import { ChevronIcon, FileIcon, FolderIcon } from './icons'
 
 interface Props {
   source: SourceInfo
   selectedKey: string | null
   onSelect(key: string): void
   onOpenFile(source: SourceInfo, node: TreeNode): void
+  /** Extra attributes for the Source's own row, e.g. for dragging it or opening its menu. */
+  sourceRowProps?: HTMLAttributes<HTMLDivElement>
+  /** Extra attributes for the whole tree, e.g. to make it a drop target. */
+  treeProps?: HTMLAttributes<HTMLDivElement>
 }
 
 export const nodeKey = (sourceId: string, path: SourcePath) => `${sourceId}:${path}`
@@ -23,11 +28,12 @@ interface RowProps {
   folder: boolean
   onActivate(): void
   className?: string
+  extra?: HTMLAttributes<HTMLDivElement>
 }
 
 const depthStyle = (depth: number) => ({ '--depth': depth }) as CSSProperties
 
-export function SourceTree({ source, selectedKey, onSelect, onOpenFile }: Props) {
+export function SourceTree({ source, selectedKey, onSelect, onOpenFile, sourceRowProps, treeProps }: Props) {
   const [expanded, setExpanded] = useState<ReadonlySet<SourcePath>>(new Set())
   const [listings, setListings] = useState<ReadonlyMap<SourcePath, Listing>>(new Map())
 
@@ -49,7 +55,7 @@ export function SourceTree({ source, selectedKey, onSelect, onOpenFile }: Props)
     if (!listing || listing.state === 'failed') load(path)
   }
 
-  const row = ({ path, depth, label, icon, folder, onActivate, className = '' }: RowProps) => {
+  const row = ({ path, depth, label, icon, folder, onActivate, className = '', extra }: RowProps) => {
     const key = nodeKey(source.id, path)
     const isExpanded = folder && expanded.has(path)
     const activate = () => {
@@ -63,13 +69,14 @@ export function SourceTree({ source, selectedKey, onSelect, onOpenFile }: Props)
     }
     return (
       <div
+        {...extra}
         key={key}
         role="treeitem"
         tabIndex={0}
         aria-level={depth + 1}
         aria-expanded={folder ? isExpanded : undefined}
         aria-selected={selectedKey === key}
-        className={`tree-row ${className}`}
+        className={`tree-row ${className} ${extra?.className ?? ''}`}
         style={depthStyle(depth)}
         onClick={activate}
         onKeyDown={onKeyDown}
@@ -116,16 +123,19 @@ export function SourceTree({ source, selectedKey, onSelect, onOpenFile }: Props)
     })
   }
 
+  const { Icon } = uiFor(source.type)
+
   return (
-    <div role="tree" aria-label={source.name} className="source-tree">
+    <div {...treeProps} role="tree" aria-label={source.name} className={`source-tree ${treeProps?.className ?? ''}`}>
       {row({
         path: '',
         depth: 0,
         label: source.name,
         folder: true,
-        icon: <HardDriveIcon />,
+        icon: <Icon />,
         onActivate: () => toggle(''),
-        className: 'tree-row--source'
+        className: 'tree-row--source',
+        extra: sourceRowProps
       })}
       {expanded.has('') && renderChildren('', 1)}
     </div>

@@ -1,10 +1,14 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createCore } from './core'
+import { createSecretStore, type SecretCipher } from './secret-store'
 
 let dir: string
+
+const localSource = (name: string, rootPath = dir) => ({ type: 'local' as const, name, rootPath })
+const dataDir = () => join(dir, 'user-data')
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'polyscope-core-'))
@@ -128,11 +132,261 @@ describe('adding a Local Filesystem Source', () => {
     expect(await core.listSources()).toEqual([])
   })
 
-  it('trims the name', async () => {
+  it('trims the name and root path', async () => {
     const core = createCore()
 
-    const source = await core.addSource({ type: 'local', name: '  Logs ', rootPath: dir })
+    const source = await core.addSource({ type: 'local', name: '  Logs ', rootPath: ` ${dir}  ` })
 
-    expect(source.name).toBe('Logs')
+    expect(source).toMatchObject({ name: 'Logs', rootPath: dir })
+  })
+})
+
+describe('the Source registry', () => {
+
+  it('edits a Source’s settings, keeping its id and place', async () => {
+    const other = join(dir, 'other')
+    await mkdir(other)
+    const core = createCore()
+    const first = await core.addSource(localSource('First'))
+    const second = await core.addSource(localSource('Second'))
+
+    const edited = await core.editSource(first.id, localSource(' Renamed ', other))
+
+    expect(edited).toEqual({ id: first.id, type: 'local', name: 'Renamed', rootPath: other })
+    expect(await core.listSources()).toEqual([edited, second])
+  })
+
+  it('validates edits like new Sources and leaves the Source unchanged when they fail', async () => {
+    const core = createCore()
+    const source = await core.addSource(localSource('Logs'))
+
+    await expect(core.editSource(source.id, localSource(''))).rejects.toMatchObject({ code: 'NAME_REQUIRED' })
+    await expect(core.editSource(source.id, localSource('Logs', join(dir, 'missing')))).rejects.toMatchObject({
+      code: 'ROOT_NOT_FOUND'
+    })
+    await expect(core.editSource('nope', localSource('Logs'))).rejects.toMatchObject({ code: 'SOURCE_NOT_FOUND' })
+    expect(await core.listSources()).toEqual([source])
+  })
+
+  it('browses the new root after an edit', async () => {
+    const other = join(dir, 'other')
+    await mkdir(other)
+    await writeFile(join(other, 'moved.log'), '')
+    const core = createCore()
+    const source = await core.addSource(localSource('Logs'))
+    await core.expand(source.id, '')
+
+    await core.editSource(source.id, localSource('Logs', other))
+
+    expect(await core.expand(source.id, '')).toEqual([{ kind: 'file', name: 'moved.log', path: 'moved.log' }])
+  })
+
+  it('duplicates a Source under a distinct name, right after the original', async () => {
+    const core = createCore()
+    const logs = await core.addSource(localSource('Logs'))
+    const other = await core.addSource(localSource('Other'))
+
+    const copy = await core.duplicateSource(logs.id)
+
+    expect(copy).toEqual({ id: expect.any(String), type: 'local', name: 'Logs copy', rootPath: dir })
+    expect(copy.id).not.toBe(logs.id)
+    expect(await core.listSources()).toEqual([logs, copy, other])
+  })
+
+  it('numbers further duplicates until the name is free', async () => {
+    const core = createCore()
+    const logs = await core.addSource(localSource('Logs'))
+    await core.addSource(localSource('Logs copy 2'))
+
+    const names = []
+    for (let i = 0; i < 3; i++) names.push((await core.duplicateSource(logs.id)).name)
+
+    expect(names).toEqual(['Logs copy', 'Logs copy 3', 'Logs copy 4'])
+  })
+
+  it('browses a duplicate independently of the original', async () => {
+    await writeFile(join(dir, 'a.log'), '')
+    const core = createCore()
+    const logs = await core.addSource(localSource('Logs'))
+
+    const copy = await core.duplicateSource(logs.id)
+
+    expect(await core.expand(copy.id, '')).toEqual([{ kind: 'file', name: 'a.log', path: 'a.log' }])
+    await expect(core.duplicateSource('nope')).rejects.toMatchObject({ code: 'SOURCE_NOT_FOUND' })
+  })
+
+  it('deletes a Source so it can no longer be listed or browsed', async () => {
+    const core = createCore()
+    const logs = await core.addSource(localSource('Logs'))
+    const other = await core.addSource(localSource('Other'))
+
+    await core.deleteSource(logs.id)
+
+    expect(await core.listSources()).toEqual([other])
+    await expect(core.expand(logs.id, '')).rejects.toMatchObject({ code: 'SOURCE_NOT_FOUND' })
+    await expect(core.deleteSource(logs.id)).rejects.toMatchObject({ code: 'SOURCE_NOT_FOUND' })
+  })
+
+  it('moves a Source to a new position within its group', async () => {
+    const core = createCore()
+    const [a, b, c] = [
+      await core.addSource(localSource('A')),
+      await core.addSource(localSource('B')),
+      await core.addSource(localSource('C'))
+    ]
+
+    await core.moveSource(c.id, 0)
+    expect(await core.listSources()).toEqual([c, a, b])
+
+    await core.moveSource(c.id, 2)
+    expect(await core.listSources()).toEqual([a, b, c])
+  })
+
+  it.each([-1, 2, 0.5])('refuses to move a Source to position %s', async (index) => {
+    const core = createCore()
+    const a = await core.addSource(localSource('A'))
+    const b = await core.addSource(localSource('B'))
+
+    await expect(core.moveSource(a.id, index)).rejects.toMatchObject({ code: 'INVALID_ORDER' })
+    expect(await core.listSources()).toEqual([a, b])
+  })
+
+  it('moves a Source Type group among the groups that have Sources', async () => {
+    const core = createCore()
+    const a = await core.addSource(localSource('A'))
+
+    await core.moveSourceGroup('local', 0)
+
+    expect(await core.listSources()).toEqual([a])
+    await expect(core.moveSourceGroup('local', 1)).rejects.toMatchObject({ code: 'INVALID_ORDER' })
+  })
+})
+
+describe('Source registry persistence', () => {
+
+  it('starts empty when nothing has been saved yet', async () => {
+    const core = createCore({ dataDir: dataDir() })
+
+    expect(await core.listSources()).toEqual([])
+  })
+
+  it('restores Sources, their settings and their order in a later launch', async () => {
+    const root = join(dir, 'root')
+    await mkdir(root)
+    await writeFile(join(root, 'a.log'), '')
+    const before = createCore({ dataDir: dataDir() })
+    const a = await before.addSource(localSource('A', root))
+    const b = await before.addSource(localSource('B'))
+    const gone = await before.duplicateSource(a.id)
+    await before.editSource(b.id, localSource('Renamed'))
+    await before.moveSource(b.id, 0)
+    await before.moveSourceGroup('local', 0)
+    await before.deleteSource(gone.id)
+    const saved = await before.listSources()
+
+    const after = createCore({ dataDir: dataDir() })
+
+    expect(saved.map((s) => s.name)).toEqual(['Renamed', 'A'])
+    expect(await after.listSources()).toEqual(saved)
+    expect(await after.expand(a.id, '')).toEqual([{ kind: 'file', name: 'a.log', path: 'a.log' }])
+  })
+
+  it('restores a Source whose root has since disappeared', async () => {
+    const root = join(dir, 'root')
+    await mkdir(root)
+    const before = createCore({ dataDir: dataDir() })
+    const source = await before.addSource(localSource('Logs', root))
+    await rm(root, { recursive: true })
+
+    const after = createCore({ dataDir: dataDir() })
+
+    expect(await after.listSources()).toEqual([source])
+    await expect(after.expand(source.id, '')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+
+  it('sets an unreadable registry aside and starts afresh', async () => {
+    await mkdir(dataDir())
+    await writeFile(join(dataDir(), 'sources.json'), '{ not json')
+
+    const core = createCore({ dataDir: dataDir() })
+
+    expect(await core.listSources()).toEqual([])
+    const source = await core.addSource(localSource('Logs'))
+    expect(await createCore({ dataDir: dataDir() }).listSources()).toEqual([source])
+    const setAside = (await readdir(dataDir())).filter((f) => f.startsWith('sources.json.unreadable-'))
+    expect(await Promise.all(setAside.map((f) => readFile(join(dataDir(), f), 'utf8')))).toEqual(['{ not json'])
+  })
+
+  it('keeps Sources of Source Types it doesn’t know when saving', async () => {
+    const future = { id: 'f1', type: 'from-a-later-version', name: 'Future', endpoint: 'x' }
+    await mkdir(dataDir())
+    await writeFile(join(dataDir(), 'sources.json'), JSON.stringify({ sources: [future], groupOrder: [] }))
+    const core = createCore({ dataDir: dataDir() })
+
+    await core.addSource(localSource('Logs'))
+
+    expect((await core.listSources()).map((s) => s.name)).toEqual(['Logs'])
+    const saved = JSON.parse(await readFile(join(dataDir(), 'sources.json'), 'utf8'))
+    expect(saved.sources).toContainEqual(future)
+  })
+
+  it('leaves the registry unchanged when a change can’t be saved', async () => {
+    const blocked = join(dir, 'blocked')
+    await writeFile(blocked, 'a file where the data directory should be')
+    const core = createCore({ dataDir: blocked })
+
+    await expect(core.addSource(localSource('Logs'))).rejects.toThrow()
+
+    expect(await core.listSources()).toEqual([])
+  })
+
+  it('keeps registries in different data directories apart', async () => {
+    await createCore({ dataDir: dataDir() }).addSource(localSource('Logs'))
+
+    expect(await createCore({ dataDir: join(dir, 'elsewhere') }).listSources()).toEqual([])
+    expect(await createCore().listSources()).toEqual([])
+  })
+})
+
+describe('secrets stored for a Source', () => {
+  // Stands in for the OS keychain: reversible, but never the plain text.
+  const reversed: SecretCipher = {
+    encrypt: (plain) => Buffer.from([...plain].reverse().join('')),
+    decrypt: (encrypted) => [...encrypted.toString()].reverse().join('')
+  }
+
+  it('are removed when the Source is deleted', async () => {
+    const secrets = createSecretStore({ dataDir: dataDir(), cipher: reversed })
+    const core = createCore({ dataDir: dataDir(), secrets })
+    const source = await core.addSource(localSource('Bucket'))
+    const kept = await core.addSource(localSource('Other'))
+    await secrets.set(source.id, 'secretKey', 's3cr3t')
+    await secrets.set(kept.id, 'secretKey', 'k3pt')
+
+    await core.deleteSource(source.id)
+
+    const later = createSecretStore({ dataDir: dataDir(), cipher: reversed })
+    expect(await later.get(source.id, 'secretKey')).toBeUndefined()
+    expect(await later.get(kept.id, 'secretKey')).toBe('k3pt')
+  })
+
+  it('are copied to a duplicate', async () => {
+    const secrets = createSecretStore({ dataDir: dataDir(), cipher: reversed })
+    const core = createCore({ dataDir: dataDir(), secrets })
+    const source = await core.addSource(localSource('Bucket'))
+    await secrets.set(source.id, 'secretKey', 's3cr3t')
+
+    const copy = await core.duplicateSource(source.id)
+
+    expect(await createSecretStore({ dataDir: dataDir(), cipher: reversed }).get(copy.id, 'secretKey')).toBe('s3cr3t')
+  })
+
+  it('are never saved as plain text', async () => {
+    const secrets = createSecretStore({ dataDir: dataDir(), cipher: reversed })
+    await secrets.set('source-id', 'secretKey', 's3cr3t')
+
+    const files = await readdir(dataDir())
+    const saved = await Promise.all(files.map((f) => readFile(join(dataDir(), f), 'utf8')))
+    expect(saved.join('')).not.toContain('s3cr3t')
   })
 })

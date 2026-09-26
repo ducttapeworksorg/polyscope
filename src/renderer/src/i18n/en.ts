@@ -6,13 +6,29 @@ export const en = {
   'sidebar.empty.title': 'No Sources yet',
   'sidebar.empty.body': 'Add a folder on this computer to browse its files.',
 
-  'addSource.title': 'Local Filesystem Source',
-  'addSource.name': 'Name',
-  'addSource.namePlaceholder': 'App logs',
-  'addSource.rootPath': 'Root path',
-  'addSource.browse': 'Browse…',
-  'addSource.submit': 'Add Source',
-  'addSource.cancel': 'Cancel',
+  'sourceType.local': 'Local Filesystem',
+  'sourceType.local.hint': 'A folder on this computer',
+
+  'sourceDialog.addTitle': 'Add Source',
+  'sourceDialog.editTitle': 'Edit {name}',
+  'sourceDialog.type': 'Source Type',
+  'sourceDialog.name': 'Name',
+  'sourceDialog.namePlaceholder': 'App logs',
+  'sourceDialog.add': 'Add Source',
+  'sourceDialog.save': 'Save',
+  'dialog.cancel': 'Cancel',
+
+  'localSource.rootPath': 'Root path',
+  'localSource.browse': 'Browse…',
+
+  'sourceMenu.label': 'Actions for {name}',
+  'sourceMenu.edit': 'Edit…',
+  'sourceMenu.duplicate': 'Duplicate',
+  'sourceMenu.delete': 'Delete…',
+
+  'deleteSource.title': 'Delete {name}?',
+  'deleteSource.body': 'Polyscope forgets this Source and any secrets stored for it. Nothing it points at is touched.',
+  'deleteSource.confirm': 'Delete',
 
   'tree.loading': 'Loading…',
   'tree.emptyFolder': 'Empty folder',
@@ -34,5 +50,6 @@ export const en = {
   'error.NOT_FOUND': 'This item no longer exists.',
   'error.NOT_A_FOLDER': 'This is a file, not a folder.',
   'error.NOT_A_FILE': 'This is a folder, not a file.',
+  'error.INVALID_ORDER': 'That can’t be moved there.',
   'error.UNKNOWN': 'Couldn’t complete that: {message}'
 } satisfies Record<string, string> & Record<`error.${CoreErrorCode}`, string>

@@ -1,9 +1,14 @@
 import { join } from 'node:path'
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, safeStorage, shell } from 'electron'
 import { createCore } from './core/core'
+import { createSecretStore } from './core/secret-store'
 import { registerCoreIpc, registerShellIpc } from './ipc'
 
 let mainWindow: BrowserWindow | null = null
+
+// Lets tests (and anyone keeping separate profiles) point the app at another user-data directory.
+const userDataDir = app.commandLine.getSwitchValue('user-data-dir')
+if (userDataDir) app.setPath('userData', userDataDir)
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -39,7 +44,12 @@ function createWindow(): void {
 }
 
 void app.whenReady().then(() => {
-  registerCoreIpc(createCore())
+  const dataDir = app.getPath('userData')
+  const cipher = {
+    encrypt: (plain: string) => safeStorage.encryptString(plain),
+    decrypt: (encrypted: Buffer) => safeStorage.decryptString(encrypted)
+  }
+  registerCoreIpc(createCore({ dataDir, secrets: createSecretStore({ dataDir, cipher }) }))
   registerShellIpc(() => mainWindow)
   createWindow()
 
