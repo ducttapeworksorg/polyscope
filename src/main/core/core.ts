@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { CoreApi, NewSource, SourceInfo, SourcePath, SourceTypeId, TreeNode } from '@shared/core-api'
+import type { ConnectionState, CoreApi, EntryNode, NewSource, SourceInfo, SourcePath, SourceTypeId } from '@shared/core-api'
 import { CoreError } from './core-error'
 import type { FileSource } from './file-source'
 import { createLocalFileSource } from './local-file-source'
@@ -7,6 +7,8 @@ import { createRegistryStore, emptyRegistry } from './registry-store'
 import { createSecretStore, type SecretStore } from './secret-store'
 
 const utf8 = new TextDecoder()
+const asCoreError = (error: unknown) =>
+  error instanceof CoreError ? error : new CoreError('UNKNOWN', error instanceof Error ? error.message : String(error))
 const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 
 export interface CoreOptions {
@@ -40,8 +42,10 @@ export function createCore(options: CoreOptions = {}): CoreApi {
     }
     return result
   }
-  // Opened lazily and dropped whenever a Source's settings change.
-  const fileSources = new Map<string, FileSource>()
+  // Only Sources that aren't Disconnected have an entry. Each connect attempt puts in a new entry,
+  // so an attempt can tell when a disconnect (or a newer attempt) has replaced it.
+  type Connection = Exclude<ConnectionState, { state: 'connected' | 'disconnected' }> | { state: 'connected'; fileSource: FileSource }
+  const connections = new Map<string, Connection>()
 
   const sourceFor = (sourceId: string) => {
     const source = sources.find((s) => s.id === sourceId)
@@ -51,9 +55,33 @@ export function createCore(options: CoreOptions = {}): CoreApi {
 
   const fileSourceFor = (sourceId: string) => {
     const source = sourceFor(sourceId)
-    let fileSource = fileSources.get(source.id)
-    if (!fileSource) fileSources.set(source.id, (fileSource = createLocalFileSource(source.rootPath)))
+    const connection = connections.get(source.id)
+    if (connection?.state !== 'connected') {
+      throw new CoreError('SOURCE_DISCONNECTED', `${source.name} is not connected`)
+    }
+    return connection.fileSource
+  }
+
+  const listNodes = async (fileSource: FileSource, path: SourcePath) => {
+    const entries = await fileSource.listChildren(path)
+    return entries
+      .map((e): EntryNode => ({ kind: e.kind, name: e.name, path: joinPath(path, e.name) }))
+      .sort((a, b) => (a.kind === b.kind ? byName.compare(a.name, b.name) : a.kind === 'folder' ? -1 : 1))
+  }
+
+  /** Opens a File Source for a Source's settings, once it's clear it can be reached. */
+  const reach = async ({ rootPath }: Pick<NewSource, 'rootPath'>) => {
+    const fileSource = createLocalFileSource(rootPath)
+    const root = await fileSource.stat('').catch(() => null)
+    if (!root) throw new CoreError('ROOT_NOT_FOUND', `Root path does not exist: ${rootPath}`)
+    if (root.kind !== 'folder') throw new CoreError('ROOT_NOT_A_FOLDER', `Root path is not a folder: ${rootPath}`)
     return fileSource
+  }
+
+  /** Reaches a Source and lists its root: what connecting, or testing a connection, has to get through. */
+  const open = async (settings: Pick<NewSource, 'rootPath'>) => {
+    const fileSource = await reach(settings)
+    return { fileSource, nodes: await listNodes(fileSource, '') }
   }
 
   /** Checks new or edited settings and returns them normalised, without an id. */
@@ -61,11 +89,13 @@ export function createCore(options: CoreOptions = {}): CoreApi {
     const name = input.name.trim()
     if (!name) throw new CoreError('NAME_REQUIRED', 'A Source needs a name')
     const rootPath = input.rootPath.trim()
-    const root = await createLocalFileSource(rootPath).stat('').catch(() => null)
-    if (!root) throw new CoreError('ROOT_NOT_FOUND', `Root path does not exist: ${rootPath}`)
-    if (root.kind !== 'folder') throw new CoreError('ROOT_NOT_A_FOLDER', `Root path is not a folder: ${rootPath}`)
+    await reach({ rootPath })
     return { type: input.type, name, rootPath }
   }
+
+  /** Every setting but the name, in a form that compares equal whatever order the keys were saved in. */
+  const target = ({ name: _, ...settings }: SourceInfo) => JSON.stringify(Object.entries(settings).sort())
+  const sameTarget = (a: SourceInfo, b: SourceInfo) => target(a) === target(b)
 
   const copyName = (name: string) => {
     const taken = new Set(sources.map((s) => s.name))
@@ -100,8 +130,10 @@ export function createCore(options: CoreOptions = {}): CoreApi {
       await loaded
       sourceFor(sourceId) // an unknown Source is reported before any invalid settings
       const source: SourceInfo = { id: sourceId, ...(await validate(input)) }
-      await commit(() => (sources[sources.indexOf(sourceFor(sourceId))] = source))
-      fileSources.delete(sourceId)
+      const before = sourceFor(sourceId)
+      await commit(() => (sources[sources.indexOf(before)] = source))
+      // A new name keeps the connection; anything else points somewhere new and needs connecting afresh.
+      if (!sameTarget(before, source)) connections.delete(sourceId)
       return { ...source }
     },
 
@@ -127,7 +159,7 @@ export function createCore(options: CoreOptions = {}): CoreApi {
       // Secrets go first: if that fails the Source is still there to delete again.
       await secrets.remove(sourceId)
       await commit(() => sources.splice(sources.indexOf(sourceFor(sourceId)), 1))
-      fileSources.delete(sourceId)
+      connections.delete(sourceId)
     },
 
     async moveSource(sourceId, index) {
@@ -155,12 +187,55 @@ export function createCore(options: CoreOptions = {}): CoreApi {
       await commit(() => groupOrder.splice(0, groupOrder.length, ...reordered, ...hidden))
     },
 
+    async connectionState(sourceId) {
+      await loaded
+      sourceFor(sourceId)
+      const connection = connections.get(sourceId) ?? { state: 'disconnected' }
+      return connection.state === 'error' ? { ...connection } : { state: connection.state }
+    },
+
+    async connect(sourceId) {
+      await loaded
+      const source = sourceFor(sourceId)
+      const attempt: Connection = { state: 'connecting' }
+      connections.set(sourceId, attempt)
+      const settle = (outcome: Connection) => {
+        if (connections.get(sourceId) !== attempt) {
+          throw new CoreError('SOURCE_DISCONNECTED', `${source.name} was disconnected or reconnected while connecting`)
+        }
+        connections.set(sourceId, outcome)
+      }
+      let opened: Awaited<ReturnType<typeof open>>
+      try {
+        opened = await open(source)
+      } catch (error) {
+        const failure = asCoreError(error)
+        settle({ state: 'error', code: failure.code, message: failure.message })
+        throw failure
+      }
+      settle({ state: 'connected', fileSource: opened.fileSource })
+      return opened.nodes
+    },
+
+    async testConnection(input) {
+      await open({ rootPath: input.rootPath.trim() })
+    },
+
+    async disconnect(sourceId) {
+      await loaded
+      sourceFor(sourceId)
+      connections.delete(sourceId)
+    },
+
     async expand(sourceId, path) {
       await loaded
-      const entries = await fileSourceFor(sourceId).listChildren(path)
-      return entries
-        .map((e): TreeNode => ({ kind: e.kind, name: e.name, path: joinPath(path, e.name) }))
-        .sort((a, b) => (a.kind === b.kind ? byName.compare(a.name, b.name) : a.kind === 'folder' ? -1 : 1))
+      const fileSource = fileSourceFor(sourceId)
+      try {
+        return await listNodes(fileSource, path)
+      } catch (error) {
+        const { code, message } = asCoreError(error)
+        return [{ kind: 'error', path, code, message }]
+      }
     },
 
     async openFile(sourceId, path) {

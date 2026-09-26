@@ -275,6 +275,23 @@ fieldset {
   font-size: var(--text-sm);
 }
 
+.dialog__test {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dialog__test-result {
+  margin: 0;
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+}
+
+.dialog__test-result.is-failed {
+  color: var(--danger);
+}
+
 .dialog__actions {
   display: flex;
   justify-content: flex-end;
@@ -533,6 +550,20 @@ fieldset {
   color: var(--text);
 }
 
+.tree-row__status {
+  display: inline-flex;
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+  font-weight: 400;
+}
+
+.tree-row__status--error,
+.tree-row--source.is-error .tree-row__icon {
+  color: var(--danger);
+}
+
 .tree-note {
   padding-left: calc(6px + var(--depth) * var(--indent) + var(--indent) + 4px);
   color: var(--text-faint);
@@ -630,6 +661,30 @@ fieldset {
   border-bottom: 1px solid var(--line);
   color: var(--danger);
   font-size: var(--text-sm);
+}
+
+.workbench__banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--slate-800);
+  font-size: var(--text-sm);
+}
+
+.workbench__banner-text {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-dim);
+}
+
+.workbench__banner-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--danger);
 }
 
 .viewer {

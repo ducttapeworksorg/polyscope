@@ -25,11 +25,29 @@ export interface SourceInfo {
 /** A path inside a Source: '/'-separated, relative to the Source root, '' for the root itself. */
 export type SourcePath = string
 
-export interface TreeNode {
+/** A folder or file in a Source's tree. */
+export interface EntryNode {
   kind: 'folder' | 'file'
   name: string
   path: SourcePath
 }
+
+/** Stands in for the children of `path` when they couldn't be listed; expanding `path` again retries. */
+export interface ErrorNode {
+  kind: 'error'
+  path: SourcePath
+  code: CoreErrorCode
+  message: string
+}
+
+export type TreeNode = EntryNode | ErrorNode
+
+/** Whether the app is talking to a Source right now. Never persisted: every launch starts Disconnected. */
+export type ConnectionState =
+  | { state: 'disconnected' }
+  | { state: 'connecting' }
+  | { state: 'connected' }
+  | { state: 'error'; code: CoreErrorCode; message: string }
 
 export interface OpenedFile {
   path: SourcePath
@@ -44,6 +62,7 @@ export type CoreErrorCode =
   | 'ROOT_NOT_FOUND'
   | 'ROOT_NOT_A_FOLDER'
   | 'SOURCE_NOT_FOUND'
+  | 'SOURCE_DISCONNECTED'
   | 'PATH_OUTSIDE_SOURCE'
   | 'NOT_FOUND'
   | 'NOT_A_FOLDER'
@@ -64,6 +83,14 @@ export interface CoreApi {
   moveSource(sourceId: string, index: number): Promise<void>
   /** Moves a Source Type group to `index` among the groups that currently have Sources. */
   moveSourceGroup(type: SourceTypeId, index: number): Promise<void>
+  connectionState(sourceId: string): Promise<ConnectionState>
+  /** Resolves the Source's settings, checks it can be reached and returns its root's children. */
+  connect(sourceId: string): Promise<EntryNode[]>
+  /** Checks that settings could be connected to, without saving anything. */
+  testConnection(input: NewSource): Promise<void>
+  /** Drops the connection and stops all activity against the Source. */
+  disconnect(sourceId: string): Promise<void>
+  /** The children of a node in a Connected Source; if they can't be listed, a single error node instead. */
   expand(sourceId: string, path: SourcePath): Promise<TreeNode[]>
   openFile(sourceId: string, path: SourcePath): Promise<OpenedFile>
 }
@@ -78,6 +105,10 @@ export const coreMethods: readonly CoreMethod[] = [
   'deleteSource',
   'moveSource',
   'moveSourceGroup',
+  'connectionState',
+  'connect',
+  'testConnection',
+  'disconnect',
   'expand',
   'openFile'
 ]

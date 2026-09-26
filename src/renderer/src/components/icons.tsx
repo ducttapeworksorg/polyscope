@@ -47,6 +47,13 @@ export const HardDriveIcon = () => (
   </svg>
 )
 
+export const WarningIcon = () => (
+  <svg {...base}>
+    <path d="M8 2.25l6.25 11H1.75z" />
+    <path d="M8 6.5v3M8 11.25h.01" />
+  </svg>
+)
+
 export const PlusIcon = () => (
   <svg {...base}>
     <path d="M8 3v10M3 8h10" />

@@ -9,6 +9,7 @@ let dir: string
 
 const localSource = (name: string, rootPath = dir) => ({ type: 'local' as const, name, rootPath })
 const dataDir = () => join(dir, 'user-data')
+const errorNode = (path: string, code: string) => ({ kind: 'error', path, code, message: expect.any(String) })
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'polyscope-core-'))
@@ -35,7 +36,7 @@ describe('Local Filesystem Source', () => {
     const core = createCore()
     const source = await core.addSource({ type: 'local', name: 'Logs', rootPath: dir })
 
-    expect(await core.expand(source.id, '')).toEqual([
+    expect(await core.connect(source.id)).toEqual([
       { kind: 'folder', name: 'alpha', path: 'alpha' },
       { kind: 'folder', name: 'zeta', path: 'zeta' },
       { kind: 'file', name: 'A.txt', path: 'A.txt' },
@@ -48,6 +49,7 @@ describe('Local Filesystem Source', () => {
     await writeFile(join(dir, 'app', 'current', 'server.log'), '')
     const core = createCore()
     const source = await core.addSource({ type: 'local', name: 'Logs', rootPath: dir })
+    await core.connect(source.id)
 
     expect(await core.expand(source.id, 'app/current')).toEqual([
       { kind: 'file', name: 'server.log', path: 'app/current/server.log' }
@@ -60,6 +62,7 @@ describe('Local Filesystem Source', () => {
     await writeFile(join(dir, 'app', 'server.log'), text)
     const core = createCore()
     const source = await core.addSource({ type: 'local', name: 'Logs', rootPath: dir })
+    await core.connect(source.id)
     const before = Date.now()
 
     const file = await core.openFile(source.id, 'app/server.log')
@@ -78,13 +81,14 @@ describe('browsing a Local Filesystem Source', () => {
     await writeFile(join(dir, 'secret.txt'), 'secret')
     const core = createCore()
     const source = await core.addSource({ type: 'local', name: 'Logs', rootPath: root })
+    await core.connect(source.id)
     return { core, source }
   }
 
   it.each(['..', 'app/../..', '../secret.txt'])('refuses the path %s that leaves the root', async (path) => {
     const { core, source } = await sourceWithSecretSibling()
 
-    await expect(core.expand(source.id, path)).rejects.toMatchObject({ code: 'PATH_OUTSIDE_SOURCE' })
+    expect(await core.expand(source.id, path)).toEqual([errorNode(path, 'PATH_OUTSIDE_SOURCE')])
     await expect(core.openFile(source.id, path)).rejects.toMatchObject({ code: 'PATH_OUTSIDE_SOURCE' })
   })
 
@@ -107,14 +111,25 @@ describe('browsing a Local Filesystem Source', () => {
   it('reports paths that do not exist', async () => {
     const { core, source } = await sourceWithSecretSibling()
 
-    await expect(core.expand(source.id, 'gone')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect(await core.expand(source.id, 'gone')).toEqual([errorNode('gone', 'NOT_FOUND')])
     await expect(core.openFile(source.id, 'app/gone.log')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+
+  it('shows a failed expansion as an error node that can be retried, leaving the Source Connected', async () => {
+    const { core, source } = await sourceWithSecretSibling()
+    expect(await core.expand(source.id, 'later')).toEqual([errorNode('later', 'NOT_FOUND')])
+
+    await mkdir(join(dir, 'root', 'later'))
+
+    expect(await core.connectionState(source.id)).toEqual({ state: 'connected' })
+    expect(await core.expand(source.id, 'later')).toEqual([])
+    expect(await core.expand(source.id, '')).toEqual([{ kind: 'folder', name: 'app', path: 'app' }, { kind: 'folder', name: 'later', path: 'later' }])
   })
 
   it('refuses to expand a file or open a folder', async () => {
     const { core, source } = await sourceWithSecretSibling()
 
-    await expect(core.expand(source.id, 'app/server.log')).rejects.toMatchObject({ code: 'NOT_A_FOLDER' })
+    expect(await core.expand(source.id, 'app/server.log')).toEqual([errorNode('app/server.log', 'NOT_A_FOLDER')])
     await expect(core.openFile(source.id, 'app')).rejects.toMatchObject({ code: 'NOT_A_FILE' })
   })
 })
@@ -174,11 +189,12 @@ describe('the Source registry', () => {
     await writeFile(join(other, 'moved.log'), '')
     const core = createCore()
     const source = await core.addSource(localSource('Logs'))
-    await core.expand(source.id, '')
+    await core.connect(source.id)
 
     await core.editSource(source.id, localSource('Logs', other))
 
-    expect(await core.expand(source.id, '')).toEqual([{ kind: 'file', name: 'moved.log', path: 'moved.log' }])
+    expect(await core.connectionState(source.id)).toEqual({ state: 'disconnected' })
+    expect(await core.connect(source.id)).toEqual([{ kind: 'file', name: 'moved.log', path: 'moved.log' }])
   })
 
   it('duplicates a Source under a distinct name, right after the original', async () => {
@@ -211,7 +227,7 @@ describe('the Source registry', () => {
 
     const copy = await core.duplicateSource(logs.id)
 
-    expect(await core.expand(copy.id, '')).toEqual([{ kind: 'file', name: 'a.log', path: 'a.log' }])
+    expect(await core.connect(copy.id)).toEqual([{ kind: 'file', name: 'a.log', path: 'a.log' }])
     await expect(core.duplicateSource('nope')).rejects.toMatchObject({ code: 'SOURCE_NOT_FOUND' })
   })
 
@@ -288,7 +304,7 @@ describe('Source registry persistence', () => {
 
     expect(saved.map((s) => s.name)).toEqual(['Renamed', 'A'])
     expect(await after.listSources()).toEqual(saved)
-    expect(await after.expand(a.id, '')).toEqual([{ kind: 'file', name: 'a.log', path: 'a.log' }])
+    expect(await after.connect(a.id)).toEqual([{ kind: 'file', name: 'a.log', path: 'a.log' }])
   })
 
   it('restores a Source whose root has since disappeared', async () => {
@@ -301,7 +317,7 @@ describe('Source registry persistence', () => {
     const after = createCore({ dataDir: dataDir() })
 
     expect(await after.listSources()).toEqual([source])
-    await expect(after.expand(source.id, '')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(after.connect(source.id)).rejects.toMatchObject({ code: 'ROOT_NOT_FOUND' })
   })
 
   it('sets an unreadable registry aside and starts afresh', async () => {
@@ -388,5 +404,125 @@ describe('secrets stored for a Source', () => {
     const files = await readdir(dataDir())
     const saved = await Promise.all(files.map((f) => readFile(join(dataDir(), f), 'utf8')))
     expect(saved.join('')).not.toContain('s3cr3t')
+  })
+})
+
+describe('connecting a Source', () => {
+  it('starts Disconnected and becomes Connected, returning its root', async () => {
+    await writeFile(join(dir, 'a.log'), '')
+    const core = createCore()
+    const source = await core.addSource(localSource('Logs'))
+
+    expect(await core.connectionState(source.id)).toEqual({ state: 'disconnected' })
+    expect(await core.connect(source.id)).toEqual([{ kind: 'file', name: 'a.log', path: 'a.log' }])
+    expect(await core.connectionState(source.id)).toEqual({ state: 'connected' })
+  })
+
+  it('goes into Error with the reason when its root can’t be reached, and retries on the next connect', async () => {
+    const root = join(dir, 'root')
+    await mkdir(root)
+    const core = createCore()
+    const source = await core.addSource(localSource('Logs', root))
+    await rm(root, { recursive: true })
+
+    await expect(core.connect(source.id)).rejects.toMatchObject({ code: 'ROOT_NOT_FOUND' })
+    expect(await core.connectionState(source.id)).toEqual({
+      state: 'error',
+      code: 'ROOT_NOT_FOUND',
+      message: expect.stringContaining(root)
+    })
+    await expect(core.expand(source.id, '')).rejects.toMatchObject({ code: 'SOURCE_DISCONNECTED' })
+
+    await mkdir(root)
+    expect(await core.connect(source.id)).toEqual([])
+    expect(await core.connectionState(source.id)).toEqual({ state: 'connected' })
+  })
+
+  it('stops browsing once Disconnected, until connected again', async () => {
+    await writeFile(join(dir, 'a.log'), 'text')
+    const core = createCore()
+    const source = await core.addSource(localSource('Logs'))
+    await core.connect(source.id)
+
+    await core.disconnect(source.id)
+
+    expect(await core.connectionState(source.id)).toEqual({ state: 'disconnected' })
+    await expect(core.expand(source.id, '')).rejects.toMatchObject({ code: 'SOURCE_DISCONNECTED' })
+    await expect(core.openFile(source.id, 'a.log')).rejects.toMatchObject({ code: 'SOURCE_DISCONNECTED' })
+    await core.connect(source.id)
+    expect((await core.openFile(source.id, 'a.log')).content).toBe('text')
+  })
+
+  it('clears an Error on disconnect', async () => {
+    const root = join(dir, 'root')
+    await mkdir(root)
+    const core = createCore()
+    const source = await core.addSource(localSource('Logs', root))
+    await rm(root, { recursive: true })
+    await expect(core.connect(source.id)).rejects.toMatchObject({ code: 'ROOT_NOT_FOUND' })
+
+    await core.disconnect(source.id)
+
+    expect(await core.connectionState(source.id)).toEqual({ state: 'disconnected' })
+  })
+
+  it('stays Disconnected when disconnected while still connecting', async () => {
+    const core = createCore()
+    const source = await core.addSource(localSource('Logs'))
+
+    const connecting = core.connect(source.id)
+    expect(await core.connectionState(source.id)).toEqual({ state: 'connecting' })
+    await core.disconnect(source.id)
+
+    await expect(connecting).rejects.toMatchObject({ code: 'SOURCE_DISCONNECTED' })
+    expect(await core.connectionState(source.id)).toEqual({ state: 'disconnected' })
+  })
+
+  it('keeps only a name change from disconnecting a Source', async () => {
+    const core = createCore()
+    const source = await core.addSource(localSource('Logs'))
+    await core.connect(source.id)
+
+    await core.editSource(source.id, localSource('Renamed'))
+
+    expect(await core.connectionState(source.id)).toEqual({ state: 'connected' })
+  })
+
+  it('reports connection state and connects only for known Sources', async () => {
+    const core = createCore()
+
+    await expect(core.connectionState('nope')).rejects.toMatchObject({ code: 'SOURCE_NOT_FOUND' })
+    await expect(core.connect('nope')).rejects.toMatchObject({ code: 'SOURCE_NOT_FOUND' })
+    await expect(core.disconnect('nope')).rejects.toMatchObject({ code: 'SOURCE_NOT_FOUND' })
+  })
+
+  it('starts every Source Disconnected in a later launch', async () => {
+    const before = createCore({ dataDir: dataDir() })
+    const source = await before.addSource(localSource('Logs'))
+    await before.connect(source.id)
+
+    const after = createCore({ dataDir: dataDir() })
+
+    expect(await after.connectionState(source.id)).toEqual({ state: 'disconnected' })
+  })
+})
+
+describe('testing a connection', () => {
+  it('succeeds for settings that can be reached, without adding a Source', async () => {
+    const core = createCore()
+
+    await expect(core.testConnection(localSource('', ` ${dir} `))).resolves.toBeUndefined()
+
+    expect(await core.listSources()).toEqual([])
+  })
+
+  it.each([
+    ['a root that does not exist', () => join(dir, 'missing'), 'ROOT_NOT_FOUND'],
+    ['a root that is a file', () => join(dir, 'file.txt'), 'ROOT_NOT_A_FOLDER']
+  ])('reports the error for %s', async (_, rootPath, code) => {
+    await writeFile(join(dir, 'file.txt'), '')
+    const core = createCore()
+
+    await expect(core.testConnection(localSource('Logs', rootPath()))).rejects.toMatchObject({ code })
   })
 })

@@ -84,3 +84,54 @@ test('edit, duplicate, reorder and delete Sources', async () => {
   await expect(window.getByRole('tree')).toHaveCount(1)
   await expect(window.getByRole('tree')).toHaveAccessibleName('Renamed copy')
 })
+
+test('connect, fail, retry, disconnect and reconnect a Source', async () => {
+  const window = await app.firstWindow()
+  const root = join(dir, 'root')
+
+  await window.getByRole('navigation').getByRole('button', { name: 'Add Source' }).first().click()
+  const add = window.getByRole('dialog', { name: 'Add Source' })
+  await add.getByLabel('Root path').fill(join(dir, 'missing'))
+  await add.getByRole('button', { name: 'Test connection' }).click()
+  await expect(add.getByRole('status')).toContainText('That folder doesn’t exist.')
+  await add.getByLabel('Root path').fill(root)
+  await add.getByRole('button', { name: 'Test connection' }).click()
+  await expect(add.getByRole('status')).toHaveText('Connection succeeded.')
+  await add.getByLabel('Name').fill('Fixture')
+  await add.getByRole('button', { name: 'Add Source' }).click()
+
+  // The root disappears before the first connect: the Source goes into Error, and expanding again retries.
+  await rm(root, { recursive: true })
+  const sourceRow = window.getByRole('treeitem', { name: 'Fixture' })
+  await sourceRow.click()
+  await expect(sourceRow).toHaveAttribute('title', /That folder doesn’t exist/)
+  await mkdir(join(root, 'logs'), { recursive: true })
+  await writeFile(join(root, 'logs', 'app.log'), 'INFO back again\n')
+  await sourceRow.click()
+  await expect(sourceRow).not.toHaveAttribute('title')
+
+  // A folder that vanishes shows an error node with Retry; the rest of the tree carries on.
+  await rm(join(root, 'logs'), { recursive: true })
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  await expect(window.getByRole('button', { name: 'Retry' })).toBeVisible()
+  await mkdir(join(root, 'logs'))
+  await writeFile(join(root, 'logs', 'app.log'), 'INFO back again\n')
+  await window.getByRole('button', { name: 'Retry' }).click()
+  await window.getByRole('treeitem', { name: 'app.log' }).click()
+  await expect(window.getByTestId('editor')).toContainText('INFO back again')
+
+  // Refresh picks up a file added since the folder was listed.
+  await writeFile(join(root, 'logs', 'new.log'), '')
+  await window.getByRole('treeitem', { name: 'logs' }).click({ button: 'right' })
+  await window.getByRole('menu', { name: 'Actions for logs' }).getByRole('menuitem', { name: 'Refresh' }).click()
+  await expect(window.getByRole('treeitem', { name: 'new.log' })).toBeVisible()
+
+  // Disconnecting collapses the Source but keeps its tab, with a way back.
+  await sourceRow.click({ button: 'right' })
+  await window.getByRole('menu', { name: 'Actions for Fixture' }).getByRole('menuitem', { name: 'Disconnect' }).click()
+  await expect(window.getByRole('treeitem')).toHaveCount(1)
+  await expect(window.getByRole('tab', { name: 'app.log' })).toBeVisible()
+  await expect(window.getByText('Source disconnected')).toBeVisible()
+  await window.getByRole('button', { name: 'Reconnect' }).click()
+  await expect(window.getByText('Source disconnected')).toBeHidden()
+})

@@ -1,10 +1,10 @@
 import { useCallback, useRef, useState, type DragEvent, type HTMLAttributes, type MouseEvent } from 'react'
-import type { SourceInfo, SourceTypeId, TreeNode } from '@shared/core-api'
+import type { ConnectionState, EntryNode, SourceInfo, SourceTypeId } from '@shared/core-api'
 import { core, describeError } from '../core-client'
 import { t } from '../i18n'
 import { uiFor } from '../source-types'
 import { ConfirmDialog } from './ConfirmDialog'
-import { ContextMenu } from './ContextMenu'
+import { ContextMenu, type MenuItem } from './ContextMenu'
 import { PlusIcon } from './icons'
 import { SourceDialog } from './SourceDialog'
 import { SourceTree } from './SourceTree'
@@ -12,9 +12,14 @@ import { SourceTree } from './SourceTree'
 interface Props {
   /** In sidebar order: grouped by Source Type, groups in their user-chosen order. */
   sources: SourceInfo[]
+  /** Each Source's connection state; Sources without an entry are Disconnected. */
+  connections: ReadonlyMap<string, ConnectionState>
+  /** Connects a Source, resolving to its root's children or null if it couldn't connect. */
+  onConnect(source: SourceInfo): Promise<EntryNode[] | null>
+  onDisconnect(source: SourceInfo): void
   /** Something about the Sources changed; the caller reloads them from the core. */
   onSourcesChanged(): void
-  onOpenFile(source: SourceInfo, node: TreeNode): void
+  onOpenFile(source: SourceInfo, node: EntryNode): void
 }
 
 interface Group {
@@ -49,9 +54,11 @@ const isAfter = (event: DragEvent<HTMLElement>) => {
   return event.clientY > top + height / 2
 }
 
-export function Sidebar({ sources, onSourcesChanged, onOpenFile }: Props) {
+const disconnected: ConnectionState = { state: 'disconnected' }
+
+export function Sidebar({ sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile }: Props) {
   const [dialog, setDialog] = useState<Dialog | null>(null)
-  const [menu, setMenu] = useState<{ source: SourceInfo; x: number; y: number } | null>(null)
+  const [menu, setMenu] = useState<{ label: string; items: MenuItem[]; x: number; y: number } | null>(null)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [dragging, setDragging] = useState<Dragging | null>(null)
   const [dropAt, setDropAt] = useState<DropAt | null>(null)
@@ -74,13 +81,13 @@ export function Sidebar({ sources, onSourcesChanged, onOpenFile }: Props) {
     menuTrigger.current?.focus()
   }, [])
 
-  const openMenu = (event: MouseEvent<HTMLElement>, source: SourceInfo) => {
+  const openMenu = (event: MouseEvent<HTMLElement>, label: string, items: MenuItem[]) => {
     event.preventDefault()
     menuTrigger.current = event.currentTarget
     // Opened from the keyboard (menu key, Shift+F10) the event has no pointer position.
     const fromKeyboard = event.clientX === 0 && event.clientY === 0
     const rect = event.currentTarget.getBoundingClientRect()
-    setMenu({ source, x: fromKeyboard ? rect.left + 24 : event.clientX, y: fromKeyboard ? rect.bottom : event.clientY })
+    setMenu({ label, items, x: fromKeyboard ? rect.left + 24 : event.clientX, y: fromKeyboard ? rect.bottom : event.clientY })
   }
 
   const endDrag = () => {
@@ -105,9 +112,17 @@ export function Sidebar({ sources, onSourcesChanged, onOpenFile }: Props) {
     setDragging(what)
   }
 
+  const sourceMenuItems = (source: SourceInfo): MenuItem[] => [
+    ...((connections.get(source.id) ?? disconnected).state !== 'disconnected'
+      ? [{ label: t('sourceMenu.disconnect'), onSelect: () => onDisconnect(source) }]
+      : []),
+    { label: t('sourceMenu.edit'), onSelect: () => setDialog({ kind: 'edit', source }) },
+    { label: t('sourceMenu.duplicate'), onSelect: () => void run(() => core.duplicateSource(source.id)) },
+    { label: t('sourceMenu.delete'), onSelect: () => setDialog({ kind: 'delete', source }) }
+  ]
+
   const sourceRowProps = (source: SourceInfo): HTMLAttributes<HTMLDivElement> => ({
     draggable: true,
-    onContextMenu: (event) => openMenu(event, source),
     onDragStart: (event) => startDrag(event, { kind: 'source', id: source.id, type: source.type }, source.name),
     onDragEnd: endDrag
   })
@@ -197,6 +212,10 @@ export function Sidebar({ sources, onSourcesChanged, onOpenFile }: Props) {
                   // A new root means a new tree: nothing expanded under the old one carries over.
                   key={`${source.id}:${source.rootPath}`}
                   source={source}
+                  connection={connections.get(source.id) ?? disconnected}
+                  onConnect={() => onConnect(source)}
+                  sourceMenuItems={sourceMenuItems(source)}
+                  onContextMenu={openMenu}
                   selectedKey={selectedKey}
                   onSelect={setSelectedKey}
                   onOpenFile={onOpenFile}
@@ -210,17 +229,7 @@ export function Sidebar({ sources, onSourcesChanged, onOpenFile }: Props) {
       </div>
 
       {menu && (
-        <ContextMenu
-          label={t('sourceMenu.label', { name: menu.source.name })}
-          x={menu.x}
-          y={menu.y}
-          onClose={closeMenu}
-          items={[
-            { label: t('sourceMenu.edit'), onSelect: () => setDialog({ kind: 'edit', source: menu.source }) },
-            { label: t('sourceMenu.duplicate'), onSelect: () => void run(() => core.duplicateSource(menu.source.id)) },
-            { label: t('sourceMenu.delete'), onSelect: () => setDialog({ kind: 'delete', source: menu.source }) }
-          ]}
-        />
+        <ContextMenu label={menu.label} x={menu.x} y={menu.y} onClose={closeMenu} items={menu.items} />
       )}
 
       {(dialog?.kind === 'add' || dialog?.kind === 'edit') && (

@@ -16,12 +16,16 @@ export const en = {
   'sourceDialog.namePlaceholder': 'App logs',
   'sourceDialog.add': 'Add Source',
   'sourceDialog.save': 'Save',
+  'sourceDialog.test': 'Test connection',
+  'sourceDialog.testing': 'Testing…',
+  'sourceDialog.testSucceeded': 'Connection succeeded.',
   'dialog.cancel': 'Cancel',
 
   'localSource.rootPath': 'Root path',
   'localSource.browse': 'Browse…',
 
-  'sourceMenu.label': 'Actions for {name}',
+  'sourceMenu.refresh': 'Refresh',
+  'sourceMenu.disconnect': 'Disconnect',
   'sourceMenu.edit': 'Edit…',
   'sourceMenu.duplicate': 'Duplicate',
   'sourceMenu.delete': 'Delete…',
@@ -33,12 +37,18 @@ export const en = {
   'tree.loading': 'Loading…',
   'tree.emptyFolder': 'Empty folder',
   'tree.retry': 'Retry',
+  'tree.menuLabel': 'Actions for {name}',
+  'tree.connecting': 'Connecting…',
+  'tree.connectFailed': 'Couldn’t connect: {message}',
 
   'tabs.close': 'Close {name}',
 
   'viewer.empty.noSources': 'Add a Source to start browsing.',
   'viewer.empty.noTabs': 'Open a file from the sidebar to read it here.',
   'viewer.opening': 'Opening {name}…',
+  'viewer.disconnected': 'Source disconnected',
+  'viewer.reconnect': 'Reconnect',
+  'viewer.reconnecting': 'Reconnecting…',
 
   'status.readOnly': 'Read-only',
 
@@ -46,6 +56,7 @@ export const en = {
   'error.ROOT_NOT_FOUND': 'That folder doesn’t exist.',
   'error.ROOT_NOT_A_FOLDER': 'That path is a file. Choose a folder.',
   'error.SOURCE_NOT_FOUND': 'This Source no longer exists.',
+  'error.SOURCE_DISCONNECTED': 'This Source isn’t connected.',
   'error.PATH_OUTSIDE_SOURCE': 'That path is outside the Source’s root folder.',
   'error.NOT_FOUND': 'This item no longer exists.',
   'error.NOT_A_FOLDER': 'This is a file, not a folder.',

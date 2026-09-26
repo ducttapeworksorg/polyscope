@@ -27,12 +27,20 @@ export const core: CoreApi = {
   deleteSource: call('deleteSource'),
   moveSource: call('moveSource'),
   moveSourceGroup: call('moveSourceGroup'),
+  connectionState: call('connectionState'),
+  connect: call('connect'),
+  testConnection: call('testConnection'),
+  disconnect: call('disconnect'),
   expand: call('expand'),
   openFile: call('openFile')
 }
 
+/** A user-facing message for a failure the core reported, thrown or not. */
+export const describeFailure = ({ code, message }: { code: CoreErrorCode; message: string }) =>
+  t(`error.${code}`, { message })
+
 /** A user-facing message for anything a core call threw. */
 export function describeError(error: unknown): string {
-  if (error instanceof CoreCallError) return t(`error.${error.code}`, { message: error.message })
-  return t('error.UNKNOWN', { message: error instanceof Error ? error.message : String(error) })
+  if (error instanceof CoreCallError) return describeFailure(error)
+  return describeFailure({ code: 'UNKNOWN', message: error instanceof Error ? error.message : String(error) })
 }

@@ -12,6 +12,8 @@ interface Props {
   onClose(): void
 }
 
+type TestRun = { state: 'testing' } | { state: 'passed' } | { state: 'failed'; message: string }
+
 /** Adds or edits a Source, showing the fields of the chosen Source Type. */
 export function SourceDialog({ editing, onSaved, onClose }: Props) {
   const modal = useModalDialog(onClose)
@@ -20,7 +22,27 @@ export function SourceDialog({ editing, onSaved, onClose }: Props) {
   )
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [test, setTest] = useState<TestRun | null>(null)
   const ui = uiFor(settings.type)
+
+  // A test result only speaks for the settings it was run with.
+  const change = (next: NewSource) => {
+    setSettings(next)
+    setTest(null)
+  }
+
+  const testConnection = async () => {
+    const run: TestRun = { state: 'testing' }
+    setTest(run)
+    // Settings changed while testing replace the run; its result would describe settings no longer shown.
+    const finish = (outcome: TestRun) => setTest((current) => (current === run ? outcome : current))
+    try {
+      await core.testConnection(settings)
+      finish({ state: 'passed' })
+    } catch (e) {
+      finish({ state: 'failed', message: describeError(e) })
+    }
+  }
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -53,7 +75,7 @@ export function SourceDialog({ editing, onSaved, onClose }: Props) {
                     name="source-type"
                     value={type}
                     checked={settings.type === type}
-                    onChange={() => setSettings({ ...uiFor(type).blank(), name: settings.name })}
+                    onChange={() => change({ ...uiFor(type).blank(), name: settings.name })}
                   />
                   <span className="type-picker__icon">
                     <Icon />
@@ -74,13 +96,23 @@ export function SourceDialog({ editing, onSaved, onClose }: Props) {
             className="field__input"
             value={settings.name}
             placeholder={t('sourceDialog.namePlaceholder')}
-            onChange={(e) => setSettings({ ...settings, name: e.target.value })}
+            onChange={(e) => change({ ...settings, name: e.target.value })}
             autoFocus
             spellCheck={false}
           />
         </label>
 
-        <ui.Fields value={settings} onChange={setSettings} />
+        <ui.Fields value={settings} onChange={change} />
+
+        <div className="dialog__test">
+          <button type="button" className="button button--quiet" disabled={test?.state === 'testing'} onClick={testConnection}>
+            {t(test?.state === 'testing' ? 'sourceDialog.testing' : 'sourceDialog.test')}
+          </button>
+          <p className={`dialog__test-result ${test?.state === 'failed' ? 'is-failed' : ''}`} role="status">
+            {test?.state === 'passed' && t('sourceDialog.testSucceeded')}
+            {test?.state === 'failed' && test.message}
+          </p>
+        </div>
 
         {error && (
           <p className="dialog__error" role="alert">
