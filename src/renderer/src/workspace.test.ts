@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { OpenedFile, SourceInfo } from '@shared/core-api'
+import type { OpenedFile, SourceInfo, TextFile } from '@shared/core-api'
 import {
   activateTab,
   closeAllTabs,
@@ -8,19 +8,23 @@ import {
   emptyWorkspace,
   openTab,
   pinTab,
-  replaceFile,
+  reopenTab,
+  setLanguage,
   type Workspace
 } from './workspace'
 
 const source: SourceInfo = { id: 's', type: 'local', name: 'Logs', rootPath: '/logs', showHidden: true }
-const file = (path: string, content = ''): OpenedFile => ({
+const file = (path: string, content = ''): TextFile => ({
+  view: 'editor',
   path,
   name: path,
   content,
   encoding: 'utf-8',
+  language: 'plaintext',
   size: content.length,
   modifiedTime: 0
 })
+const contentOf = (opened: OpenedFile) => (opened.view === 'binary' ? null : opened.content)
 const tab = (key: string) => ({ key, source, file: file(key) })
 
 /** Each tab as its key, with a '*' when it's the preview tab and brackets around the active one. */
@@ -67,7 +71,7 @@ describe('preview tabs', () => {
     const ws = openTab(open('a', 'b'), { ...tab('a'), file: file('a', 'newer') })
 
     expect(shape(ws)).toEqual(['[a]', 'b'])
-    expect(ws.tabs[0]!.file.content).toBe('')
+    expect(contentOf(ws.tabs[0]!.file)).toBe('')
   })
 
   it('pins a preview tab that is opened again as pinned, and never unpins one', () => {
@@ -109,15 +113,48 @@ describe('closing tabs', () => {
 
 describe('reloading tabs', () => {
   it('replaces a tab’s file, keeping its place, pin and focus', () => {
-    const ws = replaceFile(activateTab(open('a', 'b'), 'a'), 'b', file('b', 'fresh'))
+    const ws = reopenTab(activateTab(open('a', 'b'), 'a'), 'b', file('b', 'fresh'), {})
 
     expect(shape(ws)).toEqual(['[a]', 'b'])
-    expect(ws.tabs[1]!.file.content).toBe('fresh')
+    expect(contentOf(ws.tabs[1]!.file)).toBe('fresh')
   })
 
   it('ignores a file for a tab closed while it was being read', () => {
     const ws = open('a')
 
-    expect(replaceFile(ws, 'x', file('x'))).toBe(ws)
+    expect(reopenTab(ws, 'x', file('x'), {})).toBe(ws)
+  })
+})
+
+describe('reopening a tab another way', () => {
+  it('replaces its file and remembers how it was opened, so a reload opens it the same way', () => {
+    const preview = openTab(emptyWorkspace, tab('a'))
+
+    const ws = reopenTab(preview, 'a', { ...file('a', 'latin'), encoding: 'latin1' }, { encoding: 'latin1' })
+
+    expect(shape(ws)).toEqual(['[a]'])
+    expect(ws.tabs[0]).toMatchObject({ openAs: { encoding: 'latin1' }, file: { content: 'latin' } })
+  })
+
+})
+
+describe('choosing a language', () => {
+  it('overrides the detected language for that tab only, and pins it', () => {
+    const ws = setLanguage(openTab(open('a'), tab('b')), 'b', 'json')
+
+    expect(shape(ws)).toEqual(['a', '[b]'])
+    expect(ws.tabs.map((t) => t.language)).toEqual([undefined, 'json'])
+  })
+
+  it('keeps the choice across a reload', () => {
+    const ws = setLanguage(open('a'), 'a', 'json')
+
+    expect(reopenTab(ws, 'a', file('a', 'fresh'), {}).tabs[0]!.language).toBe('json')
+  })
+
+  it('ignores a tab that is not open', () => {
+    const ws = open('a')
+
+    expect(setLanguage(ws, 'x', 'json')).toBe(ws)
   })
 })

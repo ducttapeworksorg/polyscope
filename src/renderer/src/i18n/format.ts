@@ -42,3 +42,6 @@ const absolute = new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyl
 
 /** A moment in full, in the local time zone, e.g. 'Sep 26, 2026, 5:44:13 PM'. */
 export const formatDateTime = (time: number): string => absolute.format(time)
+
+/** A whole number with the locale's digit grouping, e.g. '1,048,576'. */
+export const formatCount = (count: number): string => whole.format(count)

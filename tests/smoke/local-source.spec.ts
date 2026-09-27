@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { gzipSync } from 'node:zlib'
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test'
 
 let dir: string
@@ -117,7 +118,7 @@ test('preview and pinned tabs, reload, closing, and the status bar', async () =>
   await expect(statusBar).toContainText('JSON')
   await tab('other.log').click()
   await expect(statusBar).toContainText('11 B')
-  await expect(statusBar).toContainText('Plain Text')
+  await expect(statusBar).toContainText('Log')
 
   // Reload reads the file again.
   await writeFile(join(logs, 'other.log'), 'INFO other\nWARN reloaded\n')
@@ -135,6 +136,48 @@ test('preview and pinned tabs, reload, closing, and the status bar', async () =>
   await window.getByRole('treeitem', { name: /^app\.log/ }).click()
   await (await tabMenu('app.log')).getByRole('menuitem', { name: 'Close All' }).click()
   await expect(tabs).toHaveCount(0)
+})
+
+test('binary, hex, encodings, languages and compressed files', async () => {
+  const window = await app.firstWindow()
+  const logs = join(dir, 'root', 'logs')
+  await writeFile(join(logs, 'blob.bin'), Buffer.from([0x41, 0x42, 0x43, 0x00, 0x01]))
+  await writeFile(join(logs, 'latin.txt'), Buffer.from('café\n', 'latin1'))
+  await writeFile(join(logs, 'old.log.gz'), gzipSync('WARN rotated away\n'))
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  const editor = window.getByTestId('editor')
+  const statusBar = window.getByRole('contentinfo')
+
+  // A binary file shows a placeholder until asked for hex.
+  await window.getByRole('treeitem', { name: /^blob\.bin/ }).click()
+  await expect(window.getByText('Binary file, 5 bytes')).toBeVisible()
+  await expect(statusBar).toContainText('Binary')
+  await window.getByRole('button', { name: 'Show as hex' }).click()
+  await expect(editor).toContainText('41 42 43 00 01')
+  await expect(statusBar).toContainText('Hex')
+
+  // Latin-1 is detected, and the file can be reopened in another encoding from the status bar.
+  await window.getByRole('treeitem', { name: /^latin\.txt/ }).click()
+  await expect(editor).toContainText('café')
+  await statusBar.getByRole('button', { name: /^Encoding: Latin-1/ }).click()
+  const encodings = window.getByRole('listbox', { name: 'Reopen with encoding' })
+  await encodings.getByRole('option', { name: 'UTF-8' }).click()
+  await expect(editor).toContainText('caf\ufffd')
+  await expect(statusBar.getByRole('button', { name: /^Encoding: UTF-8/ })).toBeFocused()
+
+  // The language can be picked by typing its name.
+  await statusBar.getByRole('button', { name: /^Language: Plain Text/ }).click()
+  await window.getByRole('combobox').fill('yam')
+  await window.keyboard.press('Enter')
+  await expect(statusBar.getByRole('button', { name: /^Language: YAML/ })).toBeVisible()
+
+  // Compressed files are shown decompressed, highlighted by the name inside.
+  await window.getByRole('treeitem', { name: /^old\.log\.gz/ }).click()
+  await expect(editor).toContainText('WARN rotated away')
+  await expect(statusBar).toContainText('gzip')
+  await expect(statusBar.getByRole('button', { name: /^Language: Log/ })).toBeVisible()
 })
 
 test('edit, duplicate, reorder and delete Sources', async () => {

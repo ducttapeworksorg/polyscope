@@ -1,10 +1,19 @@
 import { useEffect, useRef } from 'react'
-import { editorFontFamily, languageFor, monaco } from '../monaco'
+import { t } from '../i18n'
+import { formatCount } from '../i18n/format'
+import { editorFontFamily, monaco } from '../monaco'
 import type { OpenTab } from '../workspace'
 
 interface Props {
   tabs: OpenTab[]
   activeTab: OpenTab | null
+  onShowHex(key: string): void
+}
+
+/** What the editor shows for a tab, or null when its file is binary and shown as a placeholder instead. */
+function editorContent({ file, language }: OpenTab) {
+  if (file.view === 'binary') return null
+  return { text: file.content, language: file.view === 'hex' ? 'plaintext' : (language ?? file.language) }
 }
 
 interface TabModel {
@@ -14,8 +23,8 @@ interface TabModel {
   viewState: monaco.editor.ICodeEditorViewState | null
 }
 
-/** One read-only Monaco editor; each tab keeps its own model and scroll/cursor state. */
-export function Viewer({ tabs, activeTab }: Props) {
+/** One read-only Monaco editor; each tab keeps its own model and scroll/cursor state. Binary files get a placeholder. */
+export function Viewer({ tabs, activeTab, onShowHex }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const modelsRef = useRef(new Map<string, TabModel>())
@@ -62,9 +71,16 @@ export function Viewer({ tabs, activeTab }: Props) {
       models.delete(key)
     }
 
-    if (!activeTab) {
+    const content = activeTab && editorContent(activeTab)
+    if (!activeTab || !content) {
       editor.setModel(null)
       shownKeyRef.current = null
+      // A tab reopened as binary drops the text it was showing.
+      const stale = activeTab && models.get(activeTab.key)
+      if (stale) {
+        stale.model.dispose()
+        models.delete(activeTab.key)
+      }
       return
     }
 
@@ -72,18 +88,32 @@ export function Viewer({ tabs, activeTab }: Props) {
     if (!entry) {
       const { source, file } = activeTab
       const uri = monaco.Uri.from({ scheme: 'polyscope', authority: source.id, path: `/${file.path}` })
-      entry = { model: monaco.editor.createModel(file.content, languageFor(file.name).id, uri), file, viewState: null }
+      entry = { model: monaco.editor.createModel(content.text, content.language, uri), file, viewState: null }
       models.set(activeTab.key, entry)
     }
     editor.setModel(entry.model)
     if (entry.file !== activeTab.file) {
-      // Reloaded: new content, but the reader stays where they were.
-      entry.model.setValue(activeTab.file.content)
+      // Reloaded or reopened: new content, but the reader stays where they were.
+      entry.model.setValue(content.text)
       entry.file = activeTab.file
     }
+    if (entry.model.getLanguageId() !== content.language) monaco.editor.setModelLanguage(entry.model, content.language)
     if (entry.viewState) editor.restoreViewState(entry.viewState)
     shownKeyRef.current = activeTab.key
   }, [tabs, activeTab])
 
-  return <div ref={hostRef} className="viewer__editor" hidden={!activeTab} data-testid="editor" />
+  const binary = activeTab?.file.view === 'binary' ? activeTab.file : null
+  return (
+    <>
+      <div ref={hostRef} className="viewer__editor" hidden={!activeTab || !!binary} data-testid="editor" />
+      {activeTab && binary && (
+        <div className="viewer__empty viewer__binary">
+          <p>{t('viewer.binary', { bytes: formatCount(binary.contentLength) })}</p>
+          <button type="button" className="button button--quiet" onClick={() => onShowHex(activeTab.key)}>
+            {t('viewer.showAsHex')}
+          </button>
+        </div>
+      )}
+    </>
+  )
 }

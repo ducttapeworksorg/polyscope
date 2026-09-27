@@ -1,4 +1,4 @@
-import type { OpenedFile, SourceInfo } from '@shared/core-api'
+import type { LanguageId, OpenedFile, OpenOptions, SourceInfo } from '@shared/core-api'
 
 /** A file open in the viewer. Tabs live only in the renderer and are never persisted. */
 export interface OpenTab {
@@ -7,6 +7,10 @@ export interface OpenTab {
   file: OpenedFile
   /** A tab that isn't pinned is the preview tab: the next file opened replaces it. */
   pinned: boolean
+  /** How the file was last asked to be opened, e.g. in another encoding; reloads open it the same way. */
+  openAs?: OpenOptions
+  /** The language the user picked, highlighting the file instead of the detected one. */
+  language?: LanguageId
 }
 
 /** The open tabs, in order, and which one is shown. */
@@ -21,7 +25,7 @@ export const emptyWorkspace: Workspace = { tabs: [], activeKey: null }
  * Shows a file: activating its tab if it's open already, otherwise putting it in place of the
  * preview tab or, with none, right after the active tab. Opening as pinned pins it for good.
  */
-export function openTab(ws: Workspace, tab: Omit<OpenTab, 'pinned'>, { pinned = false } = {}): Workspace {
+export function openTab(ws: Workspace, tab: Pick<OpenTab, 'key' | 'source' | 'file'>, { pinned = false } = {}): Workspace {
   const { key } = tab
   if (ws.tabs.some((open) => open.key === key)) {
     const shown = activateTab(ws, key)
@@ -58,8 +62,19 @@ export function closeOtherTabs(ws: Workspace, key: string): Workspace {
 
 export const closeAllTabs = (_ws: Workspace): Workspace => emptyWorkspace
 
-/** Puts a freshly read file in its tab, leaving everything else as it was; a tab closed meanwhile stays closed. */
-export function replaceFile(ws: Workspace, key: string, file: OpenedFile): Workspace {
+/** Changes one tab; a tab closed meanwhile (say, while its file was being read) stays closed. */
+function updateTab(ws: Workspace, key: string, change: Partial<OpenTab>): Workspace {
   if (!ws.tabs.some((open) => open.key === key)) return ws
-  return { ...ws, tabs: ws.tabs.map((open) => (open.key === key ? { ...open, file } : open)) }
+  return { ...ws, tabs: ws.tabs.map((open) => (open.key === key ? { ...open, ...change } : open)) }
 }
+
+/**
+ * Puts a freshly read file in its tab, remembering how it was read (e.g. in an encoding picked for
+ * it) so reloads read it the same way. Like any change to a tab, it pins it.
+ */
+export const reopenTab = (ws: Workspace, key: string, file: OpenedFile, openAs: OpenOptions): Workspace =>
+  updateTab(ws, key, { file, openAs, pinned: true })
+
+/** Highlights a tab’s file as `language` instead of the detected one, pinning the tab. */
+export const setLanguage = (ws: Workspace, key: string, language: LanguageId): Workspace =>
+  updateTab(ws, key, { language, pinned: true })

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ConnectionState, EntryNode, OpenedFile, SourceInfo } from '@shared/core-api'
+import type { ConnectionState, EntryNode, OpenedFile, OpenOptions, SourceInfo } from '@shared/core-api'
 import type { Settings, Theme } from '@shared/settings'
 import { ApertureMark } from './components/icons'
 import { SettingsDialog } from './components/SettingsDialog'
@@ -19,7 +19,8 @@ import {
   emptyWorkspace,
   openTab,
   pinTab,
-  replaceFile,
+  reopenTab,
+  setLanguage,
   type Workspace
 } from './workspace'
 
@@ -154,15 +155,20 @@ export function App() {
     }
   }
 
-  // Reloading counts as working with the tab, so it's pinned rather than left for the next preview.
-  const reloadTab = async (key: string) => {
+  /**
+   * Reads a tab's file again, `openAs` the way asked (another encoding, as hex), or by default the
+   * way it was read last. That counts as working with the tab, so it's pinned rather than left for
+   * the next preview.
+   */
+  const reopenTabAs = async (key: string, openAs?: OpenOptions) => {
     const tab = tabs.find((open) => open.key === key)
     if (!tab) return
+    const options = openAs ?? tab.openAs ?? {}
     setOpenError(null)
     setWorkspace((ws) => pinTab(ws, key))
     try {
-      const file = await core.openFile(tab.source.id, tab.file.path)
-      setWorkspace((ws) => replaceFile(ws, key, file))
+      const file = await core.openFile(tab.source.id, tab.file.path, options)
+      setWorkspace((ws) => reopenTab(ws, key, file, options))
     } catch (error) {
       setOpenError(describeError(error))
     }
@@ -211,7 +217,7 @@ export function App() {
           activeKey={activeTab?.key ?? null}
           onActivate={(key) => setWorkspace((ws) => activateTab(ws, key))}
           onPin={(key) => setWorkspace((ws) => pinTab(ws, key))}
-          onReload={(key) => void reloadTab(key)}
+          onReload={(key) => void reopenTabAs(key)}
           onClose={(key) => setWorkspace((ws) => closeTab(ws, key))}
           onCloseOthers={(key) => setWorkspace((ws) => closeOtherTabs(ws, key))}
           onCloseAll={() => setWorkspace(closeAllTabs)}
@@ -240,7 +246,7 @@ export function App() {
           </div>
         )}
         <div className="viewer">
-          <Viewer tabs={tabs} activeTab={activeTab} />
+          <Viewer tabs={tabs} activeTab={activeTab} onShowHex={(key) => void reopenTabAs(key, { hex: true })} />
           {!activeTab && (
             <div className="viewer__empty">
               <ApertureMark />
@@ -250,7 +256,11 @@ export function App() {
         </div>
       </main>
 
-      <StatusBar activeTab={activeTab} />
+      <StatusBar
+        activeTab={activeTab}
+        onPickEncoding={(encoding) => activeTab && void reopenTabAs(activeTab.key, encoding ? { encoding } : {})}
+        onPickLanguage={(language) => activeTab && setWorkspace((ws) => setLanguage(ws, activeTab.key, language))}
+      />
     </div>
   )
 }

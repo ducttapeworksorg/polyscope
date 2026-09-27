@@ -1,4 +1,4 @@
-import type { CoreErrorCode } from '@shared/core-api'
+import type { Compression, CoreErrorCode, TextEncoding } from '@shared/core-api'
 import type { SettingProblem } from '@shared/settings'
 
 export const en = {
@@ -84,13 +84,31 @@ export const en = {
   'viewer.disconnected': 'Source disconnected',
   'viewer.reconnect': 'Reconnect',
   'viewer.reconnecting': 'Reconnecting…',
+  'viewer.binary': 'Binary file, {bytes} bytes',
+  'viewer.showAsHex': 'Show as hex',
 
   'status.readOnly': 'Read-only',
   'status.size': 'Size',
   'status.modified': 'Modified',
-  'status.encoding': 'Encoding',
-  'status.language': 'Language',
+  'status.reopenWithEncoding': 'Reopen with encoding',
+  'status.encodingLabel': 'Encoding: {encoding}. Reopen with encoding',
+  'status.encodingPlaceholder': 'Choose an encoding',
+  'status.selectLanguage': 'Select language',
+  'status.languageLabel': 'Language: {language}. Select language',
+  'status.languagePlaceholder': 'Choose a language',
   'language.plainText': 'Plain Text',
+  'language.detected': 'detected',
+  'encoding.auto': 'Auto-detect',
+  'encoding.current': 'current',
+  'encoding.utf-8': 'UTF-8',
+  'encoding.utf-16le': 'UTF-16 LE',
+  'encoding.utf-16be': 'UTF-16 BE',
+  'encoding.latin1': 'Latin-1',
+  'encoding.binary': 'Binary',
+  'encoding.hex': 'Hex',
+  'encoding.hexPartial': 'Hex (first {size})',
+  'compression.gzip': 'gzip',
+  'compression.zstd': 'zstd',
 
   'error.NAME_REQUIRED': 'Enter a name for this Source.',
   'error.ROOT_NOT_FOUND': 'That folder doesn’t exist.',
@@ -106,5 +124,11 @@ export const en = {
   'error.INVALID_RANGE': 'That part of the file can’t be read: {message}',
   'error.INVALID_ORDER': 'That can’t be moved there.',
   'error.INVALID_SETTINGS': 'Those settings aren’t valid: {message}',
+  'error.INVALID_ENCODING': 'That encoding isn’t supported: {message}',
+  'error.DECOMPRESSION_FAILED': 'This file couldn’t be decompressed: {message}',
   'error.UNKNOWN': 'Couldn’t complete that: {message}'
-} satisfies Record<string, string> & Record<`error.${CoreErrorCode}`, string> & Record<`settings.problem.${SettingProblem}`, string>
+} satisfies Record<string, string> &
+  Record<`error.${CoreErrorCode}`, string> &
+  Record<`settings.problem.${SettingProblem}`, string> &
+  Record<`encoding.${TextEncoding}`, string> &
+  Record<`compression.${Compression}`, string>

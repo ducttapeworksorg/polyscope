@@ -71,15 +71,64 @@ export type ConnectionState =
   | { state: 'connected' }
   | { state: 'error'; code: CoreErrorCode; message: string }
 
-export interface OpenedFile {
+/** The text encodings a file can be decoded with, detected or asked for. */
+export type TextEncoding = 'utf-8' | 'utf-16le' | 'utf-16be' | 'latin1'
+
+export const textEncodings: readonly TextEncoding[] = ['utf-8', 'utf-16le', 'utf-16be', 'latin1']
+
+/** How a file's bytes were compressed; the core decompresses them before anything else. */
+export type Compression = 'gzip' | 'zstd'
+
+/** A Monaco language id, e.g. 'typescript', or 'plaintext' when nothing better is known. */
+export type LanguageId = string
+
+/** How to open a file instead of the way the core would pick. */
+export interface OpenOptions {
+  /** Decode as this encoding, even if the file looks binary. */
+  encoding?: TextEncoding
+  /** Show the (decompressed) bytes as a hex dump. Ignored when `encoding` is given. */
+  hex?: boolean
+}
+
+interface OpenedFileFacts {
   path: SourcePath
   name: string
-  content: string
-  /** How the bytes were decoded into `content`, e.g. 'utf-8'. */
-  encoding: string
+  /** In bytes, as stored: before any decompression. */
   size: number
   modifiedTime: number
+  /** Set when the file was decompressed before being shown. */
+  compression?: Compression
 }
+
+/** A file shown as text in the editor. */
+export interface TextFile extends OpenedFileFacts {
+  view: 'editor'
+  content: string
+  /** How the bytes were decoded into `content`. */
+  encoding: TextEncoding
+  /** Detected from the name (the inner name, for a compressed file). */
+  language: LanguageId
+}
+
+/** A file whose bytes don't look like text; nothing of it is shown until asked. */
+export interface BinaryFile extends OpenedFileFacts {
+  view: 'binary'
+  /** In bytes, after any decompression. */
+  contentLength: number
+}
+
+/** A file shown as a hex dump: offset, bytes and printable characters, 16 bytes per line. */
+export interface HexFile extends OpenedFileFacts {
+  view: 'hex'
+  /** The dump of the first `shownLength` bytes; a large file's is cut short. */
+  content: string
+  /** In bytes, after any decompression. */
+  contentLength: number
+  shownLength: number
+}
+
+/** An opened file, in whichever view suits its content (or was asked for). */
+export type OpenedFile = TextFile | BinaryFile | HexFile
 
 export type CoreErrorCode =
   | 'NAME_REQUIRED'
@@ -96,6 +145,8 @@ export type CoreErrorCode =
   | 'INVALID_RANGE'
   | 'INVALID_ORDER'
   | 'INVALID_SETTINGS'
+  | 'INVALID_ENCODING'
+  | 'DECOMPRESSION_FAILED'
   | 'UNKNOWN'
 
 export interface CoreApi {
@@ -120,7 +171,8 @@ export interface CoreApi {
   disconnect(sourceId: string): Promise<void>
   /** The children of a node in a Connected Source; if they can't be listed, a single error node instead. */
   expand(sourceId: string, path: SourcePath): Promise<TreeNode[]>
-  openFile(sourceId: string, path: SourcePath): Promise<OpenedFile>
+  /** Reads a file and decides how to show it; `options` reopens it another way, e.g. in another encoding. */
+  openFile(sourceId: string, path: SourcePath, options?: OpenOptions): Promise<OpenedFile>
   getSettings(): Promise<Settings>
   /** Changes the given settings, keeping the rest; all of them together must still be valid. */
   updateSettings(changes: Partial<Settings>): Promise<Settings>

@@ -32,7 +32,13 @@ self.MonacoEnvironment = {
 monaco.editor.defineTheme('polyscope-dark', {
   base: 'vs-dark',
   inherit: true,
-  rules: [],
+  rules: [
+    { token: 'log.error', foreground: 'f28b82', fontStyle: 'bold' },
+    { token: 'log.warning', foreground: 'e8c170' },
+    { token: 'log.info', foreground: '8ab4f8' },
+    { token: 'log.debug', foreground: '8391a8' },
+    { token: 'log.date', foreground: '7fb8a4' }
+  ],
   colors: {
     'editor.background': '#1b2230',
     'editor.foreground': '#d5dce8',
@@ -56,7 +62,13 @@ monaco.editor.defineTheme('polyscope-dark', {
 monaco.editor.defineTheme('polyscope-light', {
   base: 'vs',
   inherit: true,
-  rules: [],
+  rules: [
+    { token: 'log.error', foreground: 'c5221f', fontStyle: 'bold' },
+    { token: 'log.warning', foreground: '9a6700' },
+    { token: 'log.info', foreground: '1a5fb4' },
+    { token: 'log.debug', foreground: '6b7688' },
+    { token: 'log.date', foreground: '2f7d63' }
+  ],
   colors: {
     'editor.background': '#fbfcfd',
     'editor.foreground': '#1f2735',
@@ -77,22 +89,42 @@ monaco.editor.defineTheme('polyscope-light', {
   }
 })
 
+// Monaco has no language for logs; this one picks out levels, timestamps, strings and numbers.
+monaco.languages.register({ id: 'log', aliases: ['Log'] })
+monaco.languages.setMonarchTokensProvider('log', {
+  tokenizer: {
+    root: [
+      [/\b(?:FATAL|CRITICAL|CRIT|SEVERE|PANIC|ERROR|ERR|EXCEPTION)\b/, 'log.error'],
+      [/\b(?:WARNING|WARN)\b/, 'log.warning'],
+      [/\b(?:INFO|NOTICE)\b/, 'log.info'],
+      [/\b(?:DEBUG|TRACE|VERBOSE)\b/, 'log.debug'],
+      [/\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?/, 'log.date'],
+      [/\b\d{2}:\d{2}:\d{2}(?:[.,]\d+)?\b/, 'log.date'],
+      [/"(?:[^"\\]|\\.)*"/, 'string'],
+      [/\b\d+(?:\.\d+)?\b/, 'number']
+    ]
+  }
+})
+
 export interface Language {
   id: string
   name: string
 }
 
-/** The language Monaco highlights a file as, going by its exact name, then its longest matching extension. */
-export function languageFor(fileName: string): Language {
-  const name = fileName.toLowerCase()
-  let best: { language: monaco.languages.ILanguageExtensionPoint; length: number } | undefined
-  for (const language of monaco.languages.getLanguages()) {
-    const length = language.filenames?.some((f) => f.toLowerCase() === name)
-      ? Infinity
-      : Math.max(0, ...(language.extensions ?? []).filter((ext) => name.endsWith(ext.toLowerCase())).map((ext) => ext.length))
-    if (length > (best?.length ?? 0)) best = { language, length }
-  }
-  return best ? { id: best.language.id, name: best.language.aliases?.[0] ?? best.language.id } : { id: 'plaintext', name: t('language.plainText') }
+const nameOf = (language: monaco.languages.ILanguageExtensionPoint) =>
+  language.id === 'plaintext' ? t('language.plainText') : (language.aliases?.[0] ?? language.id)
+
+/** Every language Monaco can highlight, by name. */
+export const allLanguages = (): Language[] =>
+  monaco.languages
+    .getLanguages()
+    .map((language) => ({ id: language.id, name: nameOf(language) }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+
+/** The name a language goes by, e.g. 'TypeScript' for 'typescript'. */
+export function languageName(id: string): string {
+  const language = monaco.languages.getLanguages().find((l) => l.id === id)
+  return language ? nameOf(language) : id
 }
 
 export const editorFontFamily = "'Red Hat Mono Variable', ui-monospace, monospace"

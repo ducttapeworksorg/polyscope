@@ -1,18 +1,42 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
+import { textEncodings, type LanguageId, type TextEncoding } from '@shared/core-api'
 import { t } from '../i18n'
 import { formatDateTime, formatSize } from '../i18n/format'
-import { languageFor } from '../monaco'
+import { allLanguages, languageName } from '../monaco'
 import { uiFor } from '../source-types'
 import type { OpenTab } from '../workspace'
+import { QuickPick, type PickOption } from './QuickPick'
 
 interface Props {
   activeTab: OpenTab | null
   /** The active tab's Environment segment, leading the bar when its Source has one. */
   environment?: ReactNode
+  /** Reopens the active tab's file in `encoding`, or as detected when null. */
+  onPickEncoding(encoding: TextEncoding | null): void
+  onPickLanguage(language: LanguageId): void
+}
+
+/** Picked in the encoding list to go back to whatever the core detects. */
+const autoDetect = 'auto'
+
+const encodingLabel = (encoding: TextEncoding) => t(`encoding.${encoding}`)
+
+interface OpenPicker {
+  kind: 'encoding' | 'language'
+  /** The tab it was opened for; switching tabs leaves it behind. */
+  tabKey: string
+  /** The status bar item it was opened from, which gets focus back when it closes. */
+  anchor: HTMLElement
 }
 
 /** Facts about the active tab: where it's from, then its size, modified time, encoding and language. */
-export function StatusBar({ activeTab, environment }: Props) {
+export function StatusBar({ activeTab, environment, onPickEncoding, onPickLanguage }: Props) {
+  const [picker, setPicker] = useState<OpenPicker | null>(null)
+  const closePicker = () => {
+    setPicker(null)
+    picker?.anchor.focus()
+  }
+
   if (!activeTab) {
     return (
       <footer className="statusbar">
@@ -20,8 +44,26 @@ export function StatusBar({ activeTab, environment }: Props) {
       </footer>
     )
   }
-  const { source, file } = activeTab
+  const { source, file, openAs } = activeTab
   const { Icon } = uiFor(source.type)
+  const language = file.view === 'editor' ? (activeTab.language ?? file.language) : null
+  const shownPicker = picker?.tabKey === activeTab.key ? picker : null
+
+  const encodingOptions: PickOption[] = [
+    { value: autoDetect, label: t('encoding.auto') },
+    ...textEncodings.map((encoding) => ({
+      value: encoding,
+      label: encodingLabel(encoding),
+      ...(file.view === 'editor' && file.encoding === encoding && { detail: t('encoding.current') })
+    }))
+  ]
+  const languageOptions = (): PickOption[] =>
+    allLanguages().map(({ id, name }) => ({
+      value: id,
+      label: name,
+      ...(file.view === 'editor' && file.language === id && { detail: t('language.detected') })
+    }))
+
   return (
     <footer className="statusbar">
       {environment}
@@ -32,17 +74,63 @@ export function StatusBar({ activeTab, environment }: Props) {
       <span className="statusbar__item statusbar__item--path">{file.path}</span>
       <span className="statusbar__item statusbar__item--end" title={t('status.size')}>
         {formatSize(file.size)}
+        {file.compression && ` (${t(`compression.${file.compression}`)})`}
       </span>
       <span className="statusbar__item" title={t('status.modified')}>
         {formatDateTime(file.modifiedTime)}
       </span>
-      <span className="statusbar__item" title={t('status.encoding')}>
-        {file.encoding.toUpperCase()}
-      </span>
-      <span className="statusbar__item" title={t('status.language')}>
-        {languageFor(file.name).name}
-      </span>
+      <button
+        type="button"
+        className="statusbar__item statusbar__button"
+        title={t('status.reopenWithEncoding')}
+        aria-label={t('status.encodingLabel', { encoding: statusEncoding(activeTab) })}
+        onClick={(event) => setPicker({ kind: 'encoding', tabKey: activeTab.key, anchor: event.currentTarget })}
+      >
+        {statusEncoding(activeTab)}
+      </button>
+      {language && (
+        <button
+          type="button"
+          className="statusbar__item statusbar__button"
+          title={t('status.selectLanguage')}
+          aria-label={t('status.languageLabel', { language: languageName(language) })}
+          onClick={(event) => setPicker({ kind: 'language', tabKey: activeTab.key, anchor: event.currentTarget })}
+        >
+          {languageName(language)}
+        </button>
+      )}
       <span className="statusbar__item">{t('status.readOnly')}</span>
+
+      {shownPicker?.kind === 'encoding' && (
+        <QuickPick
+          label={t('status.reopenWithEncoding')}
+          placeholder={t('status.encodingPlaceholder')}
+          options={encodingOptions}
+          selected={openAs?.encoding ?? autoDetect}
+          anchor={shownPicker.anchor}
+          onPick={(value) => onPickEncoding(value === autoDetect ? null : (value as TextEncoding))}
+          onClose={closePicker}
+        />
+      )}
+      {shownPicker?.kind === 'language' && language && (
+        <QuickPick
+          label={t('status.selectLanguage')}
+          placeholder={t('status.languagePlaceholder')}
+          options={languageOptions()}
+          selected={language}
+          anchor={shownPicker.anchor}
+          onPick={onPickLanguage}
+          onClose={closePicker}
+        />
+      )}
     </footer>
   )
+}
+
+/** What the encoding item says: the encoding text was decoded with, or how undecoded bytes are shown. */
+function statusEncoding({ file }: OpenTab) {
+  if (file.view === 'editor') return encodingLabel(file.encoding)
+  if (file.view === 'binary') return t('encoding.binary')
+  // A large file's dump stops short of its end, and says so.
+  return file.shownLength < file.contentLength ? t('encoding.hexPartial', { size: formatSize(file.shownLength) }) : t('encoding.hex')
 }

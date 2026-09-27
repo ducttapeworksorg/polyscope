@@ -77,7 +77,7 @@ describe('Local Filesystem Source', () => {
 
     const file = await core.openFile(source.id, 'app/server.log')
 
-    expect(file).toMatchObject({ path: 'app/server.log', name: 'server.log', content: text, encoding: 'utf-8', size: 37 })
+    expect(file).toMatchObject({ path: 'app/server.log', name: 'server.log', view: 'editor', content: text, encoding: 'utf-8', language: 'log', size: 37 })
     expect(file.modifiedTime).toBeGreaterThan(before - 60_000)
     expect(file.modifiedTime).toBeLessThanOrEqual(Date.now())
   })
@@ -198,7 +198,7 @@ describe('browsing a Local Filesystem Source', () => {
     await writeFile(join(dir, 'root', '..data', 'x.log'), 'inside')
 
     expect(entries(await core.expand(source.id, '..data'))).toEqual([{ kind: 'file', name: 'x.log', path: '..data/x.log' }])
-    expect((await core.openFile(source.id, '..data/x.log')).content).toBe('inside')
+    expect(await core.openFile(source.id, '..data/x.log')).toMatchObject({ content: 'inside' })
   })
 
   it('reports an unknown Source', async () => {
@@ -335,7 +335,7 @@ describe('Local Filesystem Sources in real-world folders', () => {
 
       expect(entries(nodes)).toEqual([{ kind: 'folder', name: 'linked', path: 'linked' }])
       expect(entries(await core.expand(source.id, 'linked'))).toEqual([{ kind: 'file', name: 'app.log', path: 'linked/app.log' }])
-      expect((await core.openFile(source.id, 'linked/app.log')).content).toBe('linked')
+      expect(await core.openFile(source.id, 'linked/app.log')).toMatchObject({ content: 'linked' })
     })
 
     it('are followed to linked files', async (ctx) => {
@@ -352,7 +352,7 @@ describe('Local Filesystem Sources in real-world folders', () => {
       const { core, source, nodes } = await connected(root)
 
       expect(entries(nodes)).toEqual([{ kind: 'file', name: 'app.log', path: 'app.log' }])
-      expect((await core.openFile(source.id, 'app.log')).content).toBe('linked')
+      expect(await core.openFile(source.id, 'app.log')).toMatchObject({ content: 'linked' })
     })
 
     it('that lead back to a folder containing them are shown as loops', async () => {
@@ -756,7 +756,7 @@ describe('connecting a Source', () => {
     await expect(core.expand(source.id, '')).rejects.toMatchObject({ code: 'SOURCE_DISCONNECTED' })
     await expect(core.openFile(source.id, 'a.log')).rejects.toMatchObject({ code: 'SOURCE_DISCONNECTED' })
     await core.connect(source.id)
-    expect((await core.openFile(source.id, 'a.log')).content).toBe('text')
+    expect(await core.openFile(source.id, 'a.log')).toMatchObject({ content: 'text' })
   })
 
   it('clears an Error on disconnect', async () => {

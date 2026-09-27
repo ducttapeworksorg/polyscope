@@ -11,14 +11,15 @@ import type {
 } from '@shared/core-api'
 import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings } from '@shared/settings'
 import { CoreError } from './core-error'
+import { checkEncoding, decode, decompress, detectEncoding, hexDump, hexDumpLimit } from './file-content'
 import { fileIcon, folderIcon } from './file-icons'
 import type { FileSource } from './file-source'
+import { languageFor } from './languages'
 import { createLocalFileSource } from './local-file-source'
 import { createRegistryStore, emptyRegistry } from './registry-store'
 import { createSecretStore, type SecretStore } from './secret-store'
 import { createSettingsStore } from './settings-store'
 
-const utf8 = new TextDecoder()
 const asCoreError = (error: unknown) =>
   error instanceof CoreError ? error : new CoreError('UNKNOWN', error instanceof Error ? error.message : String(error))
 const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
@@ -278,20 +279,22 @@ export function createCore(options: CoreOptions = {}): Core {
       }
     },
 
-    async openFile(sourceId, path) {
+    async openFile(sourceId, path, options = {}) {
       await loaded
+      const askedEncoding = options.encoding === undefined ? undefined : checkEncoding(options.encoding)
       const fileSource = fileSourceFor(sourceId)
       const info = await fileSource.stat(path)
       if (info.kind !== 'file') throw new CoreError('NOT_A_FILE', `Not a file: ${path}`)
-      const bytes = await fileSource.read(path, { offset: 0, length: info.size })
-      return {
-        path,
-        name: path.slice(path.lastIndexOf('/') + 1),
-        content: utf8.decode(bytes),
-        encoding: 'utf-8',
-        size: info.size,
-        modifiedTime: info.modifiedTime
-      }
+      const name = path.slice(path.lastIndexOf('/') + 1)
+      const stored = await fileSource.read(path, { offset: 0, length: info.size })
+      await settingsLoaded
+      const { innerName, bytes, compression } = await decompress(name, stored, settings.openAnywayLimit)
+      const common = { path, name, size: info.size, modifiedTime: info.modifiedTime, ...(compression && { compression }) }
+      const encoding = askedEncoding ?? (options.hex ? null : detectEncoding(bytes))
+      if (encoding) return { view: 'editor', ...common, content: decode(bytes, encoding), encoding, language: languageFor(innerName) }
+      if (!options.hex) return { view: 'binary', ...common, contentLength: bytes.length }
+      const shown = bytes.subarray(0, hexDumpLimit)
+      return { view: 'hex', ...common, content: hexDump(shown), contentLength: bytes.length, shownLength: shown.length }
     },
 
     async getSettings() {
