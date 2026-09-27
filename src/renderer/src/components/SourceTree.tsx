@@ -17,6 +17,7 @@ import type {
   LogNode,
   PodNode,
   PodStatus,
+  PreviousLogNode,
   ReadyCount,
   SourceInfo,
   SourcePath,
@@ -47,8 +48,8 @@ interface Props {
   onSelect(key: string): void
   /** Opens a file in the preview tab, or in a tab of its own when pinned. */
   onOpenFile(source: SourceInfo, node: EntryNode, options?: { pinned: boolean }): void
-  /** Opens a container's Log Stream in the preview tab, or in a tab of its own when pinned. */
-  onOpenLog(source: SourceInfo, node: ContainerNode, options?: { pinned: boolean }): void
+  /** Opens a container's Log Stream (or its Previous Log) in the preview tab, or in a tab of its own when pinned. */
+  onOpenLog(source: SourceInfo, node: ContainerNode | PreviousLogNode, options?: { pinned: boolean }): void
   /** Extra attributes for the Source's own row, e.g. for dragging it. */
   sourceRowProps?: HTMLAttributes<HTMLDivElement>
   /** Extra attributes for the whole tree, e.g. to make it a drop target. */
@@ -339,6 +340,20 @@ export function SourceTree(props: Props) {
         status: restarts > 0 ? <span className="tree-row__indicators">{restartBadge(restarts)}</span> : undefined
       })
     }
+    if (node.kind === 'previousLog') {
+      // Under its container, as it's the container's earlier run.
+      return row({
+        path: node.path,
+        depth: depth + 1,
+        label: t('tree.previousLog'),
+        folder: false,
+        icon: <KubernetesIcon container />,
+        onActivate: () => onOpenLog(source, node),
+        onDoubleActivate: () => onOpenLog(source, node, { pinned: true }),
+        className: 'tree-row--previous-log',
+        extra: { title: t('tree.previousLog.tooltip', { container: node.container }) }
+      })
+    }
     const status =
       node.kind === 'pod' ? podIndicators(node)
       : node.kind === 'workload' && node.readyCount ? readyCount(node.readyCount)
@@ -384,7 +399,8 @@ export function SourceTree(props: Props) {
     const rows = listing.nodes.flatMap((node) => {
       if (isLogNode(node)) {
         const self = logRow(node, depth)
-        return node.kind !== 'container' && expanded.has(node.path) ? [self, ...renderChildren(node.path, depth + 1)] : [self]
+        const leaf = node.kind === 'container' || node.kind === 'previousLog'
+        return !leaf && expanded.has(node.path) ? [self, ...renderChildren(node.path, depth + 1)] : [self]
       }
       if (node.problem) {
         const reason = describeFailure(node.problem)

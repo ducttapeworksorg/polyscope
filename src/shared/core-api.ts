@@ -227,6 +227,15 @@ export type LogNode =
       /** How many times the container has restarted; left out until it has. */
       restarts?: number
     }
+  | {
+      /** The Log Stream of a restarted container's previous run; listed in its pod right after the container. */
+      kind: 'previousLog'
+      /** Always `previous`: the node's path is its container's, and then this. */
+      name: string
+      path: SourcePath
+      /** The container it's the Previous Log of. */
+      container: string
+    }
 
 export type ContainerRole = 'init' | 'sidecar'
 
@@ -257,6 +266,9 @@ export type PodNode = Extract<LogNode, { kind: 'pod' }>
 
 /** A container in a Log Source's tree: what opens as a Log Stream. */
 export type ContainerNode = Extract<LogNode, { kind: 'container' }>
+
+/** A restarted container's Previous Log in a Log Source's tree. */
+export type PreviousLogNode = Extract<LogNode, { kind: 'previousLog' }>
 
 export type TreeNode = EntryNode | LogNode | ErrorNode | MoreNode
 
@@ -329,14 +341,18 @@ export type OpenedFile = TextFile | BinaryFile | HexFile
 /** The last lines of a container's log, as a snapshot. */
 export interface LogSnapshot {
   view: 'log'
-  /** The container's path in its Source's tree. */
+  /** The container's path in its Source's tree, or its Previous Log's. */
   path: SourcePath
   /** The container's name. */
   name: string
   /** The pod the container is in. */
   pod: string
+  /** Whether this is the container's Previous Log: the log of its run before the current one. */
+  previous: boolean
   /** The lines asked for; the snapshot holds at most that many. */
   lastNLines: LastNLines
+  /** Whether each line starts with when it was logged: an RFC 3339 timestamp in UTC, then a space. */
+  timestamps: boolean
   /** The lines, joined by '\n', without a final line break. */
   content: string
 }
@@ -346,7 +362,32 @@ export interface OpenLogOptions {
   lastNLines?: LastNLines
   /** Fetches all of a log even when it's larger than the Large File threshold, rather than failing with LOG_TOO_LARGE. */
   allowLarge?: boolean
+  /** Starts each line with when it was logged; off unless asked for. */
+  timestamps?: boolean
 }
+
+/** A Log Stream's snapshot, and the Follow that goes on from its last line; see followLog. */
+export interface FollowedLog extends LogSnapshot {
+  followId: string
+}
+
+/** Why a Follow ended by itself: its container finished for good, its pod or container went away, or its Source was disconnected. */
+export type FollowEndReason = 'exited' | 'gone' | 'disconnected'
+
+/** What a Follow reports as its Log Stream goes on, in order. */
+export type FollowUpdate =
+  /** New lines, formatted like the snapshot's (with timestamps if it had them). */
+  | { kind: 'lines'; lines: string[] }
+  /** The container restarted; the lines after this are its new run's. */
+  | { kind: 'restarted' }
+  /** The stream failed, say the network dropped; it's tried again in `retryIn` milliseconds. */
+  | { kind: 'failed'; code: CoreErrorCode; message: string; retryIn: number }
+  /** Following again after failing. */
+  | { kind: 'recovered' }
+  /** Nothing more comes. */
+  | { kind: 'ended'; reason: FollowEndReason }
+
+export type FollowEvent = FollowUpdate & { followId: string }
 
 export type CoreErrorCode =
   | 'NAME_REQUIRED'
@@ -390,6 +431,7 @@ export type CoreErrorCode =
   | 'LOG_UNAVAILABLE'
   | 'LOG_TOO_LARGE'
   | 'INVALID_LINE_COUNT'
+  | 'NOT_FOLLOWABLE'
   | 'UNKNOWN'
 
 export interface CoreApi {
@@ -434,6 +476,19 @@ export interface CoreApi {
    * Large File threshold fails with LOG_TOO_LARGE, unless `allowLarge` says to go ahead.
    */
   openLog(sourceId: string, path: SourcePath, options?: OpenLogOptions): Promise<LogSnapshot>
+  /**
+   * Opens a container's log like openLog, and Follows it from its last line: what comes next arrives as
+   * FollowEvents with the returned `followId`, until the Follow is stopped or ends by itself (disconnecting
+   * its Source ends it). While the container restarts, the Follow goes on with its new run. A Previous Log
+   * can't be followed: NOT_FOLLOWABLE.
+   */
+  followLog(sourceId: string, path: SourcePath, options?: OpenLogOptions): Promise<FollowedLog>
+  /** Holds a Follow's updates back until it's resumed, keeping at most its "Last N lines" of them. Does nothing to a Follow that has ended. */
+  pauseFollow(followId: string): Promise<void>
+  /** Sends a paused Follow's held updates, then goes on as before. */
+  resumeFollow(followId: string): Promise<void>
+  /** Stops a Follow; nothing more is sent for it. */
+  stopFollow(followId: string): Promise<void>
   /** Remembers the "Last N lines" for a Source's log views; null forgets it, going back to the Settings default. */
   rememberLastNLines(sourceId: string, lastNLines: LastNLines | null): Promise<void>
   /** The profiles in the local AWS config and credentials files, by name, `default` first; none if there are no such files. */
@@ -449,6 +504,8 @@ export interface CoreApi {
 export interface CoreEvents {
   /** Calls `listener` with the new settings after each change is saved; returns a function that unsubscribes. */
   onSettingsChanged(listener: (settings: Settings) => void): () => void
+  /** Calls `listener` with every Follow's updates; returns a function that unsubscribes. */
+  onFollowEvent(listener: (event: FollowEvent) => void): () => void
 }
 
 export type CoreMethod = keyof CoreApi
@@ -472,6 +529,10 @@ export const coreMethods: readonly CoreMethod[] = [
   'expand',
   'openFile',
   'openLog',
+  'followLog',
+  'pauseFollow',
+  'resumeFollow',
+  'stopFollow',
   'rememberLastNLines',
   'listAwsProfiles',
   'listKubeContexts',

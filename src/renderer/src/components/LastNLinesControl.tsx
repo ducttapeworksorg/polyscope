@@ -12,8 +12,8 @@ const compact = new Intl.NumberFormat(locale, { notation: 'compact' })
 const choiceLabel = (choice: LastNLines) => (choice === 'all' ? t('logView.choice.all') : compact.format(choice))
 
 /**
- * The "Last N lines" a log view fetches and keeps: one of the usual choices, or a number typed in.
- * Sits at the top of every log view.
+ * The "Last N lines" a log view fetches and keeps (following included): one of the usual choices, or a
+ * number typed in. Sits at the start of every log view's toolbar.
  */
 export function LastNLinesControl({ value, onChange }: Props) {
   const id = useId()
@@ -30,7 +30,7 @@ export function LastNLinesControl({ value, onChange }: Props) {
   }
 
   return (
-    <form className="log-toolbar" onSubmit={submit}>
+    <form className="log-toolbar__lines" onSubmit={submit}>
       <span className="log-toolbar__label" id={`${id}-label`}>
         {t('logView.lastNLines')}
       </span>

@@ -1,3 +1,5 @@
+import { request as httpRequest, type IncomingMessage, type RequestOptions } from 'node:http'
+import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
 import {
   ApiException,
   AppsV1Api,
@@ -9,9 +11,9 @@ import {
 } from '@kubernetes/client-node'
 import type { ContainerRole, LogNode, SourcePath, WorkloadKind } from '@shared/core-api'
 import { CoreError } from './core-error'
-import type { LogReadOptions, LogSource } from './log-source'
+import type { LogConnection, LogFollowOptions, LogReadOptions, LogSource, LogStreamInfo } from './log-source'
 import { certificateCodes, networkCodes } from './network-errors'
-import { isSidecar, podStatusOf, readyCountOf, restartsOf } from './pod-status'
+import { containerInstanceOf, isSidecar, podStatusOf, readyCountOf, restartsOf } from './pod-status'
 
 /** Each group's path segment, which is also its name. */
 const groups = {
@@ -79,6 +81,25 @@ function asCoreError(error: unknown): CoreError {
 }
 
 const notFound = (path: SourcePath) => new CoreError('NOT_FOUND', `Nothing at ${path} in the namespace`)
+
+const notALog = (path: SourcePath) => new CoreError('NOT_A_LOG_STREAM', `Only containers have logs: ${path}`)
+
+/** The last segment of a Previous Log's path, after its container's. */
+const previousSegment = 'previous'
+
+/** A failed log request as a CoreError: the API server answers 400 when a container has no log to give, e.g. one still waiting to start. */
+function logError(error: unknown): CoreError {
+  if (error instanceof ApiException && error.code === 400) return new CoreError('LOG_UNAVAILABLE', serverMessage(error))
+  return asCoreError(error)
+}
+
+/** The whole body of a response, as text. */
+async function bodyOf(response: IncomingMessage): Promise<string> {
+  response.setEncoding('utf8')
+  let body = ''
+  for await (const chunk of response) body += chunk
+  return body
+}
 
 const join = (parent: SourcePath, name: string) => (parent ? `${parent}/${name}` : name)
 
@@ -171,15 +192,18 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     return { kind: 'workload', workloadKind: kind, name, path: join(parent, name), ...(readyCount && { readyCount }) }
   }
 
-  /** A pod's containers, init and sidecar containers first as they start first. */
+  /** A pod's containers, init and sidecar containers first as they start first; each restarted one followed by its Previous Log. */
   const containerNodes = (parent: SourcePath, pod: V1Pod): LogNode[] => {
-    const node = (name: string, role?: ContainerRole): LogNode => {
+    const node = (name: string, role?: ContainerRole): LogNode[] => {
+      const path = join(parent, name)
       const restarts = restartsOf(pod, name)
-      return { kind: 'container', name, path: join(parent, name), ...(role && { role }), ...(restarts && { restarts }) }
+      const container: LogNode = { kind: 'container', name, path, ...(role && { role }), ...(restarts && { restarts }) }
+      if (!restarts) return [container]
+      return [container, { kind: 'previousLog', name: previousSegment, path: join(path, previousSegment), container: name }]
     }
     return [
-      ...(pod.spec?.initContainers ?? []).map((c) => node(c.name, isSidecar(c) ? 'sidecar' : 'init')),
-      ...(pod.spec?.containers ?? []).map((c) => node(c.name))
+      ...(pod.spec?.initContainers ?? []).flatMap((c) => node(c.name, isSidecar(c) ? 'sidecar' : 'init')),
+      ...(pod.spec?.containers ?? []).flatMap((c) => node(c.name))
     ]
   }
 
@@ -226,38 +250,106 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
       if (!names(await jobsOf(first)).includes(second!)) throw notFound(path)
       return containerNodes(path, podNamed(await podsOf('jobs', second!), third!, path))
     }
-    // Deeper than any container: the path is a container's, or nothing's.
-    throw (await nodeAt(path))?.kind === 'container' ? new CoreError('NOT_A_FOLDER', `A container has no children: ${path}`) : notFound(path)
+    // Deeper than any container: the path is a log's, or nothing's.
+    const kind = (await nodeAt(path))?.kind
+    throw kind === 'container' || kind === 'previousLog' ? new CoreError('NOT_A_FOLDER', `A log has no children: ${path}`) : notFound(path)
   }
 
-  /** The node at a path, found among its parent's children; undefined if it isn't there. */
-  const nodeAt = async (path: SourcePath): Promise<LogNode | undefined> => {
-    const cut = path.lastIndexOf('/')
-    if (cut < 0) return undefined
-    const siblings = await listChildren(path.slice(0, cut)).catch((error: CoreError) => {
+  /** The children of a node, none if there's no such node or it has none. */
+  const childrenOf = (path: SourcePath) =>
+    listChildren(path).catch((error: CoreError) => {
       if (error.code === 'NOT_FOUND' || error.code === 'NOT_A_FOLDER') return []
       throw error
     })
-    return siblings.find((node) => node.path === path)
+
+  /** The node at a path, found among its parent's children (for a Previous Log, its pod's); undefined if it isn't there. */
+  const nodeAt = async (path: SourcePath): Promise<LogNode | undefined> => {
+    const parent = path.slice(0, Math.max(0, path.lastIndexOf('/')))
+    if (!parent) return undefined
+    const found = (await childrenOf(parent)).find((node) => node.path === path)
+    if (found || !path.endsWith(`/${previousSegment}`) || !parent.includes('/')) return found
+    return (await childrenOf(parent.slice(0, parent.lastIndexOf('/')))).find((node) => node.path === path)
+  }
+
+  const logStreamAt = async (path: SourcePath): Promise<LogStreamInfo> => {
+    if (!path || isGroup(path)) throw notALog(path)
+    const node = await nodeAt(path)
+    if (!node) throw notFound(path)
+    const segments = path.split('/')
+    if (node.kind === 'container') return { pod: segments.at(-2)!, container: node.name, previous: false }
+    if (node.kind === 'previousLog') return { pod: segments.at(-3)!, container: node.container, previous: true }
+    throw notALog(path)
+  }
+
+  /** Opens a connection following a container's log; resolves once the API server answers with the log. */
+  const openLogConnection = async (pod: string, container: string, options: LogFollowOptions, onText: (text: string) => void) => {
+    const cluster = config.getCurrentCluster()
+    if (!cluster) throw new CoreError('UNKNOWN', 'The kubeconfig context has no cluster')
+    const url = new URL(`${cluster.server.replace(/\/+$/, '')}/api/v1/namespaces/${namespace}/pods/${encodeURIComponent(pod)}/log`)
+    url.searchParams.set('container', container)
+    url.searchParams.set('follow', 'true')
+    url.searchParams.set('timestamps', 'true')
+    if (options.sinceTime !== undefined) url.searchParams.set('sinceTime', options.sinceTime)
+    // The kubeconfig's TLS settings, credentials (exec plugins included) and proxy, as for any other call.
+    const requestOptions: RequestOptions = {}
+    await call(() => config.applyToHTTPSOptions(requestOptions))
+    const https = url.protocol === 'https:'
+    if (!https && requestOptions.agent instanceof HttpsAgent) delete requestOptions.agent
+    return new Promise<LogConnection>((resolve, reject) => {
+      const request = (https ? httpsRequest : httpRequest)(url, { ...requestOptions, method: 'GET' }, (response) => {
+        if (response.statusCode !== 200) {
+          const status = response.statusCode ?? 500
+          void bodyOf(response).then(
+            (body) => reject(logError(new ApiException(status, `HTTP ${status}`, body, {}))),
+            (error: unknown) => reject(asCoreError(error))
+          )
+          return
+        }
+        response.setEncoding('utf8')
+        const ended = new Promise<void>((done, fail) => {
+          response.on('data', onText)
+          response.on('end', done)
+          response.on('error', (error) => fail(asCoreError(error)))
+          // Closed before its end: the connection dropped, or the stream was stopped.
+          response.on('close', () => fail(new CoreError('UNREACHABLE', 'The log stream was cut off')))
+        })
+        // Settled whether or not anyone is still waiting on it, say after stopping.
+        ended.catch(() => undefined)
+        resolve({ ended, stop: () => request.destroy() })
+      })
+      request.on('error', (error) => reject(asCoreError(error)))
+      // A quiet log sends nothing for long stretches; keep-alive probes are what notice a connection that died meanwhile.
+      request.on('socket', (socket) => socket.setKeepAlive(true, 15_000))
+      request.end()
+    })
   }
 
   return {
     listChildren,
+    logStreamAt,
 
     async readLog(path, options: LogReadOptions = {}) {
-      if (!path || isGroup(path)) throw new CoreError('NOT_A_LOG_STREAM', `Only containers have logs: ${path}`)
-      const node = await nodeAt(path)
-      if (!node) throw notFound(path)
-      if (node.kind !== 'container') throw new CoreError('NOT_A_LOG_STREAM', `Only containers have logs: ${path}`)
-      const segments = path.split('/')
-      const pod = segments.at(-2)!
+      const { pod, container, previous } = await logStreamAt(path)
       try {
-        return await core.readNamespacedPodLog({ name: pod, namespace, container: node.name, ...options })
+        return await core.readNamespacedPodLog({ name: pod, namespace, container, previous, ...options })
       } catch (error) {
-        // The API server answers 400 when a container has no log to give, e.g. one still waiting to start.
-        if (error instanceof ApiException && error.code === 400) throw new CoreError('LOG_UNAVAILABLE', serverMessage(error))
-        throw asCoreError(error)
+        throw logError(error)
       }
+    },
+
+    async followLog(path, options, onText) {
+      const { pod, container, previous } = await logStreamAt(path)
+      if (previous) throw new CoreError('NOT_FOLLOWABLE', `A Previous Log has ended: ${path}`)
+      return openLogConnection(pod, container, options, onText)
+    },
+
+    /** Reads just the pod, trusting the path, as it's looked at every few seconds while a container restarts. */
+    async containerInstance(path) {
+      const [pod, container] = path.split('/').slice(-2)
+      const found = await call(() => core.readNamespacedPod({ name: pod!, namespace }))
+      const instance = containerInstanceOf(found, container!)
+      if (!instance) throw notFound(path)
+      return instance
     },
 
     /** Fails with NAMESPACE_NOT_FOUND if the namespace isn't there; a user who may not read namespaces gets the benefit of the doubt. */

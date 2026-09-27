@@ -5,6 +5,7 @@ import HtmlWorker from 'monaco-editor/languages/features/html/html.worker?worker
 import JsonWorker from 'monaco-editor/languages/features/json/json.worker?worker'
 import TsWorker from 'monaco-editor/languages/features/typescript/ts.worker?worker'
 import { t } from './i18n'
+import { markerPattern } from './log-lines'
 
 self.MonacoEnvironment = {
   getWorker(_workerId, label) {
@@ -37,7 +38,8 @@ monaco.editor.defineTheme('polyscope-dark', {
     { token: 'log.warning', foreground: 'e8c170' },
     { token: 'log.info', foreground: '8ab4f8' },
     { token: 'log.debug', foreground: '8391a8' },
-    { token: 'log.date', foreground: '7fb8a4' }
+    { token: 'log.date', foreground: '7fb8a4' },
+    { token: 'log.marker', foreground: 'b69cf0', fontStyle: 'italic' }
   ],
   colors: {
     'editor.background': '#1b2230',
@@ -67,7 +69,8 @@ monaco.editor.defineTheme('polyscope-light', {
     { token: 'log.warning', foreground: '9a6700' },
     { token: 'log.info', foreground: '1a5fb4' },
     { token: 'log.debug', foreground: '6b7688' },
-    { token: 'log.date', foreground: '2f7d63' }
+    { token: 'log.date', foreground: '2f7d63' },
+    { token: 'log.marker', foreground: '6f4fb8', fontStyle: 'italic' }
   ],
   colors: {
     'editor.background': '#fbfcfd',
@@ -89,11 +92,12 @@ monaco.editor.defineTheme('polyscope-light', {
   }
 })
 
-// Monaco has no language for logs; this one picks out levels, timestamps, strings and numbers.
+// Monaco has no language for logs; this one picks out Polyscope's own marks, levels, timestamps, strings and numbers.
 monaco.languages.register({ id: 'log', aliases: ['Log'] })
 monaco.languages.setMonarchTokensProvider('log', {
   tokenizer: {
     root: [
+      [markerPattern, 'log.marker'],
       [/\b(?:FATAL|CRITICAL|CRIT|SEVERE|PANIC|ERROR|ERR|EXCEPTION)\b/, 'log.error'],
       [/\b(?:WARNING|WARN)\b/, 'log.warning'],
       [/\b(?:INFO|NOTICE)\b/, 'log.info'],

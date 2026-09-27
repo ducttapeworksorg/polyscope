@@ -15,6 +15,8 @@ interface Props {
   /** Reopens the active tab's file in `encoding`, or as detected when null. */
   onPickEncoding(encoding: TextEncoding | null): void
   onPickLanguage(language: LanguageId): void
+  /** How many lines a followed log's tab holds now, once lines have been added to it. */
+  logLineCount?: number
 }
 
 /** Picked in the encoding list to go back to whatever the core detects. */
@@ -34,7 +36,7 @@ interface OpenPicker {
  * Facts about the active tab: its Environment and where it's from, then a file's size, modified time,
  * encoding and language, or how many lines of a Log Stream are shown.
  */
-export function StatusBar({ activeTab, environment, onPickEncoding, onPickLanguage }: Props) {
+export function StatusBar({ activeTab, environment, onPickEncoding, onPickLanguage, logLineCount }: Props) {
   const [picker, setPicker] = useState<OpenPicker | null>(null)
   const closePicker = () => {
     setPicker(null)
@@ -82,7 +84,7 @@ export function StatusBar({ activeTab, environment, onPickEncoding, onPickLangua
       <span className="statusbar__item statusbar__item--path">{file.path}</span>
       {isLog(file) ? (
         <>
-          <span className="statusbar__item statusbar__item--end">{file.view === 'log' && lineCount(file.content)}</span>
+          <span className="statusbar__item statusbar__item--end">{file.view === 'log' && (logLineCount === undefined ? lineCount(file.content) : lineCountLabel(logLineCount))}</span>
           <span className="statusbar__item">{languageName('log')}</span>
         </>
       ) : (
@@ -145,8 +147,9 @@ export function StatusBar({ activeTab, environment, onPickEncoding, onPickLangua
 }
 
 /** How many lines a Log Stream's snapshot shows. */
-function lineCount(content: string) {
-  const count = content ? content.split('\n').length : 0
+const lineCount = (content: string) => lineCountLabel(content ? content.split('\n').length : 0)
+
+function lineCountLabel(count: number) {
   return count === 1 ? t('status.oneLine') : t('status.lines', { count: formatCount(count) })
 }
 

@@ -5,13 +5,16 @@ import type {
   CoreEvents,
   EntryNode,
   Environment,
+  FollowEvent,
   KubernetesLogsSourceInfo,
   LastNLines,
   LocalSourceInfo,
   LogNode,
+  LogSnapshot,
   NewEnvironment,
   NewS3Source,
   NewSource,
+  OpenLogOptions,
   S3SourceInfo,
   SourceInfo,
   SourcePath,
@@ -30,7 +33,8 @@ import { kubeConfigFor, listKubeContexts } from './kubeconfig'
 import { createKubernetesLogSource } from './kubernetes-log-source'
 import { languageFor } from './languages'
 import { createLocalFileSource } from './local-file-source'
-import type { LogSource } from './log-source'
+import { startFollow, type Follow } from './log-follow'
+import type { LogReadOptions, LogSource } from './log-source'
 import { createRegistryStore, emptyRegistry, type SavedSource } from './registry-store'
 import { createS3FileSource, readCaBundle, type S3Target } from './s3-file-source'
 import { createSecretStore, type SecretStore } from './secret-store'
@@ -46,6 +50,9 @@ function checkLastNLines(value: unknown): LastNLines {
   if (!isLastNLines(value)) throw new CoreError('INVALID_LINE_COUNT', `Not a whole number of lines greater than zero, or all: ${String(value)}`)
   return value
 }
+
+/** The RFC 3339 timestamp a log line read with timestamps starts with; an empty line may be its timestamp alone. */
+const timestampOf = (line: string) => line.slice(0, line.indexOf(' ') < 0 ? line.length : line.indexOf(' '))
 
 /** A Source without its remembered "Last N lines". */
 const withoutLastNLines = <S extends SavedSource>({ lastNLines: _, ...source }: S) => source as S
@@ -269,6 +276,74 @@ export function createCore(options: CoreOptions = {}): Core {
     return backend.logSource
   }
 
+  /**
+   * The last lines of a log, as openLog gives them, along with where a Follow carries on from: the
+   * timestamp of the last line, and how many lines have it. Those are only known `forFollowing`, which
+   * reads the lines with their timestamps whether or not they're shown.
+   */
+  const readSnapshot = async (logSource: LogSource, sourceId: string, path: SourcePath, options: OpenLogOptions, forFollowing = false) => {
+    const asked = options.lastNLines === undefined ? undefined : checkLastNLines(options.lastNLines)
+    const timestamps = options.timestamps === true
+    const { pod, container, previous } = await logSource.logStreamAt(path)
+    await settingsLoaded
+    const lastNLines = asked ?? sourceFor(sourceId).lastNLines ?? settings.defaultLastNLines
+    const read = { timestamps: timestamps || forFollowing }
+    const snapshot = (lines: string[]): LogSnapshot => ({ view: 'log', path, name: container, pod, previous, lastNLines, timestamps, content: lines.join('\n') })
+    let text: string
+    try {
+      if (lastNLines !== 'all') text = await logSource.readLog(path, { ...read, tailLines: lastNLines })
+      else if (options.allowLarge) text = await logSource.readLog(path, read)
+      else text = await readUpToLarge(logSource, path, read)
+    } catch (error) {
+      // A container with no log yet, say one waiting to start, can still be followed: its log will come.
+      if (!forFollowing || asCoreError(error).code !== 'LOG_UNAVAILABLE') throw error
+      return { snapshot: snapshot([]) }
+    }
+    const lines = text ? text.replace(/\n$/, '').split('\n') : []
+    const kept = lastNLines === 'all' ? lines : lines.slice(-lastNLines)
+    const stamps = read.timestamps ? kept.map(timestampOf) : []
+    const lastTimestamp = stamps.at(-1)
+    const shown = read.timestamps && !timestamps ? kept.map((line, i) => line.slice(stamps[i]!.length + 1)) : kept
+    return {
+      snapshot: snapshot(shown),
+      ...(lastTimestamp !== undefined && { lastTimestamp, lastTimestampCount: stamps.filter((stamp) => stamp === lastTimestamp).length })
+    }
+  }
+
+  /** All of a log, failing with LOG_TOO_LARGE if it's over the Large File threshold. */
+  const readUpToLarge = async (logSource: LogSource, path: SourcePath, read: LogReadOptions) => {
+    // Reading one byte past the threshold is enough to tell, without fetching all of a huge log.
+    const threshold = settings.largeFileThreshold
+    const text = await logSource.readLog(path, { ...read, limitBytes: threshold + 1 })
+    if (Buffer.byteLength(text) > threshold) {
+      throw new CoreError('LOG_TOO_LARGE', `The whole log is over the Large File threshold of ${threshold} bytes`)
+    }
+    return text
+  }
+
+  // Follows under way, by id, each with the Source it reads from.
+  const follows = new Map<string, { sourceId: string; follow: Follow }>()
+  const followListeners = new Set<(event: FollowEvent) => void>()
+  const announceFollow = (event: FollowEvent) => {
+    for (const listener of followListeners) listener(event)
+  }
+
+  /** Stops every Follow of a Source, telling its listeners: the connection it used is gone. */
+  const stopFollows = (sourceId: string) => {
+    for (const [followId, entry] of follows) {
+      if (entry.sourceId !== sourceId) continue
+      entry.follow.stop()
+      follows.delete(followId)
+      announceFollow({ followId, kind: 'ended', reason: 'disconnected' })
+    }
+  }
+
+  /** Forgets a Source's connection, stopping its Follows. */
+  const dropConnection = (sourceId: string) => {
+    stopFollows(sourceId)
+    connections.delete(sourceId)
+  }
+
   /** A page of a folder's children, folders first, then files, each by name; a more node ends it if there are more. */
   const listNodes = async (fileSource: FileSource, path: SourcePath, cursor?: string): Promise<TreeNode[]> => {
     const page = await fileSource.listChildren(path, cursor)
@@ -423,7 +498,7 @@ export function createCore(options: CoreOptions = {}): Core {
       // A Source that no longer signs in with a secret key has no use for the one it had.
       if (source.type !== 's3' || source.auth !== 'keys') await secrets.remove(sourceId)
       // A new name keeps the connection; anything else, a new secret included, needs connecting afresh.
-      if (!sameTarget(before, source) || secretKey !== undefined) connections.delete(sourceId)
+      if (!sameTarget(before, source) || secretKey !== undefined) dropConnection(sourceId)
       return handOut(source)
     },
 
@@ -449,7 +524,7 @@ export function createCore(options: CoreOptions = {}): Core {
       // Secrets go first: if that fails the Source is still there to delete again.
       await secrets.remove(sourceId)
       await commit(() => sources.splice(sources.indexOf(sourceFor(sourceId)), 1))
-      connections.delete(sourceId)
+      dropConnection(sourceId)
     },
 
     async moveSource(sourceId, index) {
@@ -521,6 +596,8 @@ export function createCore(options: CoreOptions = {}): Core {
       await loaded
       const source = sourceFor(sourceId)
       const attempt: Connection = { state: 'connecting' }
+      // Connecting again replaces the connection the Source's Follows were using.
+      stopFollows(sourceId)
       connections.set(sourceId, attempt)
       const settle = (outcome: Connection) => {
         if (connections.get(sourceId) !== attempt) {
@@ -548,7 +625,7 @@ export function createCore(options: CoreOptions = {}): Core {
     async disconnect(sourceId) {
       await loaded
       sourceFor(sourceId)
-      connections.delete(sourceId)
+      dropConnection(sourceId)
     },
 
     async expand(sourceId, path, cursor) {
@@ -582,31 +659,51 @@ export function createCore(options: CoreOptions = {}): Core {
 
     async openLog(sourceId, path, options = {}) {
       await loaded
-      const asked = options.lastNLines === undefined ? undefined : checkLastNLines(options.lastNLines)
+      return (await readSnapshot(logSourceFor(sourceId, path), sourceId, path, options)).snapshot
+    },
+
+    async followLog(sourceId, path, options = {}) {
+      await loaded
       const logSource = logSourceFor(sourceId, path)
-      await settingsLoaded
-      const lastNLines = asked ?? sourceFor(sourceId).lastNLines ?? settings.defaultLastNLines
-      let text: string
-      if (lastNLines !== 'all') text = await logSource.readLog(path, { tailLines: lastNLines })
-      else if (options.allowLarge) text = await logSource.readLog(path)
-      else {
-        // Reading one byte past the threshold is enough to tell, without fetching all of a huge log.
-        const threshold = settings.largeFileThreshold
-        text = await logSource.readLog(path, { limitBytes: threshold + 1 })
-        if (Buffer.byteLength(text) > threshold) {
-          throw new CoreError('LOG_TOO_LARGE', `The whole log is over the Large File threshold of ${threshold} bytes`)
+      if ((await logSource.logStreamAt(path)).previous) throw new CoreError('NOT_FOLLOWABLE', `A Previous Log has ended: ${path}`)
+      // The snapshot has to be of the run the Follow starts from: one read while the container restarted is read again.
+      let restarts = (await logSource.containerInstance(path)).restarts
+      let read: Awaited<ReturnType<typeof readSnapshot>>
+      for (let tries = 1; ; tries++) {
+        read = await readSnapshot(logSource, sourceId, path, options, true)
+        const after = (await logSource.containerInstance(path)).restarts
+        if (after === restarts || tries === 3) break
+        restarts = after
+      }
+      const { snapshot, lastTimestamp, lastTimestampCount } = read
+      // Disconnected or reconnected while reading: this Follow would outlive the connection it was for.
+      if (logSourceFor(sourceId, path) !== logSource) throw new CoreError('SOURCE_DISCONNECTED', `${sourceFor(sourceId).name} was reconnected`)
+      const followId = randomUUID()
+      const follow = startFollow(logSource, path, {
+        ...(lastTimestamp !== undefined && { after: lastTimestamp, afterCount: lastTimestampCount }),
+        restarts,
+        timestamps: snapshot.timestamps,
+        cap: snapshot.lastNLines,
+        emit: (update) => {
+          if (update.kind === 'ended') follows.delete(followId)
+          announceFollow({ ...update, followId })
         }
-      }
-      const lines = text.replace(/\n$/, '').split('\n')
-      const segments = path.split('/')
-      return {
-        view: 'log',
-        path,
-        name: segments.at(-1)!,
-        pod: segments.at(-2) ?? '',
-        lastNLines,
-        content: (lastNLines === 'all' ? lines : lines.slice(-lastNLines)).join('\n')
-      }
+      })
+      follows.set(followId, { sourceId, follow })
+      return { ...snapshot, followId }
+    },
+
+    async pauseFollow(followId) {
+      follows.get(followId)?.follow.pause()
+    },
+
+    async resumeFollow(followId) {
+      follows.get(followId)?.follow.resume()
+    },
+
+    async stopFollow(followId) {
+      follows.get(followId)?.follow.stop()
+      follows.delete(followId)
     },
 
     async rememberLastNLines(sourceId, lastNLines) {
@@ -649,6 +746,12 @@ export function createCore(options: CoreOptions = {}): Core {
       const subscription = (next: Settings) => listener(next)
       settingsListeners.add(subscription)
       return () => settingsListeners.delete(subscription)
+    },
+
+    onFollowEvent(listener) {
+      const subscription = (event: FollowEvent) => listener(event)
+      followListeners.add(subscription)
+      return () => followListeners.delete(subscription)
     }
   }
 }

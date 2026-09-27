@@ -1,4 +1,5 @@
-import type { LanguageId, LogSnapshot, OpenedFile, OpenOptions, SourceInfo, SourcePath } from '@shared/core-api'
+import type { FollowedLog, LanguageId, LogSnapshot, OpenedFile, OpenOptions, SourceInfo, SourcePath } from '@shared/core-api'
+import { t } from './i18n'
 
 /**
  * A Log Stream whose whole log was asked for but is larger than the Large File threshold: nothing of
@@ -9,13 +10,19 @@ export interface LogTooLarge {
   path: SourcePath
   /** The container's name. */
   name: string
+  /** Whether it's the container's Previous Log. */
+  previous: boolean
 }
 
-/** What a tab shows: a file, or a Log Stream. */
-export type TabContent = OpenedFile | LogSnapshot | LogTooLarge
+/** What a tab shows: a file, or a Log Stream (followed or not). */
+export type TabContent = OpenedFile | LogSnapshot | FollowedLog | LogTooLarge
 
 export const isLog = (content: TabContent): content is LogSnapshot | LogTooLarge =>
   content.view === 'log' || content.view === 'logTooLarge'
+
+/** What a tab is called: its file's or container's name, marked for a Previous Log. */
+export const tabName = (content: { name: string; previous?: boolean }) =>
+  content.previous ? t('logView.previous', { name: content.name }) : content.name
 
 /** A file or Log Stream open in the viewer. Tabs live only in the renderer and are never persisted. */
 export interface OpenTab {
@@ -28,6 +35,18 @@ export interface OpenTab {
   openAs?: OpenOptions
   /** The language the user picked, highlighting the file instead of the detected one. */
   language?: LanguageId
+  /** A log tab's Follow while it goes on: the one its content came with. */
+  follow?: FollowState
+  /** Whether a log tab shows its timestamps in UTC rather than local time. */
+  utc?: boolean
+  /** Whether a log tab wraps long lines. */
+  wrap?: boolean
+}
+
+/** A Follow under way in a log tab: new lines are added as they come, unless it's paused. */
+export interface FollowState {
+  followId: string
+  paused: boolean
 }
 
 /** The open tabs, in order, and which one is shown. */
@@ -91,6 +110,23 @@ function updateTab(ws: Workspace, key: string, change: Partial<OpenTab>): Worksp
  */
 export const reopenTab = (ws: Workspace, key: string, file: TabContent, openAs: OpenOptions = {}): Workspace =>
   updateTab(ws, key, { file, openAs, pinned: true })
+
+/** Puts a freshly read log in its tab, with the Follow that goes on from it, if any. Pins the tab. */
+export const reopenLogTab = (ws: Workspace, key: string, file: TabContent): Workspace =>
+  updateTab(ws, key, { file, follow: 'followId' in file ? { followId: file.followId, paused: false } : undefined, pinned: true })
+
+/** Changes how a log tab is shown or followed, leaving its content as it is. */
+export const setLogView = (ws: Workspace, key: string, change: Partial<Pick<OpenTab, 'follow' | 'utc' | 'wrap'>>): Workspace =>
+  updateTab(ws, key, change)
+
+/** Marks a Follow as over in whichever tab it was going on, leaving what it showed. */
+export function endFollow(ws: Workspace, followId: string): Workspace {
+  const tab = ws.tabs.find((open) => open.follow?.followId === followId)
+  return tab ? updateTab(ws, tab.key, { follow: undefined }) : ws
+}
+
+/** The Follows going on in the tabs. */
+export const followIdsOf = (ws: Workspace) => new Set(ws.tabs.flatMap((tab) => (tab.follow ? [tab.follow.followId] : [])))
 
 /** Highlights a tab’s file as `language` instead of the detected one, pinning the tab. */
 export const setLanguage = (ws: Workspace, key: string, language: LanguageId): Workspace =>

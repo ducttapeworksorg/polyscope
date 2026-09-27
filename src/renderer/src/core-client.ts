@@ -38,12 +38,17 @@ export const core: CoreApi & CoreEvents = {
   expand: call('expand'),
   openFile: call('openFile'),
   openLog: call('openLog'),
+  followLog: call('followLog'),
+  pauseFollow: call('pauseFollow'),
+  resumeFollow: call('resumeFollow'),
+  stopFollow: call('stopFollow'),
   rememberLastNLines: call('rememberLastNLines'),
   listAwsProfiles: call('listAwsProfiles'),
   listKubeContexts: call('listKubeContexts'),
   getSettings: call('getSettings'),
   updateSettings: call('updateSettings'),
-  onSettingsChanged: (listener) => window.polyscope.onSettingsChanged(listener)
+  onSettingsChanged: (listener) => window.polyscope.onSettingsChanged(listener),
+  onFollowEvent: (listener) => window.polyscope.onFollowEvent(listener)
 }
 
 /** A user-facing message for a failure the core reported, thrown or not. */

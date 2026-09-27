@@ -1,6 +1,6 @@
 import type { V1ContainerStatus, V1DaemonSet, V1Deployment, V1Pod, V1StatefulSet } from '@kubernetes/client-node'
 import { describe, expect, it } from 'vitest'
-import { podStatusOf, readyCountOf, restartsOf } from './pod-status'
+import { containerInstanceOf, podStatusOf, readyCountOf, restartsOf } from './pod-status'
 
 const running = (name: string, changes: Partial<V1ContainerStatus> = {}): V1ContainerStatus => ({
   name,
@@ -140,5 +140,70 @@ describe('Ready Count', () => {
   it('is left out for Workloads that run to completion', () => {
     expect(readyCountOf('Job', {})).toBeUndefined()
     expect(readyCountOf('CronJob', {})).toBeUndefined()
+  })
+})
+
+describe('a container’s current run', () => {
+  const exited = (name: string, exitCode: number, restartCount = 0): V1ContainerStatus => ({
+    ...running(name),
+    ready: false,
+    restartCount,
+    state: { terminated: { exitCode } }
+  })
+  const withPolicy = (p: V1Pod, restartPolicy: string) => ({ ...p, spec: { ...p.spec!, restartPolicy } })
+
+  it('is running, with the container’s restarts', () => {
+    expect(containerInstanceOf(pod('Running', [running('app', { restartCount: 3 })]), 'app')).toEqual({
+      restarts: 3,
+      state: 'running',
+      finished: false
+    })
+  })
+
+  it('is waiting while backing off before a restart, not finished', () => {
+    expect(containerInstanceOf(pod('Running', [crashed('app', 2, 'Error', '2026-09-27T10:00:00Z')]), 'app')).toEqual({
+      restarts: 2,
+      state: 'waiting',
+      finished: false
+    })
+  })
+
+  it('is waiting before the container has a status at all', () => {
+    expect(containerInstanceOf({ ...pod('Pending'), spec: { containers: [{ name: 'app' }] } }, 'app')).toEqual({
+      restarts: 0,
+      state: 'waiting',
+      finished: false
+    })
+  })
+
+  it('is finished once its pod has completed or failed', () => {
+    expect(containerInstanceOf(pod('Succeeded', [exited('app', 0)]), 'app')).toMatchObject({ state: 'terminated', finished: true })
+    expect(containerInstanceOf(pod('Failed', [exited('app', 1)]), 'app')).toMatchObject({ finished: true })
+  })
+
+  it('is finished when the pod does not restart it', () => {
+    expect(containerInstanceOf(withPolicy(pod('Running', [exited('app', 1)]), 'Never'), 'app')).toMatchObject({ finished: true })
+    expect(containerInstanceOf(withPolicy(pod('Running', [exited('app', 0)]), 'OnFailure'), 'app')).toMatchObject({ finished: true })
+    expect(containerInstanceOf(withPolicy(pod('Running', [exited('app', 1)]), 'OnFailure'), 'app')).toMatchObject({ finished: false })
+    expect(containerInstanceOf(pod('Running', [exited('app', 0)]), 'app')).toMatchObject({ finished: false })
+  })
+
+  it('is finished for an init container that has done its part, but not for a sidecar', () => {
+    const p: V1Pod = {
+      metadata: { name: 'p' },
+      spec: { initContainers: [{ name: 'setup' }, { name: 'proxy', restartPolicy: 'Always' }], containers: [{ name: 'app' }] },
+      status: { phase: 'Running', initContainerStatuses: [exited('setup', 0), exited('proxy', 0, 1)], containerStatuses: [running('app')] }
+    }
+    expect(containerInstanceOf(p, 'setup')).toMatchObject({ state: 'terminated', finished: true })
+    expect(containerInstanceOf(p, 'proxy')).toEqual({ restarts: 1, state: 'terminated', finished: false })
+  })
+
+  it('is finished once the pod is going away', () => {
+    const going = { ...pod('Running', [exited('app', 0)]), metadata: { name: 'p', deletionTimestamp: new Date() } }
+    expect(containerInstanceOf(going, 'app')).toMatchObject({ finished: true })
+  })
+
+  it('is not there for a container the pod does not have', () => {
+    expect(containerInstanceOf(pod('Running', [running('app')]), 'other')).toBeUndefined()
   })
 })

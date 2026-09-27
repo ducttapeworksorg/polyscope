@@ -3,9 +3,9 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { LogNode, NewKubernetesLogsSource, TreeNode } from '@shared/core-api'
+import type { FollowEvent, LogNode, NewKubernetesLogsSource, TreeNode } from '@shared/core-api'
 import { createCore, type Core } from './core'
-import { counterLines, hasTestCluster, testKubernetesLogsSource } from './kubernetes-test-cluster'
+import { counterLines, hasTestCluster, testKubernetesLogsSource, tickerNamespace } from './kubernetes-test-cluster'
 
 let dir: string
 
@@ -438,9 +438,20 @@ describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () 
         path: 'pods/counter/counter',
         name: 'counter',
         pod: 'counter',
+        previous: false,
         lastNLines: 10,
+        timestamps: false,
         content: counterLines.slice(-10).join('\n')
       })
+    })
+
+    it('starts each line with when it was logged, when asked', async () => {
+      await core.connect(sourceId)
+
+      const log = await core.openLog(sourceId, 'pods/counter/counter', { lastNLines: 2, timestamps: true })
+
+      expect(log.timestamps).toBe(true)
+      expect(log.content.split('\n')).toEqual([expect.stringMatching(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z line 99$/), expect.stringMatching(/Z line 100$/)])
     })
 
     it('fetches all of it', async () => {
@@ -494,5 +505,157 @@ describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () 
       await expect(core.openLog(sourceId, 'pods/counter/missing')).rejects.toMatchObject({ code: 'NOT_FOUND' })
       await expect(core.openFile(sourceId, 'pods/counter/counter')).rejects.toMatchObject({ code: 'NOT_A_FILE' })
     })
+  })
+})
+
+/** Every Follow update the core sends, and a way to read those of one Follow as lines, marks in angle brackets. */
+function followUpdates(core: Core) {
+  const events: FollowEvent[] = []
+  const unsubscribe = core.onFollowEvent((event) => events.push(event))
+  const of = (followId: string) =>
+    events.filter((e) => e.followId === followId).flatMap((e) => (e.kind === 'lines' ? e.lines : [`<${e.kind}>`]))
+  return { events, of, unsubscribe }
+}
+
+/** The crash-looping pod, once its container has restarted. */
+async function crashedPod(core: Core, sourceId: string) {
+  return vi.waitFor(
+    async () => {
+      const pod = await onlyPod(core, sourceId, 'deployments/crasher')
+      if (pod.kind !== 'pod' || pod.status.restarts < 1) throw new Error('not restarted yet')
+      return pod
+    },
+    { timeout: 90_000, interval: 2_000 }
+  )
+}
+
+describe.skipIf(!hasTestCluster)('Previous Logs against the test cluster', () => {
+  let core: Core
+  let sourceId: string
+
+  beforeEach(async () => {
+    core = createCore()
+    sourceId = (await core.addSource(testKubernetesLogsSource())).id
+    await core.connect(sourceId)
+  })
+
+  it('lists a restarted container’s Previous Log right after it, and opens the run before the current one', async () => {
+    const pod = await crashedPod(core, sourceId)
+
+    const [container, previous] = await core.expand(sourceId, pod.path)
+    expect(container).toMatchObject({ kind: 'container', name: 'crash' })
+    expect(previous).toEqual({ kind: 'previousLog', name: 'previous', path: `${pod.path}/crash/previous`, container: 'crash' })
+    expect(await core.openLog(sourceId, `${pod.path}/crash/previous`)).toMatchObject({
+      name: 'crash',
+      pod: pod.name,
+      previous: true,
+      content: 'crashing'
+    })
+  }, 120_000)
+
+  it('lists none for a container that has not restarted', async () => {
+    expect(described(await core.expand(sourceId, 'pods/counter'))).toEqual(['container counter'])
+  })
+
+  it('cannot be followed', async () => {
+    const pod = await crashedPod(core, sourceId)
+
+    await expect(core.followLog(sourceId, `${pod.path}/crash/previous`)).rejects.toMatchObject({ code: 'NOT_FOLLOWABLE' })
+  }, 120_000)
+})
+
+describe.skipIf(!hasTestCluster)('Following a Log Stream against the test cluster', () => {
+  let core: Core
+  let sourceId: string
+  let updates: ReturnType<typeof followUpdates>
+
+  beforeEach(async () => {
+    core = createCore()
+    sourceId = (await core.addSource(testKubernetesLogsSource())).id
+    await core.connect(sourceId)
+    updates = followUpdates(core)
+  })
+
+  afterEach(async () => {
+    await core.disconnect(sourceId)
+    updates.unsubscribe()
+  })
+
+  it('starts from the last N lines, and keeps that many of them', async () => {
+    const log = await core.followLog(sourceId, 'pods/counter/counter', { lastNLines: 2 })
+
+    expect(log).toMatchObject({ view: 'log', lastNLines: 2, content: 'line 99\nline 100', followId: expect.any(String) })
+  })
+
+  it('ends every Follow of a Source when it is disconnected', async () => {
+    const one = await core.followLog(sourceId, 'pods/counter/counter', { lastNLines: 1 })
+    const two = await core.followLog(sourceId, 'pods/counter/counter', { lastNLines: 1 })
+
+    await core.disconnect(sourceId)
+
+    expect(updates.events).toEqual([
+      { followId: one.followId, kind: 'ended', reason: 'disconnected' },
+      { followId: two.followId, kind: 'ended', reason: 'disconnected' }
+    ])
+  })
+
+  it('follows nothing once stopped', async () => {
+    const log = await core.followLog(sourceId, 'pods/counter/counter', { lastNLines: 1 })
+
+    await core.stopFollow(log.followId)
+    await core.disconnect(sourceId)
+
+    expect(updates.of(log.followId)).toEqual([])
+  })
+
+  describe('a container that keeps logging, then crashes and restarts', () => {
+    // One each: a deleted namespace takes a while to go, and its name can't be used again until it has.
+    let runs = 0
+    let tickerSource: string
+    let remove: () => Promise<void>
+    const ticker = 'pods/ticker/ticker'
+
+    beforeEach(async () => {
+      const namespace = `polyscope-test-follow-${process.pid}-${++runs}`
+      ;({ remove } = await tickerNamespace(namespace, 6))
+      tickerSource = (await core.addSource(testKubernetesLogsSource('Ticker', namespace))).id
+      await core.connect(tickerSource)
+    }, 150_000)
+
+    afterEach(async () => {
+      await core.disconnect(tickerSource)
+      await remove()
+    })
+
+    it('receives the lines logged after its snapshot, each once', async () => {
+      const log = await core.followLog(tickerSource, ticker, { lastNLines: 1_000 })
+
+      await vi.waitFor(() => expect(updates.of(log.followId).length).toBeGreaterThanOrEqual(2), { timeout: 15_000 })
+      const shown = [...log.content.split('\n'), ...updates.of(log.followId)].filter(Boolean).slice(0, 6)
+      expect(shown).toEqual(Array.from({ length: shown.length }, (_, i) => `tick ${i + 1}`))
+    }, 30_000)
+
+    it('marks the restart, then follows the new run from its start', async () => {
+      const log = await core.followLog(tickerSource, ticker, { lastNLines: 1_000 })
+
+      await vi.waitFor(() => expect(updates.of(log.followId)).toContain('<restarted>'), { timeout: 90_000, interval: 1_000 })
+      await vi.waitFor(() => expect(updates.of(log.followId).slice(-2)).not.toContain('<restarted>'), { timeout: 15_000 })
+
+      const lines = updates.of(log.followId)
+      expect(lines.slice(lines.indexOf('<restarted>'), lines.indexOf('<restarted>') + 2)).toEqual(['<restarted>', 'tick 1'])
+    }, 120_000)
+
+    it('holds back at most the last N lines while paused', async () => {
+      const log = await core.followLog(tickerSource, ticker, { lastNLines: 2 })
+      await core.pauseFollow(log.followId)
+
+      await new Promise((resolve) => setTimeout(resolve, 5_000))
+      expect(updates.of(log.followId)).toEqual([])
+      await core.resumeFollow(log.followId)
+
+      const held = updates.of(log.followId).filter((line) => !line.startsWith('<'))
+      expect(held).toHaveLength(2)
+      expect(held.map((line) => Number(line.slice('tick '.length)))).toEqual([expect.any(Number), expect.any(Number)])
+    }, 30_000)
   })
 })

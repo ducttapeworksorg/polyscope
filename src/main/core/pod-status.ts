@@ -10,6 +10,7 @@ import type {
   V1StatefulSet
 } from '@kubernetes/client-node'
 import type { PodHealth, PodStatus, ReadyCount, WorkloadKind } from '@shared/core-api'
+import type { ContainerInstance } from './log-source'
 
 /** Why a container ended, as kubectl puts it: its reason, or else the signal or exit code it ended with. */
 const endReason = ({ reason, signal, exitCode }: V1ContainerStateTerminated) =>
@@ -81,6 +82,23 @@ export function podStatusOf(pod: V1Pod): PodStatus {
 export function restartsOf(pod: V1Pod, container: string): number | undefined {
   const restarts = statusesOf(pod).find((c) => c.name === container)?.restartCount
   return restarts ? restarts : undefined
+}
+
+/** A container's current run, as a Follow needs it; undefined if the pod has no such container. */
+export function containerInstanceOf(pod: V1Pod, container: string): ContainerInstance | undefined {
+  const init = pod.spec?.initContainers?.find((c) => c.name === container)
+  const spec = init ?? pod.spec?.containers.find((c) => c.name === container)
+  if (!spec) return undefined
+  const status = statusesOf(pod).find((c) => c.name === container)
+  const restarts = status?.restartCount ?? 0
+  const state = status?.state?.running ? 'running' : status?.state?.terminated ? 'terminated' : 'waiting'
+  const exitCode = status?.state?.terminated?.exitCode
+  const policy = spec.restartPolicy ?? pod.spec?.restartPolicy ?? 'Always'
+  // An init container runs once, until it succeeds; a sidecar is restarted like any container that's always restarted.
+  const restartsOnlyOnFailure = policy === 'OnFailure' || (init !== undefined && !isSidecar(init))
+  const done = ['Succeeded', 'Failed'].includes(pod.status?.phase ?? '') || Boolean(pod.metadata?.deletionTimestamp)
+  const finished = state === 'terminated' && (done || policy === 'Never' || (restartsOnlyOnFailure && exitCode === 0))
+  return { restarts, state, finished }
 }
 
 type Workload = V1Deployment | V1StatefulSet | V1DaemonSet | V1Job | V1CronJob

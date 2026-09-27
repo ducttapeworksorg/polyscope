@@ -709,14 +709,56 @@ body.is-resizing {
 
 /* ---------- Log view ---------- */
 
-/* The "Last N lines" control at the top of a log view. */
+/* The controls at the top of a log view: "Last N lines" first, the toggles at the far end. */
 .log-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 6px 10px;
   padding: 5px 14px;
   border-bottom: 1px solid var(--line);
   font-size: var(--text-sm);
+}
+
+.log-toolbar__lines {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.log-toolbar__toggles {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.log-toolbar__toggle {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--slate-600);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.log-toolbar__toggle:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.log-toolbar__toggle[aria-pressed='true'] {
+  background: var(--slate-700);
+  color: var(--text);
+}
+
+.log-toolbar__toggle:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.log-toolbar__toggle:focus-visible {
+  outline: 1px solid var(--glint);
 }
 
 .log-toolbar__label {
@@ -875,6 +917,16 @@ body.is-resizing {
 .tree-row__label {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* A container's Previous Log sits under it, quieter than the log of its current run. */
+.tree-row--previous-log .tree-row__label {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.tree-row--previous-log .tree-row__icon {
+  opacity: 0.6;
 }
 
 .material-icon,

@@ -1,6 +1,6 @@
 import type { Environment } from '@shared/core-api'
 import { environmentOf, environmentStyle } from '../environments'
-import { isLog, type OpenTab } from '../workspace'
+import { isLog, tabName, type OpenTab } from '../workspace'
 import { t } from '../i18n'
 import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
 import { CloseIcon, FileIcon, LogIcon, ReloadIcon } from './icons'
@@ -52,11 +52,11 @@ export function Tabs({ tabs, activeKey, environments, onActivate, onPin, onReloa
               onContextMenu={(e) => openMenu(e, { tab })}
             >
               <span className="tab__icon">{isLog(tab.file) ? <LogIcon /> : <FileIcon />}</span>
-              <span className="tab__label">{tab.file.name}</span>
+              <span className="tab__label">{tabName(tab.file)}</span>
               <button
                 type="button"
                 className="tab__close"
-                aria-label={t('tabs.close', { name: tab.file.name })}
+                aria-label={t('tabs.close', { name: tabName(tab.file) })}
                 onClick={(e) => {
                   e.stopPropagation()
                   onClose(tab.key)
@@ -83,7 +83,7 @@ export function Tabs({ tabs, activeKey, environments, onActivate, onPin, onReloa
       )}
       {menu && (
         <ContextMenu
-          label={t('tabs.menuLabel', { name: menu.tab.file.name })}
+          label={t('tabs.menuLabel', { name: tabName(menu.tab.file) })}
           x={menu.x}
           y={menu.y}
           onClose={closeMenu}
