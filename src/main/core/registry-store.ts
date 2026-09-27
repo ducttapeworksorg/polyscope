@@ -1,10 +1,13 @@
 import { join } from 'node:path'
-import { sourceTypeIds, type SourceInfo, type SourceTypeId } from '@shared/core-api'
+import { sourceTypeIds, type LocalSourceInfo, type S3SourceInfo, type SourceTypeId } from '@shared/core-api'
 import { jsonFileWriter, readJsonFile } from './json-file'
+
+/** A Source as saved: what the core API hands out, less what it works out on the way (like whether a secret is set). */
+export type SavedSource = LocalSourceInfo | Omit<S3SourceInfo, 'secretKeySet'>
 
 /** Everything the user configured about their Sources, as saved between launches. */
 export interface Registry {
-  sources: SourceInfo[]
+  sources: SavedSource[]
   groupOrder: SourceTypeId[]
 }
 
@@ -44,7 +47,7 @@ export function createRegistryStore(dataDir: string): RegistryStore {
         groupOrder: groupOrder.filter((t) => !isSourceType(t))
       }
       return {
-        sources: sources.filter((s): s is SourceInfo => isSourceType(s.type)),
+        sources: sources.filter((s): s is SavedSource => isSourceType(s.type)),
         groupOrder: completeGroupOrder(groupOrder.filter(isSourceType))
       }
     },

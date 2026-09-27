@@ -5,7 +5,7 @@ export const en = {
   'sidebar.heading': 'Sources',
   'sidebar.add': 'Add Source',
   'sidebar.empty.title': 'No Sources yet',
-  'sidebar.empty.body': 'Add a folder on this computer to browse its files.',
+  'sidebar.empty.body': 'Add a folder on this computer or an S3 bucket to browse its files.',
   'sidebar.settings': 'Settings',
   'sidebar.settingsTooltip': 'Settings ({shortcut})',
   'sidebar.showDetails': 'Show sizes and modified times',
@@ -13,6 +13,8 @@ export const en = {
 
   'sourceType.local': 'Local Filesystem',
   'sourceType.local.hint': 'A folder on this computer',
+  'sourceType.s3': 'S3-compatible Storage',
+  'sourceType.s3.hint': 'A bucket on AWS, MinIO, Ceph…',
 
   'sourceDialog.addTitle': 'Add Source',
   'sourceDialog.editTitle': 'Edit {name}',
@@ -54,6 +56,19 @@ export const en = {
   'localSource.showHidden': 'Show hidden files',
   'localSource.showHidden.hint': 'Dotfiles, and files marked hidden on Windows.',
 
+  's3Source.host': 'Host',
+  's3Source.host.hint': 'The store’s address, like https://minio.internal:9000. Leave blank for AWS.',
+  's3Source.bucket': 'Bucket',
+  's3Source.prefix': 'Prefix',
+  's3Source.prefix.hint': 'Optional. Browse only the keys under it, like logs/app.',
+  's3Source.region': 'Region',
+  's3Source.pathStyle': 'Path-style addressing',
+  's3Source.pathStyle.hint': 'Needed by MinIO and most self-hosted stores.',
+  's3Source.accessKey': 'Access key',
+  's3Source.secretKey': 'Secret key',
+  's3Source.secretKey.stored': 'Stored in the OS keychain. Leave blank to keep it.',
+  's3Source.secretKey.missing': 'No secret key is stored. Enter it again.',
+
   'sourceActions.refresh': 'Refresh',
   'sourceActions.disconnect': 'Disconnect',
   'sourceActions.edit': 'Edit…',
@@ -71,6 +86,7 @@ export const en = {
   'tree.connecting': 'Connecting…',
   'tree.connectFailed': 'Couldn’t connect: {message}',
   'tree.modified': 'Modified {time}',
+  'tree.loadMore': 'Load more…',
 
   'tabs.close': 'Close {name}',
   'tabs.closeTab': 'Close',
@@ -157,6 +173,13 @@ export const en = {
   'error.INVALID_SETTINGS': 'Those settings aren’t valid: {message}',
   'error.INVALID_ENCODING': 'That encoding isn’t supported: {message}',
   'error.DECOMPRESSION_FAILED': 'This file couldn’t be decompressed: {message}',
+  'error.INVALID_HOST': 'That host isn’t an http or https address.',
+  'error.BUCKET_REQUIRED': 'Enter the bucket to browse.',
+  'error.ACCESS_KEY_REQUIRED': 'Enter an access key.',
+  'error.SECRET_KEY_REQUIRED': 'Enter the secret key.',
+  'error.BUCKET_NOT_FOUND': 'That bucket doesn’t exist.',
+  'error.AUTH_FAILED': 'The access key or secret key was refused.',
+  'error.UNREACHABLE': 'Couldn’t reach the store: {message}',
   'error.UNKNOWN': 'Couldn’t complete that: {message}'
 } satisfies Record<string, string> &
   Record<`error.${CoreErrorCode}`, string> &

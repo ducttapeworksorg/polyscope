@@ -3,10 +3,10 @@
 
 import type { Settings } from './settings'
 
-export type SourceTypeId = 'local'
+export type SourceTypeId = 'local' | 's3'
 
 /** Every Source Type, in the default order of its sidebar group. */
-export const sourceTypeIds: readonly SourceTypeId[] = ['local']
+export const sourceTypeIds: readonly SourceTypeId[] = ['local', 's3']
 
 export interface NewLocalSource {
   type: 'local'
@@ -18,18 +18,56 @@ export interface NewLocalSource {
   environmentId?: string
 }
 
-/** The user-editable settings of a Source; its Source Type decides which fields exist. */
-export type NewSource = NewLocalSource
-
-export interface SourceInfo {
-  id: string
-  type: SourceTypeId
+export interface NewS3Source {
+  type: 's3'
   name: string
-  rootPath: string
-  showHidden: boolean
+  /** The store's address, e.g. `https://minio.internal:9000`; https is assumed without a scheme. Blank for AWS itself. */
+  host: string
+  bucket: string
+  /** The key prefix the Source is rooted at, e.g. `logs/app`; the whole bucket when blank or left out. */
+  prefix?: string
+  /** `us-east-1` when blank or left out. */
+  region?: string
+  /** Addresses the bucket in the path rather than the host name, as MinIO and most self-hosted stores need; off unless given. */
+  pathStyle?: boolean
+  accessKeyId: string
+  /** Goes into the OS keychain and never comes back out of the core. Blank or left out when editing keeps the stored one. */
+  secretAccessKey?: string
+  /** The Environment the Source is labelled with; unlabelled when left out. */
+  environmentId?: string
+}
+
+/** The user-editable settings of a Source; its Source Type decides which fields exist. */
+export type NewSource = NewLocalSource | NewS3Source
+
+interface SourceIdentity {
+  id: string
+  name: string
   /** Left out when the Source isn't labelled with an Environment. */
   environmentId?: string
 }
+
+export interface LocalSourceInfo extends SourceIdentity {
+  type: 'local'
+  rootPath: string
+  showHidden: boolean
+}
+
+export interface S3SourceInfo extends SourceIdentity {
+  type: 's3'
+  /** Normalised: a URL with its scheme, or blank for AWS itself. */
+  host: string
+  bucket: string
+  /** Normalised: no leading or trailing '/', blank for the whole bucket. */
+  prefix: string
+  region: string
+  pathStyle: boolean
+  accessKeyId: string
+  /** Whether a secret key is stored for the Source; the key itself never leaves the core. */
+  secretKeySet: boolean
+}
+
+export type SourceInfo = LocalSourceInfo | S3SourceInfo
 
 /** A user-defined label for the kind of system Sources point at, e.g. prod or dev. */
 export interface Environment {
@@ -84,7 +122,15 @@ export interface ErrorNode {
   message: string
 }
 
-export type TreeNode = EntryNode | ErrorNode
+/** Stands in for the rest of a folder too long to list at once; expanding `path` with `cursor` lists the next page. */
+export interface MoreNode {
+  kind: 'more'
+  /** The folder being listed. */
+  path: SourcePath
+  cursor: string
+}
+
+export type TreeNode = EntryNode | ErrorNode | MoreNode
 
 /** Whether the app is talking to a Source right now. Never persisted: every launch starts Disconnected. */
 export type ConnectionState =
@@ -174,6 +220,13 @@ export type CoreErrorCode =
   | 'INVALID_SETTINGS'
   | 'INVALID_ENCODING'
   | 'DECOMPRESSION_FAILED'
+  | 'INVALID_HOST'
+  | 'BUCKET_REQUIRED'
+  | 'ACCESS_KEY_REQUIRED'
+  | 'SECRET_KEY_REQUIRED'
+  | 'BUCKET_NOT_FOUND'
+  | 'AUTH_FAILED'
+  | 'UNREACHABLE'
   | 'UNKNOWN'
 
 export interface CoreApi {
@@ -197,14 +250,20 @@ export interface CoreApi {
   /** Removes an Environment; the Sources labelled with it become unlabelled. */
   deleteEnvironment(environmentId: string): Promise<void>
   connectionState(sourceId: string): Promise<ConnectionState>
-  /** Resolves the Source's settings, checks it can be reached and returns its root's children. */
-  connect(sourceId: string): Promise<EntryNode[]>
-  /** Checks that settings could be connected to, without saving anything. */
-  testConnection(input: NewSource): Promise<void>
+  /** Resolves the Source's settings, checks it can be reached and returns its root's children (the first page of them). */
+  connect(sourceId: string): Promise<TreeNode[]>
+  /**
+   * Checks that settings could be connected to, without saving anything. When editing, `sourceId`
+   * names the Source whose stored secrets stand in for any left blank.
+   */
+  testConnection(input: NewSource, sourceId?: string): Promise<void>
   /** Drops the connection and stops all activity against the Source. */
   disconnect(sourceId: string): Promise<void>
-  /** The children of a node in a Connected Source; if they can't be listed, a single error node instead. */
-  expand(sourceId: string, path: SourcePath): Promise<TreeNode[]>
+  /**
+   * The children of a node in a Connected Source, a page at a time: a long listing ends in a more node,
+   * whose `cursor` lists the next page. If they can't be listed, a single error node instead.
+   */
+  expand(sourceId: string, path: SourcePath, cursor?: string): Promise<TreeNode[]>
   /** Reads a file and decides how to show it; `options` reopens it another way, e.g. in another encoding. */
   openFile(sourceId: string, path: SourcePath, options?: OpenOptions): Promise<OpenedFile>
   getSettings(): Promise<Settings>

@@ -50,3 +50,41 @@ jobs:
             playwright-report
             test-results
           if-no-files-found: ignore
+
+  # Source Types against real backends: S3 against RustFS, an S3-compatible store with ready-built releases.
+  integration:
+    name: integration (S3)
+    runs-on: ubuntu-latest
+    env:
+      RUSTFS_VERSION: 1.0.1-preview.11
+      # Pinned, so a release replaced upstream fails the build instead of running unseen.
+      RUSTFS_SHA256: c574b3b051c333eafa67140d5a62f0866cc0f3b2af3d82c94a505ed20ce3ed9b
+      POLYSCOPE_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+      POLYSCOPE_TEST_S3_ACCESS_KEY: polyscope
+      POLYSCOPE_TEST_S3_SECRET_KEY: polyscope-secret
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Start RustFS
+        run: |
+          archive="rustfs-linux-x86_64-musl-v$RUSTFS_VERSION.zip"
+          curl -sSfL -o "$RUNNER_TEMP/$archive" "https://github.com/rustfs/rustfs/releases/download/$RUSTFS_VERSION/$archive"
+          echo "$RUSTFS_SHA256  $RUNNER_TEMP/$archive" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/$archive" rustfs -d "$RUNNER_TEMP/rustfs"
+          mkdir -p "$RUNNER_TEMP/rustfs-data"
+          nohup "$RUNNER_TEMP/rustfs/rustfs" server --address 127.0.0.1:9000 \
+            --access-key "$POLYSCOPE_TEST_S3_ACCESS_KEY" --secret-key "$POLYSCOPE_TEST_S3_SECRET_KEY" \
+            "$RUNNER_TEMP/rustfs-data" > "$RUNNER_TEMP/rustfs.log" 2>&1 &
+          for _ in $(seq 1 60); do curl -sf http://127.0.0.1:9000/health > /dev/null && exit 0; sleep 1; done
+          cat "$RUNNER_TEMP/rustfs.log"
+          exit 1
+
+      - run: npm ci
+
+      # The rest of the suite already runs in the build job; only the S3 tests need the store.
+      - run: npx vitest run src/main/core/s3

@@ -9,7 +9,7 @@ import {
   type MouseEvent,
   type ReactNode
 } from 'react'
-import type { ConnectionState, EntryNode, Environment, ErrorNode, SourceInfo, SourcePath } from '@shared/core-api'
+import type { ConnectionState, EntryNode, Environment, SourceInfo, SourcePath, TreeNode } from '@shared/core-api'
 import type { Theme } from '@shared/settings'
 import { core, describeError, describeFailure } from '../core-client'
 import { t } from '../i18n'
@@ -26,7 +26,7 @@ interface Props {
   /** The Environment the Source is labelled with, shown as a badge after its name. */
   environment?: Environment
   /** Connects the Source, resolving to its root's children or null if it couldn't connect. */
-  onConnect(): Promise<EntryNode[] | null>
+  onConnect(): Promise<TreeNode[] | null>
   /** Buttons at the end of the Source's own row; the tree puts its own, like Refresh, ahead of them. */
   sourceActions: SourceAction[]
   onContextMenu(event: MouseEvent<HTMLElement>, label: string, items: MenuItem[]): void
@@ -54,9 +54,24 @@ export interface SourceAction {
 
 export const nodeKey = (sourceId: string, path: SourcePath) => `${sourceId}:${path}`
 
-type Listing = { state: 'loading' } | { state: 'loaded'; nodes: EntryNode[] } | { state: 'failed'; message: string }
+/** The rest of a folder too long to list at once: what lists its next page, and how that's going. */
+type More =
+  | { cursor: string; state: 'idle' }
+  | { cursor: string; state: 'loading' }
+  | { cursor: string; state: 'failed'; message: string }
 
-const isError = (node: EntryNode | ErrorNode): node is ErrorNode => node.kind === 'error'
+type Listing = { state: 'loading' } | { state: 'loaded'; nodes: EntryNode[]; more?: More } | { state: 'failed'; message: string }
+
+/** A page of listed nodes as a listing, or a failed one if it's an error node; `before` are the pages loaded already. */
+function listingOf(page: TreeNode[], before: EntryNode[] = []): Listing {
+  const failure = page.find((n) => n.kind === 'error')
+  if (failure) return { state: 'failed', message: describeFailure(failure) }
+  const more = page.find((n) => n.kind === 'more')
+  const entries = [...before, ...page.filter((n): n is EntryNode => n.kind === 'folder' || n.kind === 'file')]
+  // Each page comes folders first; joined, a later page's folders still go ahead of every file.
+  const nodes = [...entries.filter((n) => n.kind === 'folder'), ...entries.filter((n) => n.kind === 'file')]
+  return more ? { state: 'loaded', nodes, more: { cursor: more.cursor, state: 'idle' } } : { state: 'loaded', nodes }
+}
 
 interface RowProps {
   path: SourcePath
@@ -121,12 +136,32 @@ export function SourceTree(props: Props) {
     const settle = (listing: Listing) => loadedIn === generation.current && setListing(path, listing)
     setListing(path, { state: 'loading' })
     core.expand(source.id, path).then(
-      (nodes) => {
-        const failure = nodes.find(isError)
-        if (failure) settle({ state: 'failed', message: describeFailure(failure) })
-        else settle({ state: 'loaded', nodes: nodes.filter((n): n is EntryNode => !isError(n)) })
-      },
+      (nodes) => settle(listingOf(nodes)),
       (error) => settle({ state: 'failed', message: describeError(error) })
+    )
+  }
+
+  /** Lists the next page of a long folder after the pages already shown. */
+  const loadMore = (path: SourcePath) => {
+    const listing = listings.get(path)
+    if (listing?.state !== 'loaded' || !listing.more || listing.more.state === 'loading') return
+    const { cursor } = listing.more
+    const loadedIn = generation.current
+    // Only the listing this page continues is updated: a refresh meanwhile has replaced it.
+    const settle = (next: (current: Extract<Listing, { state: 'loaded' }>) => Listing) =>
+      setListings((prev) => {
+        const current = prev.get(path)
+        if (loadedIn !== generation.current || current?.state !== 'loaded' || current.more?.cursor !== cursor) return prev
+        return new Map(prev).set(path, next(current))
+      })
+    settle((current) => ({ ...current, more: { cursor, state: 'loading' } }))
+    core.expand(source.id, path, cursor).then(
+      (page) =>
+        settle((current) => {
+          const next = listingOf(page, current.nodes)
+          return next.state === 'failed' ? { ...current, more: { cursor, state: 'failed', message: next.message } } : next
+        }),
+      (error) => settle((current) => ({ ...current, more: { cursor, state: 'failed', message: describeError(error) } }))
     )
   }
 
@@ -150,7 +185,7 @@ export function SourceTree(props: Props) {
     if (connection.state === 'connecting') return
     const nodes = await onConnect()
     if (!nodes) return
-    setListing('', { state: 'loaded', nodes })
+    setListing('', listingOf(nodes))
     setExpanded((prev) => new Set(prev).add(''))
   }
 
@@ -238,8 +273,8 @@ export function SourceTree(props: Props) {
       )
       return [note(path, depth, content, 'tree-note--error')]
     }
-    if (listing.nodes.length === 0) return [note(path, depth, t('tree.emptyFolder'))]
-    return listing.nodes.flatMap((node) => {
+    if (listing.nodes.length === 0 && !listing.more) return [note(path, depth, t('tree.emptyFolder'))]
+    const rows = listing.nodes.flatMap((node) => {
       if (node.problem) {
         const reason = describeFailure(node.problem)
         return [
@@ -271,6 +306,27 @@ export function SourceTree(props: Props) {
       })
       return isFolder && expanded.has(node.path) ? [self, ...renderChildren(node.path, depth + 1)] : [self]
     })
+    return listing.more ? [...rows, moreNote(path, depth, listing.more)] : rows
+  }
+
+  /** Where a long folder's listing stops: a way to list the next page, or how that's going. */
+  const moreNote = (path: SourcePath, depth: number, more: More) => {
+    if (more.state === 'loading') return note(`${path}#more`, depth, t('tree.loading'))
+    const button = (label: string) => (
+      <button type="button" className="link-button" onClick={() => loadMore(path)}>
+        {label}
+      </button>
+    )
+    if (more.state === 'idle') return note(`${path}#more`, depth, button(t('tree.loadMore')))
+    const content = (
+      <>
+        <span className="tree-note__message" title={more.message}>
+          {more.message}
+        </span>
+        {button(t('tree.retry'))}
+      </>
+    )
+    return note(`${path}#more`, depth, content, 'tree-note--error')
   }
 
   const actions: SourceAction[] = [

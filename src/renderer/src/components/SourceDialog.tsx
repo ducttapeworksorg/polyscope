@@ -47,7 +47,7 @@ export function SourceDialog({ editing, environments, onManageEnvironments, onSa
     // Settings changed while testing replace the run; its result would describe settings no longer shown.
     const finish = (outcome: TestRun) => setTest((current) => (current === run ? outcome : current))
     try {
-      await core.testConnection(settings)
+      await core.testConnection(settings, editing?.id)
       finish({ state: 'passed' })
     } catch (e) {
       finish({ state: 'failed', message: describeError(e) })
@@ -137,7 +137,7 @@ export function SourceDialog({ editing, environments, onManageEnvironments, onSa
           </div>
         </div>
 
-        <ui.Fields value={settings} onChange={change} />
+        <ui.Fields value={settings} onChange={change} editing={editing} />
 
         <div className="dialog__test">
           <button type="button" className="button button--quiet" disabled={test?.state === 'testing'} onClick={testConnection}>

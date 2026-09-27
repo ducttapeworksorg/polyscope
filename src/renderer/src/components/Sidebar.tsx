@@ -1,10 +1,10 @@
 import { useCallback, useRef, useState, type DragEvent, type HTMLAttributes, type MouseEvent } from 'react'
-import type { ConnectionState, EntryNode, Environment, SourceInfo, SourceTypeId } from '@shared/core-api'
+import type { ConnectionState, EntryNode, Environment, SourceInfo, SourceTypeId, TreeNode } from '@shared/core-api'
 import type { Theme } from '@shared/settings'
 import { core, describeError } from '../core-client'
 import { environmentOf } from '../environments'
 import { t } from '../i18n'
-import { uiFor } from '../source-types'
+import { targetOf, uiFor } from '../source-types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
 import { DetailsIcon, DuplicateIcon, GearIcon, PencilIcon, PlusIcon, TrashIcon, UnlinkIcon } from './icons'
@@ -20,7 +20,7 @@ interface Props {
   /** Each Source's connection state; Sources without an entry are Disconnected. */
   connections: ReadonlyMap<string, ConnectionState>
   /** Connects a Source, resolving to its root's children or null if it couldn't connect. */
-  onConnect(source: SourceInfo): Promise<EntryNode[] | null>
+  onConnect(source: SourceInfo): Promise<TreeNode[] | null>
   onDisconnect(source: SourceInfo): void
   /** Something about the Sources changed; the caller reloads them from the core. */
   onSourcesChanged(): void
@@ -234,8 +234,8 @@ export function Sidebar(props: Props) {
               </h3>
               {group.sources.map((source) => (
                 <SourceTree
-                  // A new root means a new tree: nothing expanded under the old one carries over.
-                  key={`${source.id}:${source.rootPath}`}
+                  // A new target means a new tree: nothing expanded under the old one carries over.
+                  key={`${source.id}:${targetOf(source)}`}
                   source={source}
                   connection={connections.get(source.id) ?? disconnected}
                   environment={environmentOf(environments, source)}

@@ -5,11 +5,15 @@ import type {
   CoreEvents,
   EntryNode,
   Environment,
+  LocalSourceInfo,
   NewEnvironment,
+  NewS3Source,
   NewSource,
+  S3SourceInfo,
   SourceInfo,
   SourcePath,
-  SourceTypeId
+  SourceTypeId,
+  TreeNode
 } from '@shared/core-api'
 import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings } from '@shared/settings'
 import { CoreError } from './core-error'
@@ -19,7 +23,8 @@ import { fileIcon, folderIcon } from './file-icons'
 import type { FileSource } from './file-source'
 import { languageFor } from './languages'
 import { createLocalFileSource } from './local-file-source'
-import { createRegistryStore, emptyRegistry } from './registry-store'
+import { createRegistryStore, emptyRegistry, type SavedSource } from './registry-store'
+import { createS3FileSource } from './s3-file-source'
 import { createSecretStore, type SecretStore } from './secret-store'
 import { createSettingsStore } from './settings-store'
 
@@ -28,10 +33,47 @@ const asCoreError = (error: unknown) =>
 const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 
 /** Fills in settings added since a Source was saved with their defaults. */
-const withDefaults = (source: SourceInfo): SourceInfo => ({ ...source, showHidden: source.showHidden ?? true })
+const withDefaults = (source: SavedSource): SavedSource =>
+  source.type === 'local' ? { ...source, showHidden: source.showHidden ?? true } : source
 
 /** A Source without its Environment label. */
-const unlabelled = ({ environmentId: _, ...source }: SourceInfo): SourceInfo => source
+const unlabelled = <S extends SavedSource>({ environmentId: _, ...source }: S) => source as S
+
+/** Where a Source points and how it gets there: its settings, less its id, name and label. */
+type Target =
+  | Pick<LocalSourceInfo, 'type' | 'rootPath' | 'showHidden'>
+  | Pick<S3SourceInfo, 'type' | 'host' | 'bucket' | 'prefix' | 'region' | 'pathStyle' | 'accessKeyId'>
+
+/** The name an S3 Source's secret key is stored under. */
+const secretKeyName = 'secretKey'
+
+const isBlank = (value: string | undefined) => !value?.trim()
+
+/** An S3 host as a URL with a scheme (https unless given), or blank for AWS itself. */
+function normaliseHost(input: string) {
+  const host = input.trim()
+  if (!host) return ''
+  const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(host) ? host : `https://${host}`
+  const parsed = URL.canParse(url) ? new URL(url) : null
+  if (!parsed?.hostname || !['http:', 'https:'].includes(parsed.protocol)) {
+    throw new CoreError('INVALID_HOST', `Not an http(s) address: ${input}`)
+  }
+  return url.replace(/\/+$/, '')
+}
+
+/** Checks the settings specific to a Source's Source Type and returns them normalised. */
+function targetOf(input: NewSource): Target {
+  if (input.type === 'local') return { type: 'local', rootPath: input.rootPath.trim(), showHidden: input.showHidden ?? true }
+  const s3: NewS3Source = input
+  const host = normaliseHost(s3.host ?? '')
+  const bucket = s3.bucket?.trim() ?? ''
+  if (!bucket) throw new CoreError('BUCKET_REQUIRED', 'An S3 Source needs a bucket')
+  const accessKeyId = s3.accessKeyId?.trim() ?? ''
+  if (!accessKeyId) throw new CoreError('ACCESS_KEY_REQUIRED', 'An S3 Source needs an access key')
+  const prefix = (s3.prefix ?? '').trim().replace(/^\/+|\/+$/g, '')
+  const region = s3.region?.trim() || 'us-east-1'
+  return { type: 's3', host, bucket, prefix, region, pathStyle: s3.pathStyle ?? false, accessKeyId }
+}
 
 export interface CoreOptions {
   /** Where the registry is saved between launches; without it, nothing outlives the core. */
@@ -123,8 +165,13 @@ export function createCore(options: CoreOptions = {}): Core {
    * A copy of a Source to hand out. A label whose Environment is gone (say, its file was unreadable)
    * is left out, but kept in the registry, so putting the Environment back restores it.
    */
-  const handOut = (source: SourceInfo) =>
-    source.environmentId === undefined || environments.some((e) => e.id === source.environmentId) ? { ...source } : unlabelled(source)
+  const handOut = async (saved: SavedSource): Promise<SourceInfo> => {
+    const source =
+      saved.environmentId === undefined || environments.some((e) => e.id === saved.environmentId) ? { ...saved } : unlabelled(saved)
+    if (source.type === 'local') return source
+    // Only whether there is a secret: the secret itself stays in the core.
+    return { ...source, secretKeySet: (await secrets.get(source.id, secretKeyName)) !== undefined }
+  }
 
   const fileSourceFor = (sourceId: string) => {
     const source = sourceFor(sourceId)
@@ -135,9 +182,10 @@ export function createCore(options: CoreOptions = {}): Core {
     return connection.fileSource
   }
 
-  const listNodes = async (fileSource: FileSource, path: SourcePath) => {
-    const entries = await fileSource.listChildren(path)
-    return entries
+  /** A page of a folder's children, folders first, then files, each by name; a more node ends it if there are more. */
+  const listNodes = async (fileSource: FileSource, path: SourcePath, cursor?: string): Promise<TreeNode[]> => {
+    const page = await fileSource.listChildren(path, cursor)
+    const nodes = page.entries
       .map(
         (e): EntryNode => ({
           kind: e.kind,
@@ -151,10 +199,11 @@ export function createCore(options: CoreOptions = {}): Core {
         })
       )
       .sort((a, b) => (a.kind === b.kind ? byName.compare(a.name, b.name) : a.kind === 'folder' ? -1 : 1))
+    return page.cursor === undefined ? nodes : [...nodes, { kind: 'more', path, cursor: page.cursor }]
   }
 
-  /** Opens a File Source for a Source's settings, once it's clear it can be reached. */
-  const reach = async ({ rootPath, showHidden = true }: Pick<NewSource, 'rootPath' | 'showHidden'>) => {
+  /** Opens a Local File Source at its root folder, once it's clear the folder is there. */
+  const reachLocal = async ({ rootPath, showHidden }: Extract<Target, { type: 'local' }>) => {
     const fileSource = createLocalFileSource(rootPath, { showHidden })
     const root = await fileSource.stat('').catch(() => null)
     if (!root) throw new CoreError('ROOT_NOT_FOUND', `Root path does not exist: ${rootPath}`)
@@ -162,27 +211,51 @@ export function createCore(options: CoreOptions = {}): Core {
     return fileSource
   }
 
-  /** Reaches a Source and lists its root: what connecting, or testing a connection, has to get through. */
-  const open = async (settings: Pick<NewSource, 'rootPath' | 'showHidden'>) => {
-    const fileSource = await reach(settings)
+  /**
+   * Opens a Source's File Source and lists its root: what connecting, or testing a connection, has to get through.
+   * An S3 Source needs its `secretKey`; it proves it can sign in by listing.
+   */
+  const open = async (target: Target, secretKey?: string) => {
+    let fileSource: FileSource
+    if (target.type === 'local') fileSource = await reachLocal(target)
+    else if (secretKey === undefined) throw new CoreError('SECRET_KEY_REQUIRED', 'No secret key is stored for this Source')
+    else fileSource = createS3FileSource({ ...target, secretAccessKey: secretKey })
     return { fileSource, nodes: await listNodes(fileSource, '') }
   }
 
-  /** Checks new or edited settings and returns them normalised, without an id. */
-  const validate = async (input: NewSource): Promise<Omit<SourceInfo, 'id'>> => {
+  /** The secret key typed in `input`, or else the one stored for `sourceId`; undefined if there's neither. */
+  const secretKeyFor = async (input: NewSource, sourceId?: string) => {
+    if (input.type !== 's3') return undefined
+    if (!isBlank(input.secretAccessKey)) return input.secretAccessKey
+    return sourceId === undefined ? undefined : secrets.get(sourceId, secretKeyName)
+  }
+
+  /**
+   * Checks new or edited settings and returns them normalised, without an id, along with a secret key
+   * typed in them. `editing` is the id of the Source they replace, whose stored secret key can stay.
+   */
+  const validate = async (input: NewSource, editing?: string): Promise<{ saved: Omit<SavedSource, 'id'>; secretKey?: string }> => {
     const name = input.name.trim()
     if (!name) throw new CoreError('NAME_REQUIRED', 'A Source needs a name')
     const { environmentId } = input
     if (environmentId !== undefined) environmentFor(environmentId)
-    const rootPath = input.rootPath.trim()
-    const showHidden = input.showHidden ?? true
-    await reach({ rootPath, showHidden })
-    return { type: input.type, name, rootPath, showHidden, ...(environmentId !== undefined && { environmentId }) }
+    const label = environmentId !== undefined && { environmentId }
+    const target = targetOf(input)
+    if (target.type === 'local') {
+      await reachLocal(target)
+      return { saved: { ...target, name, ...label } }
+    }
+    // An S3 Source isn't reached until it's connected: it may be saved while its store is away.
+    const typed = await secretKeyFor(input)
+    if (typed === undefined && (await secretKeyFor(input, editing)) === undefined) {
+      throw new CoreError('SECRET_KEY_REQUIRED', 'An S3 Source needs a secret key')
+    }
+    return { saved: { ...target, name, ...label }, ...(typed !== undefined && { secretKey: typed }) }
   }
 
   /** Every setting but the name and label, in a form that compares equal whatever order the keys were saved in. */
-  const target = ({ name: _, environmentId: __, ...settings }: SourceInfo) => JSON.stringify(Object.entries(settings).sort())
-  const sameTarget = (a: SourceInfo, b: SourceInfo) => target(a) === target(b)
+  const target = ({ name: _, environmentId: __, ...settings }: SavedSource) => JSON.stringify(Object.entries(settings).sort())
+  const sameTarget = (a: SavedSource, b: SavedSource) => target(a) === target(b)
 
   const copyName = (name: string) => {
     const taken = new Set(sources.map((s) => s.name))
@@ -202,26 +275,45 @@ export function createCore(options: CoreOptions = {}): Core {
   return {
     async listSources() {
       await loaded
-      const rank = (s: SourceInfo) => groupOrder.indexOf(s.type)
-      return sources.toSorted((a, b) => rank(a) - rank(b)).map(handOut)
+      const rank = (s: SavedSource) => groupOrder.indexOf(s.type)
+      return Promise.all(sources.toSorted((a, b) => rank(a) - rank(b)).map(handOut))
     },
 
     async addSource(input) {
       await loaded
-      const source: SourceInfo = { id: randomUUID(), ...(await validate(input)) }
-      await commit(() => sources.push(source))
-      return { ...source }
+      const { saved, secretKey } = await validate(input)
+      const source = { id: randomUUID(), ...saved } as SavedSource
+      if (secretKey !== undefined) await secrets.set(source.id, secretKeyName, secretKey)
+      try {
+        await commit(() => sources.push(source))
+      } catch (error) {
+        await secrets.remove(source.id)
+        throw error
+      }
+      return handOut(source)
     },
 
     async editSource(sourceId, input) {
       await loaded
       sourceFor(sourceId) // an unknown Source is reported before any invalid settings
-      const source: SourceInfo = { id: sourceId, ...(await validate(input)) }
+      const { saved, secretKey } = await validate(input, sourceId)
+      const source = { id: sourceId, ...saved } as SavedSource
       const before = sourceFor(sourceId)
-      await commit(() => (sources[sources.indexOf(before)] = source))
-      // A new name keeps the connection; anything else points somewhere new and needs connecting afresh.
-      if (!sameTarget(before, source)) connections.delete(sourceId)
-      return { ...source }
+      const previousKey = secretKey === undefined ? undefined : await secrets.get(sourceId, secretKeyName)
+      if (secretKey !== undefined) await secrets.set(sourceId, secretKeyName, secretKey)
+      try {
+        await commit(() => (sources[sources.indexOf(before)] = source))
+      } catch (error) {
+        // The secret key is a Source's only secret, so forgetting its secrets forgets just the one written here.
+        if (previousKey !== undefined) await secrets.set(sourceId, secretKeyName, previousKey)
+        else if (secretKey !== undefined) await secrets.remove(sourceId)
+        throw error
+      }
+      // A Source that no longer signs in with a secret key has no use for the one it had.
+      if (source.type !== 's3') await secrets.remove(sourceId)
+      // A new name keeps the connection; anything else, a new secret included, needs connecting afresh.
+      if (!sameTarget(before, source) || secretKey !== undefined) connections.delete(sourceId)
+      return handOut(source)
     },
 
     async duplicateSource(sourceId) {
@@ -231,7 +323,7 @@ export function createCore(options: CoreOptions = {}): Core {
       try {
         // Looked up again: the registry may have changed while the secrets were copied.
         const original = sourceFor(sourceId)
-        const copy: SourceInfo = { ...original, id, name: copyName(original.name) }
+        const copy: SavedSource = { ...original, id, name: copyName(original.name) }
         await commit(() => sources.splice(sources.indexOf(original) + 1, 0, copy))
         return handOut(copy)
       } catch (error) {
@@ -327,7 +419,7 @@ export function createCore(options: CoreOptions = {}): Core {
       }
       let opened: Awaited<ReturnType<typeof open>>
       try {
-        opened = await open(source)
+        opened = await open(source, source.type === 's3' ? await secrets.get(sourceId, secretKeyName) : undefined)
       } catch (error) {
         const failure = asCoreError(error)
         settle({ state: 'error', code: failure.code, message: failure.message })
@@ -337,8 +429,9 @@ export function createCore(options: CoreOptions = {}): Core {
       return opened.nodes
     },
 
-    async testConnection(input) {
-      await open({ rootPath: input.rootPath.trim(), showHidden: input.showHidden })
+    async testConnection(input, sourceId) {
+      await loaded
+      await open(targetOf(input), await secretKeyFor(input, sourceId))
     },
 
     async disconnect(sourceId) {
@@ -347,11 +440,11 @@ export function createCore(options: CoreOptions = {}): Core {
       connections.delete(sourceId)
     },
 
-    async expand(sourceId, path) {
+    async expand(sourceId, path, cursor) {
       await loaded
       const fileSource = fileSourceFor(sourceId)
       try {
-        return await listNodes(fileSource, path)
+        return await listNodes(fileSource, path, cursor)
       } catch (error) {
         const { code, message } = asCoreError(error)
         return [{ kind: 'error', path, code, message }]

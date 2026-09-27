@@ -486,6 +486,13 @@ body.is-resizing {
   font-size: var(--text-sm);
 }
 
+/* Two short fields side by side, like an S3 Source's bucket and region. */
+.field-pair {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 12px;
+}
+
 /* A checkbox with its label beside it and any hint beneath the label. */
 .field--check {
   grid-template-columns: auto 1fr;

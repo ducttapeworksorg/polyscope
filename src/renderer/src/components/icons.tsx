@@ -35,6 +35,15 @@ export const HardDriveIcon = () => (
   </svg>
 )
 
+/** A generic bucket: an open-topped pail, for S3-compatible storage (never the AWS logo). */
+export const BucketIcon = () => (
+  <svg {...base}>
+    <ellipse cx="8" cy="3.75" rx="5.5" ry="1.75" />
+    <path d="M2.5 3.75l1.35 9.1c.1.7 1.95 1.4 4.15 1.4s4.05-.7 4.15-1.4l1.35-9.1" />
+    <path d="M3.1 7.75c.9.6 2.8 1 4.9 1s4-.4 4.9-1" />
+  </svg>
+)
+
 export const WarningIcon = () => (
   <svg {...base}>
     <path d="M8 2.25l6.25 11H1.75z" />

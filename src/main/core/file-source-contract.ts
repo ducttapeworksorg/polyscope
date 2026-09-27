@@ -18,6 +18,19 @@ function bytes(length: number) {
   return content
 }
 const byName = (a: { name: string }, b: { name: string }) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+/** Every entry of a folder, following its pages to the end. */
+async function listAll(source: FileSource, path: SourcePath) {
+  const entries: FileEntry[] = []
+  let cursor: string | undefined
+  for (let pages = 0; pages < 1000; pages++) {
+    const page = await source.listChildren(path, cursor)
+    entries.push(...page.entries)
+    if (page.cursor === undefined) return entries
+    cursor = page.cursor
+  }
+  throw new Error(`Listing ${path} never ended`)
+}
+
 /** What was listed, leaving out the optional metadata. */
 const kindsAndNames = (entries: FileEntry[]) => entries.map(({ kind, name }) => ({ kind, name })).toSorted(byName)
 
@@ -39,7 +52,7 @@ export function describeFileSourceContract(name: string, seed: (tree: SeedTree) 
     describe('listing', () => {
       it('lists the files and folders in the root', () =>
         withSource({ 'a.log': 'a', 'logs/b.log': 'b', empty: null }, async (source) => {
-          expect(kindsAndNames(await source.listChildren(''))).toEqual([
+          expect(kindsAndNames(await listAll(source, ''))).toEqual([
             { kind: 'file', name: 'a.log' },
             { kind: 'folder', name: 'empty' },
             { kind: 'folder', name: 'logs' }
@@ -48,7 +61,7 @@ export function describeFileSourceContract(name: string, seed: (tree: SeedTree) 
 
       it('lists a nested folder', () =>
         withSource({ 'app/current/server.log': 'x', 'app/current/old': null }, async (source) => {
-          expect(kindsAndNames(await source.listChildren('app/current'))).toEqual([
+          expect(kindsAndNames(await listAll(source, 'app/current'))).toEqual([
             { kind: 'folder', name: 'old' },
             { kind: 'file', name: 'server.log' }
           ])
@@ -56,26 +69,26 @@ export function describeFileSourceContract(name: string, seed: (tree: SeedTree) 
 
       it('lists sizes and modified times, where it gives them, that agree with stat', () =>
         withSource({ 'a.log': 'twelve bytes', logs: null }, async (source) => {
-          for (const entry of await source.listChildren('')) {
+          for (const entry of await listAll(source, '')) {
             const info = await source.stat(entry.name)
-            if (entry.size !== undefined && entry.kind === 'file') expect(entry.size).toBe(info.size)
+            if (entry.size !== undefined && info.kind === 'file') expect(entry.size).toBe(info.size)
             if (entry.modifiedTime !== undefined) expect(entry.modifiedTime).toBe(info.modifiedTime)
           }
         }))
 
       it('lists an empty folder as empty', () =>
         withSource({ empty: null }, async (source) => {
-          expect(await source.listChildren('empty')).toEqual([])
+          expect(await listAll(source, 'empty')).toEqual([])
         }))
 
-      it('lists every entry of a large folder', () => {
+      it('lists every entry of a large folder, page after page, without repeating any', () => {
         const tree: SeedTree = {}
         for (let i = 0; i < 2500; i++) tree[`big/file-${String(i).padStart(4, '0')}.log`] = ''
         return withSource(tree, async (source) => {
-          const names = (await source.listChildren('big')).map((e) => e.name).sort()
+          const names = (await listAll(source, 'big')).map((e) => e.name).sort()
           expect(names).toEqual(Object.keys(tree).map((path) => path.slice('big/'.length)))
         })
-      }, 60_000) // seeding thousands of entries is slow on some backends
+      }, 300_000) // seeding thousands of entries takes minutes on some backends
 
       it('reports a folder that does not exist', () =>
         withSource({ 'a.log': 'a' }, async (source) => {

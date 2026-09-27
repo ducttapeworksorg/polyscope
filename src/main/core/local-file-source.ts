@@ -138,13 +138,13 @@ export function createLocalFileSource(rootPath: string, { showHidden }: LocalFil
         }
         let ancestors: Promise<Set<string>> | undefined
         const lazyAncestors = () => (ancestors ??= realAncestors(path))
-        return Promise.all(dirents.map((d) => describeEntry(d, absolute, path, lazyAncestors)))
+        return { entries: await Promise.all(dirents.map((d) => describeEntry(d, absolute, path, lazyAncestors))) }
       }),
 
     stat: (path) =>
       withinRoot(path, async (absolute) => {
         const s = await stat(absolute)
-        return { kind: s.isDirectory() ? 'folder' : 'file', size: s.size, modifiedTime: s.mtimeMs }
+        return s.isDirectory() ? { kind: 'folder', modifiedTime: s.mtimeMs } : { kind: 'file', size: s.size, modifiedTime: s.mtimeMs }
       }),
 
     read: (path, { offset, length }: ByteRange) =>

@@ -11,10 +11,16 @@ export interface FileEntry {
   problem?: EntryProblem
 }
 
-export interface FileStat {
-  kind: 'folder' | 'file'
-  size: number
-  modifiedTime: number
+export type FileStat =
+  | { kind: 'file'; size: number; modifiedTime: number }
+  /** Milliseconds since the epoch, only when the backend keeps one for folders. */
+  | { kind: 'folder'; modifiedTime?: number }
+
+/** One page of a folder's entries. */
+export interface FileListing {
+  entries: FileEntry[]
+  /** Set when there are more entries; passing it back lists the next page. */
+  cursor?: string
 }
 
 /** `length` bytes starting `offset` bytes into a file; both whole numbers, zero or more. */
@@ -29,8 +35,11 @@ export interface ByteRange {
  * implementations throw CoreError on failure.
  */
 export interface FileSource {
-  /** The entries of a folder, in no particular order. */
-  listChildren(path: SourcePath): Promise<FileEntry[]>
+  /**
+   * The entries of a folder, in no particular order, a page at a time: `cursor` is the one the
+   * previous page ended with, left out for the first page. A Source Type may list everything in one page.
+   */
+  listChildren(path: SourcePath, cursor?: string): Promise<FileListing>
   stat(path: SourcePath): Promise<FileStat>
   /** The bytes in `range`: fewer when it runs past the end of the file, none when it starts at the end or beyond. */
   read(path: SourcePath, range: ByteRange): Promise<Uint8Array>

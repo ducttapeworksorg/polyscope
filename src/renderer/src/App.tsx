@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
-import type { ConnectionState, EntryNode, Environment, OpenedFile, OpenOptions, SourceInfo } from '@shared/core-api'
+import type { ConnectionState, EntryNode, Environment, OpenedFile, OpenOptions, SourceInfo, TreeNode } from '@shared/core-api'
 import type { Settings, Theme } from '@shared/settings'
 import { EnvironmentsDialog } from './components/EnvironmentsDialog'
 import { ApertureMark } from './components/icons'
@@ -13,6 +13,7 @@ import { Viewer } from './components/Viewer'
 import { core, describeError, describeFailure } from './core-client'
 import { environmentOf } from './environments'
 import { t } from './i18n'
+import { targetOf } from './source-types'
 import { applyTheme } from './theme'
 import {
   activateTab,
@@ -28,7 +29,7 @@ import {
 } from './workspace'
 
 /** Whether two versions of a Source point at the same place, whatever they are called. */
-const sameTarget = (a: SourceInfo, b: SourceInfo) => a.type === b.type && a.rootPath === b.rootPath
+const sameTarget = (a: SourceInfo, b: SourceInfo) => targetOf(a) === targetOf(b)
 
 export function App() {
   const [sources, setSources] = useState<SourceInfo[]>([])
@@ -83,7 +84,7 @@ export function App() {
   }
 
   /** Connects a Source; resolves to its root's children, or null if it couldn't connect. */
-  const connect = async (source: SourceInfo): Promise<EntryNode[] | null> => {
+  const connect = async (source: SourceInfo): Promise<TreeNode[] | null> => {
     setConnection(source.id, { state: 'connecting' })
     try {
       return await core.connect(source.id)
@@ -102,19 +103,11 @@ export function App() {
   const reloadSources = useCallback(async () => {
     const latest = await core.listSources()
     const byId = new Map(latest.map((s) => [s.id, s]))
-    const previous = new Map(sourcesRef.current.map((s) => [s.id, s]))
     sourcesRef.current = latest
     setSources(latest)
-    // The core disconnects a Source that now points somewhere else, and forgets a deleted one.
-    setConnections((prev) => {
-      const kept = new Map<string, ConnectionState>()
-      for (const source of latest) {
-        const was = previous.get(source.id)
-        const state = prev.get(source.id)
-        if (state && was && sameTarget(was, source)) kept.set(source.id, state)
-      }
-      return kept
-    })
+    // The core disconnects a Source that now points somewhere else or signs in anew, and forgets a deleted one.
+    const states = await Promise.all(latest.map((s) => core.connectionState(s.id).catch(() => null)))
+    setConnections(new Map(latest.flatMap((s, i) => (states[i] ? [[s.id, states[i]] as const] : []))))
     // Tabs follow a rename, but close when their Source is deleted or now points somewhere else.
     setWorkspace((prev) => {
       const tabs = prev.tabs.flatMap((tab) => {
