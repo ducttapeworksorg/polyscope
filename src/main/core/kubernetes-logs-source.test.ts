@@ -292,8 +292,8 @@ describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () 
       await core.connect(sourceId)
 
       expect(await core.expand(sourceId, 'deployments')).toEqual([
-        { kind: 'workload', workloadKind: 'Deployment', name: 'crasher', path: 'deployments/crasher' },
-        { kind: 'workload', workloadKind: 'Deployment', name: 'web', path: 'deployments/web' }
+        { kind: 'workload', workloadKind: 'Deployment', name: 'crasher', path: 'deployments/crasher', readyCount: { ready: 0, desired: 1 } },
+        { kind: 'workload', workloadKind: 'Deployment', name: 'web', path: 'deployments/web', readyCount: { ready: 1, desired: 1 } }
       ])
       expect(described(await core.expand(sourceId, 'statefulsets'))).toEqual(['workload db'])
       expect(described(await core.expand(sourceId, 'daemonsets'))).toEqual(['workload agent'])
@@ -350,10 +350,63 @@ describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () 
     it('lists only the pods no Workload owns under Pods', async () => {
       await core.connect(sourceId)
 
-      expect(await core.expand(sourceId, 'pods')).toEqual([{ kind: 'pod', name: 'counter', path: 'pods/counter' }])
+      expect(await core.expand(sourceId, 'pods')).toEqual([
+        { kind: 'pod', name: 'counter', path: 'pods/counter', status: { reason: 'Running', health: 'healthy', restarts: 0 }, containerCount: 1 }
+      ])
       expect(await core.expand(sourceId, 'pods/counter')).toEqual([
         { kind: 'container', name: 'counter', path: 'pods/counter/counter' }
       ])
+    })
+
+    it('gives each of the other Workloads a Ready Count, but not Jobs or CronJobs', async () => {
+      await core.connect(sourceId)
+
+      const workloads = (await Promise.all(['statefulsets', 'daemonsets', 'cronjobs', 'jobs'].map((g) => core.expand(sourceId, g)))).flat()
+      expect(workloads.map((node) => [node.kind === 'workload' && node.name, node.kind === 'workload' && node.readyCount])).toEqual([
+        ['db', { ready: 1, desired: 1 }],
+        ['agent', { ready: 1, desired: 1 }],
+        ['nightly', undefined],
+        ['migrate', undefined]
+      ])
+    })
+
+    it('gives each pod its Pod Status and how many containers it has', async () => {
+      await core.connect(sourceId)
+
+      expect(await onlyPod(core, sourceId, 'deployments/web')).toMatchObject({
+        status: { reason: 'Running', health: 'healthy', restarts: 0 },
+        containerCount: 3
+      })
+      expect(await onlyPod(core, sourceId, 'statefulsets/db')).toMatchObject({ containerCount: 2 })
+      expect(await onlyPod(core, sourceId, 'jobs/migrate')).toMatchObject({ status: { reason: 'Completed', health: 'healthy' } })
+    })
+
+    it('shows the crash-looping pod failing, with its restarts and why its container last ended', async () => {
+      await core.connect(sourceId)
+
+      // The seed doesn't wait for the crasher: give it time to crash and restart, and to be caught between runs.
+      const pod = await vi.waitFor(
+        async () => {
+          const found = await onlyPod(core, sourceId, 'deployments/crasher')
+          if (found.kind !== 'pod' || found.status.restarts < 1 || found.status.health !== 'failing') throw new Error('not crash-looping yet')
+          return found
+        },
+        { timeout: 90_000, interval: 2_000 }
+      )
+
+      expect(pod.status).toMatchObject({ lastTerminationReason: 'Error', lastRestart: expect.any(Number) })
+      expect(['CrashLoopBackOff', 'Error']).toContain(pod.status.reason)
+      expect(pod.status.lastRestart).toBeLessThanOrEqual(Date.now())
+      const [container] = await core.expand(sourceId, pod.path)
+      expect(container).toMatchObject({ kind: 'container', name: 'crash', restarts: expect.any(Number) })
+      expect(container?.kind === 'container' && container.restarts).toBeGreaterThanOrEqual(1)
+    }, 120_000)
+
+    it('leaves out the restarts of containers that have not restarted', async () => {
+      await core.connect(sourceId)
+      const db = await onlyPod(core, sourceId, 'statefulsets/db')
+
+      for (const container of await core.expand(sourceId, db.path)) expect(container).not.toHaveProperty('restarts')
     })
 
     it('shows an error node for what is not there, or is not where the path says', async () => {

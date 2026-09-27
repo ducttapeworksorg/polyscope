@@ -45,7 +45,7 @@ The **Log Stream** of a container's prior (crashed or restarted) instance, shown
 The health of a pod as shown in the tree: its phase or failure reason (Running, Pending, CrashLoopBackOff, OOMKilled…) plus its restart count when greater than zero.
 
 **Ready Count**:
-How many of a **Workload**'s pods are ready out of how many are desired (e.g. `2/3`).
+How many of a **Workload**'s pods are ready out of how many are desired (e.g. `2/3`). Deployments, StatefulSets and DaemonSets have one; Jobs and CronJobs run to completion, so have none.
 
 ### Viewing
 

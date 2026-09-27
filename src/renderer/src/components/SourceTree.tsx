@@ -9,7 +9,19 @@ import {
   type MouseEvent,
   type ReactNode
 } from 'react'
-import type { ConnectionState, ContainerNode, EntryNode, Environment, LogNode, SourceInfo, SourcePath, TreeNode } from '@shared/core-api'
+import type {
+  ConnectionState,
+  ContainerNode,
+  EntryNode,
+  Environment,
+  LogNode,
+  PodNode,
+  PodStatus,
+  ReadyCount,
+  SourceInfo,
+  SourcePath,
+  TreeNode
+} from '@shared/core-api'
 import type { Theme } from '@shared/settings'
 import { core, describeError, describeFailure } from '../core-client'
 import { t } from '../i18n'
@@ -18,6 +30,7 @@ import { uiFor } from '../source-types'
 import type { MenuItem } from './ContextMenu'
 import { EnvironmentBadge } from './EnvironmentBadge'
 import { ChevronIcon, ReloadIcon, WarningIcon } from './icons'
+import { KubernetesIcon } from './KubernetesIcon'
 import { MaterialIcon } from './MaterialIcon'
 
 interface Props {
@@ -252,11 +265,55 @@ export function SourceTree(props: Props) {
       </span>
     )
 
-  /** Where the entry really is and, when known, exactly when it was last modified. */
+  /** Where the entry really is and, when known, exactly when it was last modified; for a pod, how it's doing. */
   const tooltip = (node: ShownNode) => {
     const where = uiFor(source.type).fullPath(source, node.path)
+    if (node.kind === 'pod') return [where, ...podStatusLines(node.status)].join('\n')
     if (!('modifiedTime' in node) || node.modifiedTime === undefined) return where
     return `${where}\n${t('tree.modified', { time: formatDateTime(node.modifiedTime) })}`
+  }
+
+  /** A pod's status, and when and why it last restarted if it has. */
+  const podStatusLines = ({ reason, restarts, lastRestart, lastTerminationReason }: PodStatus) => [
+    t('pod.status', { reason }),
+    ...(restarts > 0 ? [t('pod.restarts', { count: restarts })] : []),
+    ...(lastRestart !== undefined ? [t('pod.lastRestart', { time: formatDateTime(lastRestart) })] : []),
+    ...(lastTerminationReason ? [t('pod.lastTermination', { reason: lastTerminationReason })] : [])
+  ]
+
+  /** ↻ N, for a pod or container that has restarted N times. */
+  const restartBadge = (restarts: number) => {
+    const label = t('pod.restarts', { count: restarts })
+    return (
+      <span className="restart-badge" role="img" aria-label={label} title={label}>
+        ↻ {restarts}
+      </span>
+    )
+  }
+
+  /** A pod's status dot, coloured by its health, after its restart badge if it has one container and that has restarted. */
+  const podIndicators = ({ status, containerCount }: PodNode) => (
+    <span className="tree-row__indicators">
+      {containerCount === 1 && status.restarts > 0 && restartBadge(status.restarts)}
+      <span className={`pod-status pod-status--${status.health}`} role="img" aria-label={t('pod.status', { reason: status.reason })} />
+    </span>
+  )
+
+  /** A Workload's Ready Count, marked when fewer are ready than it wants. */
+  const readyCount = ({ ready, desired }: ReadyCount) => (
+    <span className="tree-row__indicators">
+      <span className={`ready-count ${ready < desired ? 'is-short' : ''}`} title={t('workload.readyCount.tooltip', { ready, desired })}>
+        {ready}/{desired}
+      </span>
+    </span>
+  )
+
+  /** Whether the pod a container is in has other containers, going by the pod's listed node. */
+  const inSeveralContainers = (container: SourcePath) => {
+    const pod = container.slice(0, container.lastIndexOf('/'))
+    const listing = listings.get(pod.slice(0, Math.max(0, pod.lastIndexOf('/'))))
+    const node = listing?.state === 'loaded' ? listing.nodes.find((n) => n.path === pod) : undefined
+    return node?.kind === 'pod' && node.containerCount > 1
   }
 
   /** A Log Source's node: groups, Workloads and pods expand like folders; a container opens its Log Stream. */
@@ -269,24 +326,31 @@ export function SourceTree(props: Props) {
           {t(`containerRole.${node.role}`)}
         </span>
       )
+      // A pod with one container carries its restarts itself; with several, each container carries its own.
+      const restarts = node.restarts && inSeveralContainers(node.path) ? node.restarts : 0
       return row({
         ...common,
         label: node.name,
         folder: false,
-        icon: <MaterialIcon icon="log" theme={theme} />,
+        icon: <KubernetesIcon container role={node.role} />,
         onActivate: () => onOpenLog(source, node),
         onDoubleActivate: () => onOpenLog(source, node, { pinned: true }),
-        badge: role
+        badge: role,
+        status: restarts > 0 ? <span className="tree-row__indicators">{restartBadge(restarts)}</span> : undefined
       })
     }
-    const isGroup = node.kind === 'group'
+    const status =
+      node.kind === 'pod' ? podIndicators(node)
+      : node.kind === 'workload' && node.readyCount ? readyCount(node.readyCount)
+      : undefined
     return row({
       ...common,
-      label: isGroup ? t(`workloadGroup.${node.workloadKind}`) : node.name,
+      label: node.kind === 'group' ? t(`workloadGroup.${node.workloadKind}`) : node.name,
       folder: true,
-      icon: <MaterialIcon icon={isGroup ? 'folder-kubernetes' : 'kubernetes'} theme={theme} open={isGroup && expanded.has(node.path)} />,
+      icon: <KubernetesIcon workloadKind={node.kind === 'pod' ? 'Pod' : node.workloadKind} />,
       onActivate: () => toggle(node.path),
-      menuItems: [refresh]
+      menuItems: [refresh],
+      status
     })
   }
 

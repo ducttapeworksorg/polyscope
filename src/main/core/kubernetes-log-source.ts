@@ -7,10 +7,11 @@ import {
   type V1ObjectMeta,
   type V1Pod
 } from '@kubernetes/client-node'
-import type { LogNode, SourcePath, WorkloadKind } from '@shared/core-api'
+import type { ContainerRole, LogNode, SourcePath, WorkloadKind } from '@shared/core-api'
 import { CoreError } from './core-error'
 import type { LogReadOptions, LogSource } from './log-source'
 import { certificateCodes, networkCodes } from './network-errors'
+import { isSidecar, podStatusOf, readyCountOf, restartsOf } from './pod-status'
 
 /** Each group's path segment, which is also its name. */
 const groups = {
@@ -107,23 +108,25 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
 
   const names = (items: { metadata?: V1ObjectMeta }[]) => items.map((item) => item.metadata?.name ?? '').filter(Boolean)
 
-  /** The names of a group's Workloads, or for Pods, the pods no Workload owns. */
-  const members = async (group: Group): Promise<string[]> => {
+  /** A group's Workloads, or for Pods, the pods no Workload owns. */
+  const members = async (group: Group): Promise<{ metadata?: V1ObjectMeta }[]> => {
     switch (group) {
       case 'deployments':
-        return names((await call(() => apps.listNamespacedDeployment({ namespace }))).items)
+        return (await call(() => apps.listNamespacedDeployment({ namespace }))).items
       case 'statefulsets':
-        return names((await call(() => apps.listNamespacedStatefulSet({ namespace }))).items)
+        return (await call(() => apps.listNamespacedStatefulSet({ namespace }))).items
       case 'daemonsets':
-        return names((await call(() => apps.listNamespacedDaemonSet({ namespace }))).items)
+        return (await call(() => apps.listNamespacedDaemonSet({ namespace }))).items
       case 'cronjobs':
-        return names(await cronJobs())
+        return await cronJobs()
       case 'jobs':
-        return names(await standaloneJobs())
+        return await standaloneJobs()
       case 'pods':
-        return names((await listPods()).filter((pod) => !controllerOf(pod.metadata)))
+        return (await listPods()).filter((pod) => !controllerOf(pod.metadata))
     }
   }
+
+  const isStandaloneJob = async (name: string) => names(await members('jobs')).includes(name)
 
   const ownedBy = (uids: ReadonlySet<string | undefined>) => (pod: V1Pod) => uids.has(controllerOf(pod.metadata)?.uid)
 
@@ -153,16 +156,32 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     return jobs.items.filter((job) => controllerOf(job.metadata)?.uid === owner.metadata?.uid)
   }
 
-  const podNodes = (parent: SourcePath, pods: V1Pod[]): LogNode[] =>
-    names(pods).map((name) => ({ kind: 'pod', name, path: join(parent, name) }))
+  const podNode = (parent: SourcePath, pod: V1Pod): LogNode => {
+    const name = pod.metadata?.name ?? ''
+    const containerCount = (pod.spec?.initContainers?.length ?? 0) + (pod.spec?.containers.length ?? 0)
+    return { kind: 'pod', name, path: join(parent, name), status: podStatusOf(pod), containerCount }
+  }
+
+  const podNodes = (parent: SourcePath, pods: V1Pod[]): LogNode[] => pods.filter((pod) => pod.metadata?.name).map((pod) => podNode(parent, pod))
+
+  /** A Workload's node, with its Ready Count if its kind has one. */
+  const workloadNode = (parent: SourcePath, kind: Exclude<WorkloadKind, 'Pod'>, workload: { metadata?: V1ObjectMeta }): LogNode => {
+    const name = workload.metadata?.name ?? ''
+    const readyCount = readyCountOf(kind, workload)
+    return { kind: 'workload', workloadKind: kind, name, path: join(parent, name), ...(readyCount && { readyCount }) }
+  }
 
   /** A pod's containers, init and sidecar containers first as they start first. */
-  const containerNodes = (parent: SourcePath, pod: V1Pod): LogNode[] => [
-    ...(pod.spec?.initContainers ?? []).map(
-      (c): LogNode => ({ kind: 'container', name: c.name, path: join(parent, c.name), role: c.restartPolicy === 'Always' ? 'sidecar' : 'init' })
-    ),
-    ...(pod.spec?.containers ?? []).map((c): LogNode => ({ kind: 'container', name: c.name, path: join(parent, c.name) }))
-  ]
+  const containerNodes = (parent: SourcePath, pod: V1Pod): LogNode[] => {
+    const node = (name: string, role?: ContainerRole): LogNode => {
+      const restarts = restartsOf(pod, name)
+      return { kind: 'container', name, path: join(parent, name), ...(role && { role }), ...(restarts && { restarts }) }
+    }
+    return [
+      ...(pod.spec?.initContainers ?? []).map((c) => node(c.name, isSidecar(c) ? 'sidecar' : 'init')),
+      ...(pod.spec?.containers ?? []).map((c) => node(c.name))
+    ]
+  }
 
   /** The pod named `name` among `pods`, or NOT_FOUND. */
   const podNamed = (pods: V1Pod[], name: string, path: SourcePath) => {
@@ -175,15 +194,14 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     const segments = path ? path.split('/') : []
     const [group, first, second, third] = segments
     if (segments.length === 0) {
-      const listed = await Promise.all(Object.values(groups).map(async (g) => [g, (await members(g)).length > 0] as const))
+      const listed = await Promise.all(Object.values(groups).map(async (g) => [g, names(await members(g)).length > 0] as const))
       return listed.filter(([, any]) => any).map(([g]) => ({ kind: 'group', workloadKind: kindOfGroup[g], name: g, path: g }))
     }
     if (!isGroup(group) || segments.some((segment) => !segment)) throw notFound(path)
     if (first === undefined) {
       const kind = kindOfGroup[group]
-      return (await members(group)).map((name) =>
-        kind === 'Pod' ? { kind: 'pod', name, path: join(path, name) } : { kind: 'workload', workloadKind: kind, name, path: join(path, name) }
-      )
+      const items = (await members(group)).filter((item) => item.metadata?.name)
+      return kind === 'Pod' ? podNodes(path, items) : items.map((item) => workloadNode(path, kind, item))
     }
     if (segments.length === 2) {
       if (group === 'pods') {
@@ -191,9 +209,9 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
         return containerNodes(path, pod)
       }
       if (group === 'cronjobs') {
-        return names(await jobsOf(first)).map((name) => ({ kind: 'workload', workloadKind: 'Job', name, path: join(path, name) }))
+        return (await jobsOf(first)).filter((job) => job.metadata?.name).map((job) => workloadNode(path, 'Job', job))
       }
-      if (group === 'jobs' && !(await members('jobs')).includes(first)) throw notFound(path)
+      if (group === 'jobs' && !(await isStandaloneJob(first))) throw notFound(path)
       return podNodes(path, await podsOf(group, first))
     }
     if (segments.length === 3 && group === 'cronjobs') {
@@ -201,7 +219,7 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
       return podNodes(path, await podsOf('jobs', second!))
     }
     if (segments.length === 3 && group !== 'pods' && group !== 'cronjobs') {
-      if (group === 'jobs' && !(await members('jobs')).includes(first)) throw notFound(path)
+      if (group === 'jobs' && !(await isStandaloneJob(first))) throw notFound(path)
       return containerNodes(path, podNamed(await podsOf(group, first), second!, path))
     }
     if (segments.length === 4 && group === 'cronjobs') {

@@ -103,6 +103,11 @@ export const en = {
   'containerRole.sidecar': 'sidecar',
   'containerRole.init.tooltip': 'Init container: runs to completion before the others start.',
   'containerRole.sidecar.tooltip': 'Sidecar container: starts before the others and keeps running alongside them.',
+  'pod.status': 'Status: {reason}',
+  'pod.restarts': 'Restarts: {count}',
+  'pod.lastRestart': 'Last restart: {time}',
+  'pod.lastTermination': 'Last termination reason: {reason}',
+  'workload.readyCount.tooltip': '{ready} of {desired} pods ready',
 
   'sourceActions.refresh': 'Refresh',
   'sourceActions.disconnect': 'Disconnect',

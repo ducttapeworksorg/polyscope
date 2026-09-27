@@ -1,4 +1,4 @@
-import type { SVGProps } from 'react'
+import { useId, type ReactNode, type SVGProps } from 'react'
 
 // 16px line icons drawn on a 16-unit grid; stroke follows currentColor.
 const base: SVGProps<SVGSVGElement> = {
@@ -44,14 +44,41 @@ export const BucketIcon = () => (
   </svg>
 )
 
-/** A Kubernetes wheel with lines of log beside it, for Kubernetes Logs. */
+/**
+ * The Kubernetes wheel, a heptagon round a seven-spoked helm, with an overlay in its lower right corner cut out
+ * of the wheel so the two don't run together.
+ */
+function KubernetesWheel({ children }: { children: ReactNode }) {
+  const mask = useId()
+  return (
+    <svg {...base}>
+      <mask id={mask}>
+        <rect width="16" height="16" fill="white" />
+        <rect x="8.25" y="8.25" width="8" height="8" rx="1" fill="black" />
+      </mask>
+      <g mask={`url(#${mask})`}>
+        <path d="M6.25 0.75L10.55 2.82L11.61 7.47L8.64 11.21L3.86 11.21L0.89 7.47L1.95 2.82z" />
+        <circle cx="6.25" cy="6.25" r="1.1" />
+        <path d="M6.25 5.15L6.25 2.35M7.11 5.56L9.30 3.82M7.32 6.49L10.05 7.12M6.73 7.24L7.94 9.76M5.77 7.24L4.56 9.76M5.18 6.49L2.45 7.12M5.39 5.56L3.20 3.82" />
+      </g>
+      {children}
+    </svg>
+  )
+}
+
+/** The Kubernetes wheel with a file over it, for Kubernetes Files. */
+export const KubernetesFilesIcon = () => (
+  <KubernetesWheel>
+    <path d="M12.75 9.5H10.25v5.75h4.5V11.5z" />
+    <path d="M12.75 9.5v2h2" />
+  </KubernetesWheel>
+)
+
+/** The Kubernetes wheel with lines of log over it, for Kubernetes Logs. */
 export const KubernetesLogsIcon = () => (
-  <svg {...base}>
-    <circle cx="6.25" cy="6.25" r="4.5" />
-    <circle cx="6.25" cy="6.25" r="1.25" />
-    <path d="M6.25 1.75V5M6.25 7.5v3.25M1.75 6.25H5M7.5 6.25h3.25M3.1 3.1l2.25 2.25M7.15 7.15l2.25 2.25M9.4 3.1L7.15 5.35M5.35 7.15L3.1 9.4" />
-    <path d="M9.75 11.25h4.5M9.75 13.75h3" />
-  </svg>
+  <KubernetesWheel>
+    <path d="M9.75 10.25h5M9.75 12.5h5M9.75 14.75h3" />
+  </KubernetesWheel>
 )
 
 /** Lines of text, for a Log Stream. */

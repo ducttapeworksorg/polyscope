@@ -202,17 +202,58 @@ export const workloadKinds: readonly WorkloadKind[] = ['Deployment', 'StatefulSe
  */
 export type LogNode =
   | { kind: 'group'; workloadKind: WorkloadKind; name: string; path: SourcePath }
-  | { kind: 'workload'; workloadKind: Exclude<WorkloadKind, 'Pod'>; name: string; path: SourcePath }
-  | { kind: 'pod'; name: string; path: SourcePath }
+  | {
+      kind: 'workload'
+      workloadKind: Exclude<WorkloadKind, 'Pod'>
+      name: string
+      path: SourcePath
+      /** Deployments, StatefulSets and DaemonSets only: Jobs and CronJobs run to completion, so have none. */
+      readyCount?: ReadyCount
+    }
+  | {
+      kind: 'pod'
+      name: string
+      path: SourcePath
+      status: PodStatus
+      /** How many containers the pod has, init and sidecar containers included. */
+      containerCount: number
+    }
   | {
       kind: 'container'
       name: string
       path: SourcePath
       /** Set for an init container, or a sidecar (an init container that keeps running); left out for the pod's main containers. */
       role?: ContainerRole
+      /** How many times the container has restarted; left out until it has. */
+      restarts?: number
     }
 
 export type ContainerRole = 'init' | 'sidecar'
+
+/** How many of a Workload's pods are ready, out of how many it wants. */
+export interface ReadyCount {
+  ready: number
+  desired: number
+}
+
+/** How a pod is doing: as it should, on its way up, in trouble, or neither (going away, or its node out of touch). */
+export type PodHealth = 'healthy' | 'pending' | 'failing' | 'inactive'
+
+/** A pod's health as the tree shows it; see Pod Status in CONTEXT.md. */
+export interface PodStatus {
+  /** Its phase, or what's wrong with it, the way kubectl puts it: Running, Pending, CrashLoopBackOff, OOMKilled, Terminating… */
+  reason: string
+  health: PodHealth
+  /** Restarts of all its containers together. */
+  restarts: number
+  /** Milliseconds since the epoch at which a container of the pod last went down and restarted; left out if none has. */
+  lastRestart?: number
+  /** Why that container's previous run ended, e.g. OOMKilled or Error; left out if none has restarted. */
+  lastTerminationReason?: string
+}
+
+/** A pod in a Log Source's tree. */
+export type PodNode = Extract<LogNode, { kind: 'pod' }>
 
 /** A container in a Log Source's tree: what opens as a Log Stream. */
 export type ContainerNode = Extract<LogNode, { kind: 'container' }>
