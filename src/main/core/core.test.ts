@@ -833,6 +833,194 @@ describe('testing a connection', () => {
   })
 })
 
+describe('Environments', () => {
+  const seeded = [
+    { id: expect.any(String), name: 'prod', color: expect.stringMatching(/^#[0-9a-f]{6}$/), protected: true },
+    { id: expect.any(String), name: 'staging', color: expect.stringMatching(/^#[0-9a-f]{6}$/), protected: false },
+    { id: expect.any(String), name: 'qa', color: expect.stringMatching(/^#[0-9a-f]{6}$/), protected: false },
+    { id: expect.any(String), name: 'dev', color: expect.stringMatching(/^#[0-9a-f]{6}$/), protected: false }
+  ]
+  const environmentsFile = () => join(dataDir(), 'environments.json')
+  const named = async (core: ReturnType<typeof createCore>, name: string) =>
+    (await core.listEnvironments()).find((e) => e.name === name)!
+
+  it('start as prod (Protected), staging, qa and dev, each with a colour of its own', async () => {
+    const environments = await createCore({ dataDir: dataDir() }).listEnvironments()
+
+    expect(environments).toEqual(seeded)
+    expect(new Set(environments.map((e) => e.color)).size).toBe(4)
+    expect(await createCore().listEnvironments()).toEqual(seeded)
+  })
+
+  it('are created with a trimmed name, a colour and the Protected flag, after the others', async () => {
+    const core = createCore()
+
+    const uat = await core.addEnvironment({ name: ' uat ', color: '#8E4EC6', protected: true })
+    const perf = await core.addEnvironment({ name: 'perf', color: '#0090ff' })
+
+    expect(uat).toEqual({ id: expect.any(String), name: 'uat', color: '#8e4ec6', protected: true })
+    expect(perf).toMatchObject({ name: 'perf', protected: false })
+    expect(await core.listEnvironments()).toEqual([...seeded, uat, perf])
+  })
+
+  it('are renamed, recoloured and have Protected toggled, keeping their id and place', async () => {
+    const core = createCore()
+    const qa = await named(core, 'qa')
+
+    const edited = await core.editEnvironment(qa.id, { name: 'test', color: '#123abc', protected: true })
+
+    expect(edited).toEqual({ id: qa.id, name: 'test', color: '#123abc', protected: true })
+    expect((await core.listEnvironments()).map((e) => e.name)).toEqual(['prod', 'staging', 'test', 'dev'])
+  })
+
+  it.each([
+    ['a blank name', { name: '  ', color: '#ff0000' }, 'ENVIRONMENT_NAME_REQUIRED'],
+    ['a name already taken, whatever its case', { name: 'PROD', color: '#ff0000' }, 'ENVIRONMENT_NAME_TAKEN'],
+    ['a colour that is not #rrggbb', { name: 'uat', color: 'red' }, 'INVALID_COLOR'],
+    ['a Protected flag that is not true or false', { name: 'uat', color: '#ff0000', protected: 'yes' as never }, 'INVALID_ENVIRONMENT']
+  ])('refuse %s, changing nothing', async (_, input, code) => {
+    const core = createCore()
+    const dev = await named(core, 'dev')
+
+    await expect(core.addEnvironment(input)).rejects.toMatchObject({ code })
+    await expect(core.editEnvironment(dev.id, input)).rejects.toMatchObject({ code })
+    expect(await core.listEnvironments()).toEqual(seeded)
+  })
+
+  it('may keep their own name when edited', async () => {
+    const core = createCore()
+    const prod = await named(core, 'prod')
+
+    expect(await core.editEnvironment(prod.id, { name: 'Prod', color: prod.color, protected: false })).toMatchObject({ name: 'Prod' })
+  })
+
+  it('report an unknown Environment', async () => {
+    const core = createCore()
+
+    await expect(core.editEnvironment('nope', { name: 'x', color: '#ff0000' })).rejects.toMatchObject({ code: 'ENVIRONMENT_NOT_FOUND' })
+    await expect(core.deleteEnvironment('nope')).rejects.toMatchObject({ code: 'ENVIRONMENT_NOT_FOUND' })
+  })
+
+  it('label Sources, optionally, when added, edited or duplicated', async () => {
+    const core = createCore()
+    const prod = await named(core, 'prod')
+    const dev = await named(core, 'dev')
+
+    const labelled = await core.addSource({ ...localSource('Prod logs'), environmentId: prod.id })
+    const plain = await core.addSource(localSource('Scratch'))
+    const relabelled = await core.editSource(plain.id, { ...localSource('Scratch'), environmentId: dev.id })
+    const copy = await core.duplicateSource(labelled.id)
+    const unlabelled = await core.editSource(labelled.id, localSource('Prod logs'))
+
+    expect(plain).not.toHaveProperty('environmentId')
+    expect(relabelled.environmentId).toBe(dev.id)
+    expect(copy.environmentId).toBe(prod.id)
+    expect(unlabelled).not.toHaveProperty('environmentId')
+    expect((await core.listSources()).map((s) => s.environmentId)).toEqual([undefined, prod.id, dev.id])
+  })
+
+  it('must exist to label a Source', async () => {
+    const core = createCore()
+    const source = await core.addSource(localSource('Logs'))
+
+    await expect(core.addSource({ ...localSource('Other'), environmentId: 'nope' })).rejects.toMatchObject({ code: 'ENVIRONMENT_NOT_FOUND' })
+    await expect(core.editSource(source.id, { ...localSource('Logs'), environmentId: 'nope' })).rejects.toMatchObject({
+      code: 'ENVIRONMENT_NOT_FOUND'
+    })
+    expect(await core.listSources()).toEqual([source])
+  })
+
+  it('can be changed on a Source without disconnecting it', async () => {
+    const core = createCore()
+    const source = await core.addSource(localSource('Logs'))
+    await core.connect(source.id)
+
+    await core.editSource(source.id, { ...localSource('Logs'), environmentId: (await named(core, 'prod')).id })
+
+    expect(await core.connectionState(source.id)).toEqual({ state: 'connected' })
+  })
+
+  it('leave the Sources using them unlabelled when deleted', async () => {
+    const core = createCore({ dataDir: dataDir() })
+    const staging = await named(core, 'staging')
+    const dev = await named(core, 'dev')
+    const a = await core.addSource({ ...localSource('A'), environmentId: staging.id })
+    const b = await core.addSource({ ...localSource('B'), environmentId: dev.id })
+
+    await core.deleteEnvironment(staging.id)
+
+    expect((await core.listEnvironments()).map((e) => e.name)).toEqual(['prod', 'qa', 'dev'])
+    for (const listed of [await core.listSources(), await createCore({ dataDir: dataDir() }).listSources()]) {
+      expect(listed.find((s) => s.id === a.id)).not.toHaveProperty('environmentId')
+      expect(listed.find((s) => s.id === b.id)?.environmentId).toBe(dev.id)
+    }
+  })
+
+  it('are restored in a later launch, including deletions, without seeding the defaults again', async () => {
+    const before = createCore({ dataDir: dataDir() })
+    const uat = await before.addEnvironment({ name: 'uat', color: '#8e4ec6' })
+    await before.editEnvironment((await named(before, 'prod')).id, { name: 'production', color: '#aa0000', protected: true })
+    for (const name of ['staging', 'qa', 'dev']) await before.deleteEnvironment((await named(before, name)).id)
+    const source = await before.addSource({ ...localSource('Logs'), environmentId: uat.id })
+    const saved = await before.listEnvironments()
+
+    const after = createCore({ dataDir: dataDir() })
+
+    expect(saved.map((e) => e.name)).toEqual(['production', 'uat'])
+    expect(await after.listEnvironments()).toEqual(saved)
+    expect(await after.listSources()).toEqual([source])
+  })
+
+  it('stay empty in a later launch once all are deleted', async () => {
+    const before = createCore({ dataDir: dataDir() })
+    for (const { id } of await before.listEnvironments()) await before.deleteEnvironment(id)
+
+    expect(await createCore({ dataDir: dataDir() }).listEnvironments()).toEqual([])
+  })
+
+  it('set an unreadable file aside, start from the defaults, and unlabel Sources whose Environment is gone', async () => {
+    const before = createCore({ dataDir: dataDir() })
+    const uat = await before.addEnvironment({ name: 'uat', color: '#8e4ec6' })
+    const labelled = await before.addSource({ ...localSource('Logs'), environmentId: uat.id })
+    const { environmentId: _, ...source } = labelled
+    const saved = await readFile(environmentsFile(), 'utf8')
+    await writeFile(environmentsFile(), '{ not json')
+
+    const after = createCore({ dataDir: dataDir() })
+
+    expect(await after.listEnvironments()).toEqual(seeded)
+    expect(await after.listSources()).toEqual([source])
+    expect((await readdir(dataDir())).filter((f) => f.startsWith('environments.json.unreadable-'))).toHaveLength(1)
+
+    // The label itself is kept, so putting the Environments back (say, from the set-aside file) restores it.
+    await after.addSource(localSource('Other'))
+    await writeFile(environmentsFile(), saved)
+    expect((await createCore({ dataDir: dataDir() }).listSources())[0]).toEqual(labelled)
+  })
+
+  it('are left unchanged when a change can’t be saved', async () => {
+    const blocked = join(dir, 'blocked')
+    await writeFile(blocked, 'a file where the data directory should be')
+    const core = createCore({ dataDir: blocked })
+    const prod = await named(core, 'prod')
+
+    await expect(core.addEnvironment({ name: 'uat', color: '#8e4ec6' })).rejects.toThrow()
+    await expect(core.editEnvironment(prod.id, { name: 'x', color: '#000000' })).rejects.toThrow()
+    await expect(core.deleteEnvironment(prod.id)).rejects.toThrow()
+
+    expect(await core.listEnvironments()).toEqual(seeded)
+  })
+
+  it('hand out copies that can’t change the core’s Environments', async () => {
+    const core = createCore()
+
+    const [prod] = await core.listEnvironments()
+    prod!.name = 'changed'
+
+    expect((await core.listEnvironments())[0]?.name).toBe('prod')
+  })
+})
+
 describe('settings', () => {
   const MB = 1024 * 1024
   const defaults = {

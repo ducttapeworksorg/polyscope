@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ConnectionState, EntryNode, OpenedFile, OpenOptions, SourceInfo } from '@shared/core-api'
+import type { ConnectionState, EntryNode, Environment, OpenedFile, OpenOptions, SourceInfo } from '@shared/core-api'
 import type { Settings, Theme } from '@shared/settings'
+import { EnvironmentsDialog } from './components/EnvironmentsDialog'
 import { ApertureMark } from './components/icons'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Sidebar } from './components/Sidebar'
@@ -9,6 +10,7 @@ import { StatusBar } from './components/StatusBar'
 import { Tabs } from './components/Tabs'
 import { Viewer } from './components/Viewer'
 import { core, describeError, describeFailure } from './core-client'
+import { environmentOf } from './environments'
 import { t } from './i18n'
 import { applyTheme } from './theme'
 import {
@@ -30,6 +32,8 @@ const sameTarget = (a: SourceInfo, b: SourceInfo) => a.type === b.type && a.root
 export function App() {
   const [sources, setSources] = useState<SourceInfo[]>([])
   const sourcesRef = useRef<SourceInfo[]>([])
+  const [environments, setEnvironments] = useState<Environment[]>([])
+  const [environmentsOpen, setEnvironmentsOpen] = useState(false)
   const [workspace, setWorkspace] = useState<Workspace>(emptyWorkspace)
   // Files being opened, by tab key, so a double-click's second click waits for the first instead of reading again.
   const pendingOpens = useRef(new Map<string, Promise<OpenedFile>>())
@@ -121,9 +125,12 @@ export function App() {
     })
   }, [])
 
+  const reloadEnvironments = useCallback(async () => setEnvironments(await core.listEnvironments()), [])
+
   useEffect(() => {
     void reloadSources()
-  }, [reloadSources])
+    void reloadEnvironments()
+  }, [reloadSources, reloadEnvironments])
 
   const { tabs } = workspace
   const activeTab = tabs.find((tab) => tab.key === workspace.activeKey) ?? null
@@ -181,12 +188,15 @@ export function App() {
 
   if (!settings) return null
 
+  const activeEnvironment = activeTab ? environmentOf(environments, activeTab.source) : undefined
   const activeConnection: ConnectionState = (activeTab && connections.get(activeTab.source.id)) || { state: 'disconnected' }
 
   return (
     <div className="app">
       <Sidebar
         sources={sources}
+        environments={environments}
+        onManageEnvironments={() => setEnvironmentsOpen(true)}
         connections={connections}
         onConnect={connect}
         onDisconnect={(source) => void disconnect(source)}
@@ -202,6 +212,7 @@ export function App() {
         <SettingsDialog
           settings={settings}
           onPreviewTheme={setPreviewTheme}
+          onManageEnvironments={() => setEnvironmentsOpen(true)}
           onSaved={(saved) => {
             setSettings(saved)
             setPreviewTheme(null)
@@ -211,10 +222,24 @@ export function App() {
         />
       )}
 
+      {environmentsOpen && (
+        <EnvironmentsDialog
+          environments={environments}
+          sources={sources}
+          onChanged={() => {
+            // Deleting an Environment unlabels its Sources, so both are read again.
+            void reloadEnvironments()
+            void reloadSources()
+          }}
+          onClose={() => setEnvironmentsOpen(false)}
+        />
+      )}
+
       <main className="workbench">
         <Tabs
           tabs={tabs}
           activeKey={activeTab?.key ?? null}
+          environments={environments}
           onActivate={(key) => setWorkspace((ws) => activateTab(ws, key))}
           onPin={(key) => setWorkspace((ws) => pinTab(ws, key))}
           onReload={(key) => void reopenTabAs(key)}
@@ -258,6 +283,7 @@ export function App() {
 
       <StatusBar
         activeTab={activeTab}
+        environment={activeEnvironment}
         onPickEncoding={(encoding) => activeTab && void reopenTabAs(activeTab.key, encoding ? { encoding } : {})}
         onPickLanguage={(language) => activeTab && setWorkspace((ws) => setLanguage(ws, activeTab.key, language))}
       />

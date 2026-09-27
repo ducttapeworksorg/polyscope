@@ -4,6 +4,8 @@ import type {
   CoreApi,
   CoreEvents,
   EntryNode,
+  Environment,
+  NewEnvironment,
   NewSource,
   SourceInfo,
   SourcePath,
@@ -11,6 +13,7 @@ import type {
 } from '@shared/core-api'
 import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings } from '@shared/settings'
 import { CoreError } from './core-error'
+import { createEnvironmentStore, defaultEnvironments, isColor } from './environment-store'
 import { checkEncoding, decode, decompress, detectEncoding, hexDump, hexDumpLimit } from './file-content'
 import { fileIcon, folderIcon } from './file-icons'
 import type { FileSource } from './file-source'
@@ -27,6 +30,9 @@ const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base'
 /** Fills in settings added since a Source was saved with their defaults. */
 const withDefaults = (source: SourceInfo): SourceInfo => ({ ...source, showHidden: source.showHidden ?? true })
 
+/** A Source without its Environment label. */
+const unlabelled = ({ environmentId: _, ...source }: SourceInfo): SourceInfo => source
+
 export interface CoreOptions {
   /** Where the registry is saved between launches; without it, nothing outlives the core. */
   dataDir?: string
@@ -40,14 +46,20 @@ export type Core = CoreApi & CoreEvents
 
 export function createCore(options: CoreOptions = {}): Core {
   const store = options.dataDir ? createRegistryStore(options.dataDir) : null
+  const environmentStore = options.dataDir ? createEnvironmentStore(options.dataDir) : null
   const settingsStore = options.dataDir ? createSettingsStore(options.dataDir) : null
   const secrets = options.secrets ?? createSecretStore({ cipher: inMemory })
   // Sources are kept in each group's order; groups interleave freely and are sorted by groupOrder when listed.
   const { sources, groupOrder } = emptyRegistry()
-  const loaded = store?.load().then((saved) => {
-    sources.push(...saved.sources.map(withDefaults))
-    groupOrder.splice(0, groupOrder.length, ...saved.groupOrder)
-  })
+  const environments = defaultEnvironments()
+  const loaded =
+    store &&
+    environmentStore &&
+    Promise.all([store.load(), environmentStore.load()]).then(([saved, savedEnvironments]) => {
+      environments.splice(0, environments.length, ...savedEnvironments)
+      sources.push(...saved.sources.map(withDefaults))
+      groupOrder.splice(0, groupOrder.length, ...saved.groupOrder)
+    })
   let settings: Settings = { ...defaultSettings }
   // Settings that can't be read at all leave the defaults in place rather than keep the app from starting.
   const settingsLoaded = settingsStore?.load().then(
@@ -58,15 +70,21 @@ export function createCore(options: CoreOptions = {}): Core {
   // Updates run one at a time, so each validates against the settings the previous one saved.
   let settingsUpdate: Promise<unknown> = Promise.resolve()
 
-  /** Applies a change to the registry and saves it; if saving fails, the change is undone. */
-  const commit = async <T>(change: () => T): Promise<T> => {
-    const before = { sources: [...sources], groupOrder: [...groupOrder] }
+  /**
+   * Applies a change and saves what it `touches`; if saving fails, the whole change is undone.
+   * Changes replace Sources and Environments rather than alter them, so shallow copies can undo them.
+   */
+  const commit = async <T>(change: () => T, touches = { registry: true, environments: false }): Promise<T> => {
+    const before = { sources: [...sources], groupOrder: [...groupOrder], environments: [...environments] }
     const result = change()
     try {
-      await store?.save({ sources, groupOrder })
+      // Environments are saved first: a label left pointing at a deleted one is dropped on the next load.
+      if (touches.environments) await environmentStore?.save(environments)
+      if (touches.registry) await store?.save({ sources, groupOrder })
     } catch (error) {
       sources.splice(0, sources.length, ...before.sources)
       groupOrder.splice(0, groupOrder.length, ...before.groupOrder)
+      environments.splice(0, environments.length, ...before.environments)
       throw error
     }
     return result
@@ -81,6 +99,32 @@ export function createCore(options: CoreOptions = {}): Core {
     if (!source) throw new CoreError('SOURCE_NOT_FOUND', `No Source with id ${sourceId}`)
     return source
   }
+
+  const environmentFor = (environmentId: string) => {
+    const environment = environments.find((e) => e.id === environmentId)
+    if (!environment) throw new CoreError('ENVIRONMENT_NOT_FOUND', `No Environment with id ${environmentId}`)
+    return environment
+  }
+
+  /** Checks a new or edited Environment and returns it normalised; `editing` is the one it replaces, if any. */
+  const validateEnvironment = (input: NewEnvironment, editing?: Environment): Omit<Environment, 'id'> => {
+    if (!isRecord(input)) throw new CoreError('INVALID_ENVIRONMENT', `An Environment must be an object, not ${String(input)}`)
+    const name = typeof input.name === 'string' ? input.name.trim() : ''
+    if (!name) throw new CoreError('ENVIRONMENT_NAME_REQUIRED', 'An Environment needs a name')
+    if (!isColor(input.color)) throw new CoreError('INVALID_COLOR', `Not a #rrggbb colour: ${String(input.color)}`)
+    const isProtected = input.protected ?? false
+    if (typeof isProtected !== 'boolean') throw new CoreError('INVALID_ENVIRONMENT', 'Protected must be true or false')
+    const taken = environments.some((e) => e !== editing && byName.compare(e.name, name) === 0)
+    if (taken) throw new CoreError('ENVIRONMENT_NAME_TAKEN', `There is already an Environment named ${name}`)
+    return { name, color: input.color.toLowerCase(), protected: isProtected }
+  }
+
+  /**
+   * A copy of a Source to hand out. A label whose Environment is gone (say, its file was unreadable)
+   * is left out, but kept in the registry, so putting the Environment back restores it.
+   */
+  const handOut = (source: SourceInfo) =>
+    source.environmentId === undefined || environments.some((e) => e.id === source.environmentId) ? { ...source } : unlabelled(source)
 
   const fileSourceFor = (sourceId: string) => {
     const source = sourceFor(sourceId)
@@ -128,14 +172,16 @@ export function createCore(options: CoreOptions = {}): Core {
   const validate = async (input: NewSource): Promise<Omit<SourceInfo, 'id'>> => {
     const name = input.name.trim()
     if (!name) throw new CoreError('NAME_REQUIRED', 'A Source needs a name')
+    const { environmentId } = input
+    if (environmentId !== undefined) environmentFor(environmentId)
     const rootPath = input.rootPath.trim()
     const showHidden = input.showHidden ?? true
     await reach({ rootPath, showHidden })
-    return { type: input.type, name, rootPath, showHidden }
+    return { type: input.type, name, rootPath, showHidden, ...(environmentId !== undefined && { environmentId }) }
   }
 
-  /** Every setting but the name, in a form that compares equal whatever order the keys were saved in. */
-  const target = ({ name: _, ...settings }: SourceInfo) => JSON.stringify(Object.entries(settings).sort())
+  /** Every setting but the name and label, in a form that compares equal whatever order the keys were saved in. */
+  const target = ({ name: _, environmentId: __, ...settings }: SourceInfo) => JSON.stringify(Object.entries(settings).sort())
   const sameTarget = (a: SourceInfo, b: SourceInfo) => target(a) === target(b)
 
   const copyName = (name: string) => {
@@ -157,7 +203,7 @@ export function createCore(options: CoreOptions = {}): Core {
     async listSources() {
       await loaded
       const rank = (s: SourceInfo) => groupOrder.indexOf(s.type)
-      return sources.toSorted((a, b) => rank(a) - rank(b)).map((s) => ({ ...s }))
+      return sources.toSorted((a, b) => rank(a) - rank(b)).map(handOut)
     },
 
     async addSource(input) {
@@ -187,7 +233,7 @@ export function createCore(options: CoreOptions = {}): Core {
         const original = sourceFor(sourceId)
         const copy: SourceInfo = { ...original, id, name: copyName(original.name) }
         await commit(() => sources.splice(sources.indexOf(original) + 1, 0, copy))
-        return { ...copy }
+        return handOut(copy)
       } catch (error) {
         await secrets.remove(id)
         throw error
@@ -226,6 +272,39 @@ export function createCore(options: CoreOptions = {}): Core {
       // Groups without Sources aren't shown, so they simply follow the ones that are.
       const hidden = groupOrder.filter((t) => !shown.includes(t))
       await commit(() => groupOrder.splice(0, groupOrder.length, ...reordered, ...hidden))
+    },
+
+    async listEnvironments() {
+      await loaded
+      return environments.map((e) => ({ ...e }))
+    },
+
+    async addEnvironment(input) {
+      await loaded
+      const environment: Environment = { id: randomUUID(), ...validateEnvironment(input) }
+      await commit(() => environments.push(environment), { registry: false, environments: true })
+      return { ...environment }
+    },
+
+    async editEnvironment(environmentId, input) {
+      await loaded
+      const before = environmentFor(environmentId)
+      const environment: Environment = { id: environmentId, ...validateEnvironment(input, before) }
+      await commit(() => (environments[environments.indexOf(before)] = environment), { registry: false, environments: true })
+      return { ...environment }
+    },
+
+    async deleteEnvironment(environmentId) {
+      await loaded
+      const environment = environmentFor(environmentId)
+      const hasLabelledSources = sources.some((s) => s.environmentId === environmentId)
+      await commit(
+        () => {
+          environments.splice(environments.indexOf(environment), 1)
+          sources.forEach((s, i) => s.environmentId === environmentId && (sources[i] = unlabelled(s)))
+        },
+        { registry: hasLabelledSources, environments: true }
+      )
     },
 
     async connectionState(sourceId) {

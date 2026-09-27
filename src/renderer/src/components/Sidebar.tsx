@@ -1,7 +1,8 @@
 import { useCallback, useRef, useState, type DragEvent, type HTMLAttributes, type MouseEvent } from 'react'
-import type { ConnectionState, EntryNode, SourceInfo, SourceTypeId } from '@shared/core-api'
+import type { ConnectionState, EntryNode, Environment, SourceInfo, SourceTypeId } from '@shared/core-api'
 import type { Theme } from '@shared/settings'
 import { core, describeError } from '../core-client'
+import { environmentOf } from '../environments'
 import { t } from '../i18n'
 import { uiFor } from '../source-types'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -13,6 +14,9 @@ import { SourceTree } from './SourceTree'
 interface Props {
   /** In sidebar order: grouped by Source Type, groups in their user-chosen order. */
   sources: SourceInfo[]
+  /** Every Environment, for labelling Sources. */
+  environments: Environment[]
+  onManageEnvironments(): void
   /** Each Source's connection state; Sources without an entry are Disconnected. */
   connections: ReadonlyMap<string, ConnectionState>
   /** Connects a Source, resolving to its root's children or null if it couldn't connect. */
@@ -66,7 +70,7 @@ const settingsShortcut = navigator.userAgent.includes('Mac') ? '⌘,' : 'Ctrl+,'
 
 export function Sidebar(props: Props) {
   const { sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile, onOpenSettings } = props
-  const { showDetails, onToggleDetails, theme } = props
+  const { showDetails, onToggleDetails, theme, environments, onManageEnvironments } = props
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const { menu, open: openContextMenu, close: closeMenu } = useContextMenu<{ label: string; items: MenuItem[] }>()
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
@@ -233,6 +237,7 @@ export function Sidebar(props: Props) {
                   key={`${source.id}:${source.rootPath}`}
                   source={source}
                   connection={connections.get(source.id) ?? disconnected}
+                  environment={environmentOf(environments, source)}
                   onConnect={() => onConnect(source)}
                   sourceMenuItems={sourceMenuItems(source)}
                   onContextMenu={openMenu}
@@ -257,6 +262,8 @@ export function Sidebar(props: Props) {
       {(dialog?.kind === 'add' || dialog?.kind === 'edit') && (
         <SourceDialog
           editing={dialog.kind === 'edit' ? dialog.source : undefined}
+          environments={environments}
+          onManageEnvironments={onManageEnvironments}
           onClose={() => setDialog(null)}
           onSaved={() => {
             setDialog(null)

@@ -8,6 +8,7 @@ interface Props {
   settings: Settings
   /** Shows a theme while it is being chosen, or null to go back to the saved one. */
   onPreviewTheme(theme: Theme | null): void
+  onManageEnvironments(): void
   onSaved(settings: Settings): void
   onClose(): void
 }
@@ -24,7 +25,7 @@ const fields: { key: NumberSetting; unit: number; section: 'files' | 'logs' }[] 
 const parseWhole = (text: string) => (/^\s*\d+\s*$/.test(text) ? Number(text) : NaN)
 
 /** Edits the app-wide settings. The theme is previewed as soon as it's picked; nothing is saved until Save. */
-export function SettingsDialog({ settings, onPreviewTheme, onSaved, onClose }: Props) {
+export function SettingsDialog({ settings, onPreviewTheme, onManageEnvironments, onSaved, onClose }: Props) {
   const close = () => {
     onPreviewTheme(null)
     onClose()
@@ -105,6 +106,16 @@ export function SettingsDialog({ settings, onPreviewTheme, onSaved, onClose }: P
                 {t(`settings.theme.${option}`)}
               </label>
             ))}
+          </div>
+        </fieldset>
+
+        <fieldset className="settings-section">
+          <legend className="settings-section__title">{t('settings.environments')}</legend>
+          <p className="field__hint">{t('environments.intro')}</p>
+          <div>
+            <button type="button" className="button button--quiet" onClick={onManageEnvironments}>
+              {t('settings.manageEnvironments')}
+            </button>
           </div>
         </fieldset>
 

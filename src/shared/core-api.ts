@@ -14,6 +14,8 @@ export interface NewLocalSource {
   rootPath: string
   /** Whether dotfiles and files marked hidden are listed; on unless turned off. */
   showHidden?: boolean
+  /** The Environment the Source is labelled with; unlabelled when left out. */
+  environmentId?: string
 }
 
 /** The user-editable settings of a Source; its Source Type decides which fields exist. */
@@ -25,6 +27,26 @@ export interface SourceInfo {
   name: string
   rootPath: string
   showHidden: boolean
+  /** Left out when the Source isn't labelled with an Environment. */
+  environmentId?: string
+}
+
+/** A user-defined label for the kind of system Sources point at, e.g. prod or dev. */
+export interface Environment {
+  id: string
+  name: string
+  /** A CSS colour, always lowercase `#rrggbb`. */
+  color: string
+  /** Marks an Environment that needs extra care; no behavioural effect in v1. */
+  protected: boolean
+}
+
+/** The user-editable settings of an Environment. */
+export interface NewEnvironment {
+  name: string
+  color: string
+  /** Off unless given. */
+  protected?: boolean
 }
 
 /** A path inside a Source: '/'-separated, relative to the Source root, '' for the root itself. */
@@ -144,6 +166,11 @@ export type CoreErrorCode =
   | 'SYMLINK_LOOP'
   | 'INVALID_RANGE'
   | 'INVALID_ORDER'
+  | 'ENVIRONMENT_NOT_FOUND'
+  | 'ENVIRONMENT_NAME_REQUIRED'
+  | 'ENVIRONMENT_NAME_TAKEN'
+  | 'INVALID_COLOR'
+  | 'INVALID_ENVIRONMENT'
   | 'INVALID_SETTINGS'
   | 'INVALID_ENCODING'
   | 'DECOMPRESSION_FAILED'
@@ -162,6 +189,13 @@ export interface CoreApi {
   moveSource(sourceId: string, index: number): Promise<void>
   /** Moves a Source Type group to `index` among the groups that currently have Sources. */
   moveSourceGroup(type: SourceTypeId, index: number): Promise<void>
+  /** Every Environment, oldest first; prod, staging, qa and dev until the user changes them. */
+  listEnvironments(): Promise<Environment[]>
+  addEnvironment(input: NewEnvironment): Promise<Environment>
+  /** Renames, recolours or (un)protects an Environment, keeping its id and place. */
+  editEnvironment(environmentId: string, input: NewEnvironment): Promise<Environment>
+  /** Removes an Environment; the Sources labelled with it become unlabelled. */
+  deleteEnvironment(environmentId: string): Promise<void>
   connectionState(sourceId: string): Promise<ConnectionState>
   /** Resolves the Source's settings, checks it can be reached and returns its root's children. */
   connect(sourceId: string): Promise<EntryNode[]>
@@ -194,6 +228,10 @@ export const coreMethods: readonly CoreMethod[] = [
   'deleteSource',
   'moveSource',
   'moveSourceGroup',
+  'listEnvironments',
+  'addEnvironment',
+  'editEnvironment',
+  'deleteEnvironment',
   'connectionState',
   'connect',
   'testConnection',

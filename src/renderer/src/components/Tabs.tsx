@@ -1,3 +1,5 @@
+import type { Environment } from '@shared/core-api'
+import { environmentOf, environmentStyle } from '../environments'
 import type { OpenTab } from '../workspace'
 import { t } from '../i18n'
 import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
@@ -6,6 +8,8 @@ import { CloseIcon, FileIcon, ReloadIcon } from './icons'
 interface Props {
   tabs: OpenTab[]
   activeKey: string | null
+  /** Every Environment; a tab's top border takes the colour of its Source's. */
+  environments: Environment[]
   onActivate(key: string): void
   onPin(key: string): void
   onReload(key: string): void
@@ -14,7 +18,7 @@ interface Props {
   onCloseAll(): void
 }
 
-export function Tabs({ tabs, activeKey, onActivate, onPin, onReload, onClose, onCloseOthers, onCloseAll }: Props) {
+export function Tabs({ tabs, activeKey, environments, onActivate, onPin, onReload, onClose, onCloseOthers, onCloseAll }: Props) {
   const { menu, open: openMenu, close: closeMenu } = useContextMenu<{ tab: OpenTab }>()
 
   if (tabs.length === 0) return null
@@ -31,6 +35,7 @@ export function Tabs({ tabs, activeKey, onActivate, onPin, onReload, onClose, on
       <div className="tabs__list" role="tablist">
         {tabs.map((tab) => {
           const active = tab.key === activeKey
+          const environment = environmentOf(environments, tab.source)
           return (
             <div
               key={tab.key}
@@ -39,7 +44,8 @@ export function Tabs({ tabs, activeKey, onActivate, onPin, onReload, onClose, on
               aria-selected={active}
               aria-description={tab.pinned ? undefined : t('tabs.preview')}
               title={`${tab.source.name}: ${tab.file.path}`}
-              className={`tab ${active ? 'is-active' : ''} ${tab.pinned ? '' : 'is-preview'}`}
+              className={`tab ${active ? 'is-active' : ''} ${tab.pinned ? '' : 'is-preview'} ${environment ? 'has-environment' : ''}`}
+              style={environment && environmentStyle(environment)}
               onClick={() => onActivate(tab.key)}
               onDoubleClick={() => onPin(tab.key)}
               onAuxClick={(e) => e.button === 1 && onClose(tab.key)}

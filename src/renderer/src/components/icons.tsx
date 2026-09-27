@@ -61,6 +61,13 @@ export const CloseIcon = () => (
   </svg>
 )
 
+export const TrashIcon = () => (
+  <svg {...base}>
+    <path d="M2.75 4.25h10.5M6.25 4.25v-1.5h3.5v1.5M4.25 4.25l.6 8.6c.03.4.36.65.75.65h4.8c.39 0 .72-.25.75-.65l.6-8.6" />
+    <path d="M6.75 7v4M9.25 7v4" />
+  </svg>
+)
+
 export const ReloadIcon = () => (
   <svg {...base}>
     <path d="M13 8a5 5 0 1 1-1.5-3.55" />

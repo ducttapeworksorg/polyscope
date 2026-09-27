@@ -11,12 +11,13 @@ let app: ElectronApplication
 const launch = () =>
   electron.launch({ args: [join(__dirname, '..', '..', 'out', 'main', 'index.js'), `--user-data-dir=${join(dir, 'user-data')}`] })
 
-async function addSource(window: Page, name: string, rootPath: string) {
+async function addSource(window: Page, name: string, rootPath: string, environment?: string) {
   await window.getByRole('navigation').getByRole('button', { name: 'Add Source' }).first().click()
   const dialog = window.getByRole('dialog', { name: 'Add Source' })
   await expect(dialog.getByRole('radio', { name: /Local Filesystem/ })).toBeChecked()
   await dialog.getByLabel('Name').fill(name)
   await dialog.getByLabel('Root path').fill(rootPath)
+  if (environment) await dialog.getByLabel('Environment').selectOption({ label: environment })
   await dialog.getByRole('button', { name: 'Add Source' }).click()
   await expect(dialog).toBeHidden()
 }
@@ -258,4 +259,56 @@ test('connect, fail, retry, disconnect and reconnect a Source', async () => {
   await expect(window.getByText('Source disconnected')).toBeVisible()
   await window.getByRole('button', { name: 'Reconnect' }).click()
   await expect(window.getByText('Source disconnected')).toBeHidden()
+})
+
+test('label a Source with an Environment, shown on its sidebar row, tabs and the status bar', async () => {
+  const window = await app.firstWindow()
+  await addSource(window, 'Fixture', join(dir, 'root'), 'prod')
+  const source = window.getByRole('treeitem', { name: 'Fixture' })
+  const badge = source.locator('.env-badge')
+  await expect(badge).toHaveText('prod')
+
+  await source.click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  await window.getByRole('treeitem', { name: /^app\.log/ }).click()
+  const tab = window.getByRole('tab', { name: 'app.log' })
+  const segment = window.getByRole('contentinfo').getByTitle('Environment')
+  await expect(tab).toHaveCSS('border-top-color', 'rgb(229, 72, 77)')
+  await expect(segment).toHaveText('prod')
+  await expect(segment).toHaveCSS('background-color', 'rgb(229, 72, 77)')
+
+  // A new Environment, recoloured, relabels the Source and its open tab.
+  const manageEnvironments = async () => {
+    await window.getByRole('button', { name: 'Settings' }).click()
+    await window.getByRole('button', { name: 'Manage Environments…' }).click()
+    return window.getByRole('dialog', { name: 'Environments' })
+  }
+  const closeEnvironments = async () => {
+    await window.getByRole('dialog', { name: 'Environments' }).getByRole('button', { name: 'Done' }).click()
+    await window.getByRole('dialog', { name: 'Settings' }).getByRole('button', { name: 'Cancel' }).click()
+  }
+  let environments = await manageEnvironments()
+  await environments.getByLabel('New Environment', { exact: true }).fill('uat')
+  await environments.getByRole('button', { name: 'Add', exact: true }).click()
+  await environments.getByLabel('Colour of uat').fill('#0090ff')
+  await closeEnvironments()
+
+  await source.click({ button: 'right' })
+  await window.getByRole('menu', { name: 'Actions for Fixture' }).getByRole('menuitem', { name: 'Edit…' }).click()
+  const edit = window.getByRole('dialog', { name: 'Edit Fixture' })
+  await edit.getByLabel('Environment').selectOption({ label: 'uat' })
+  await edit.getByRole('button', { name: 'Save' }).click()
+  await expect(badge).toHaveText('uat')
+  await expect(tab).toHaveCSS('border-top-color', 'rgb(0, 144, 255)')
+  await expect(segment).toHaveText('uat')
+
+  // Deleting it leaves the Source unlabelled, and its tab stays open.
+  environments = await manageEnvironments()
+  await environments.getByRole('button', { name: 'Delete uat' }).click()
+  await window.getByRole('alertdialog', { name: 'Delete uat?' }).getByRole('button', { name: 'Delete' }).click()
+  await expect(environments.getByLabel('Name of uat')).toHaveCount(0)
+  await closeEnvironments()
+  await expect(badge).toHaveCount(0)
+  await expect(segment).toHaveCount(0)
+  await expect(tab).toBeVisible()
 })

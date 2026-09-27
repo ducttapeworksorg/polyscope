@@ -8,19 +8,22 @@ import {
   type MouseEvent,
   type ReactNode
 } from 'react'
-import type { ConnectionState, EntryNode, ErrorNode, SourceInfo, SourcePath } from '@shared/core-api'
+import type { ConnectionState, EntryNode, Environment, ErrorNode, SourceInfo, SourcePath } from '@shared/core-api'
 import type { Theme } from '@shared/settings'
 import { core, describeError, describeFailure } from '../core-client'
 import { t } from '../i18n'
 import { formatDateTime, formatRelativeTime, formatSize } from '../i18n/format'
 import { uiFor } from '../source-types'
 import type { MenuItem } from './ContextMenu'
+import { EnvironmentBadge } from './EnvironmentBadge'
 import { ChevronIcon, WarningIcon } from './icons'
 import { MaterialIcon } from './MaterialIcon'
 
 interface Props {
   source: SourceInfo
   connection: ConnectionState
+  /** The Environment the Source is labelled with, shown as a badge after its name. */
+  environment?: Environment
   /** Connects the Source, resolving to its root's children or null if it couldn't connect. */
   onConnect(): Promise<EntryNode[] | null>
   /** Menu items for the Source's own row; the tree puts its own, like Refresh, ahead of them. */
@@ -56,6 +59,8 @@ interface RowProps {
   onDoubleActivate?(): void
   menuItems?: MenuItem[]
   status?: ReactNode
+  /** Shown right after the name, e.g. the Source's Environment badge. */
+  badge?: ReactNode
   /** Size and modified time, dimmed after the name. */
   details?: ReactNode
   className?: string
@@ -78,7 +83,7 @@ function useNow(ticking: boolean) {
 
 export function SourceTree(props: Props) {
   const { source, connection, onConnect, sourceMenuItems, onContextMenu, selectedKey, onSelect, onOpenFile } = props
-  const { sourceRowProps, treeProps, showDetails, theme } = props
+  const { sourceRowProps, treeProps, showDetails, theme, environment } = props
   const now = useNow(showDetails)
   const [expanded, setExpanded] = useState<ReadonlySet<SourcePath>>(new Set())
   const [listings, setListings] = useState<ReadonlyMap<SourcePath, Listing>>(new Map())
@@ -134,7 +139,7 @@ export function SourceTree(props: Props) {
     setExpanded((prev) => new Set(prev).add(''))
   }
 
-  const row = ({ path, depth, label, icon, folder, onActivate, onDoubleActivate, menuItems, status, details, className = '', extra }: RowProps) => {
+  const row = ({ path, depth, label, icon, folder, onActivate, onDoubleActivate, menuItems, status, badge, details, className = '', extra }: RowProps) => {
     const key = nodeKey(source.id, path)
     const isExpanded = folder && expanded.has(path)
     const activate = () => {
@@ -168,6 +173,7 @@ export function SourceTree(props: Props) {
         <span className={`tree-row__twisty ${isExpanded ? 'is-open' : ''}`}>{folder && <ChevronIcon />}</span>
         <span className="tree-row__icon">{icon}</span>
         <span className="tree-row__label">{label}</span>
+        {badge}
         {details}
         {status}
       </div>
@@ -268,6 +274,7 @@ export function SourceTree(props: Props) {
         onActivate: () => void toggleSource(),
         menuItems: [...(connected ? [{ label: t('sourceMenu.refresh'), onSelect: () => refresh('') }] : []), ...sourceMenuItems],
         status,
+        badge: environment && <EnvironmentBadge environment={environment} />,
         className: `tree-row--source ${connectError ? 'is-error' : ''}`,
         extra: { ...sourceRowProps, title: connectError ?? undefined }
       })}

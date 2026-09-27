@@ -91,6 +91,7 @@ body {
 
 button,
 input,
+select,
 fieldset {
   font: inherit;
   color: inherit;
@@ -425,6 +426,11 @@ fieldset {
 }
 
 /* Paths are data: they read in the same mono face as file content. */
+.field__select {
+  width: auto;
+  min-width: 16ch;
+}
+
 .field__input--path {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
@@ -473,6 +479,99 @@ fieldset {
 
 .field__problem {
   color: var(--danger);
+}
+
+/* ---------- Environments ---------- */
+
+/* An Environment's name on a pill of its colour; --env and --env-text come from the element's style. */
+.env-badge {
+  flex: none;
+  max-width: 12ch;
+  overflow: hidden;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--env);
+  color: var(--env-text);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 16px;
+  text-overflow: ellipsis;
+}
+
+.tree-row__label + .env-badge {
+  margin-left: 4px;
+}
+
+.statusbar__environment {
+  align-self: stretch;
+  margin-left: -12px;
+  padding: 0 10px;
+  background: var(--env);
+  color: var(--env-text);
+  font-weight: 600;
+}
+
+.dialog--wide {
+  width: min(520px, calc(100vw - 48px));
+}
+
+.env-list {
+  display: grid;
+  gap: 6px;
+  max-height: 50vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.env-list__empty {
+  margin: 0;
+  color: var(--text-faint);
+}
+
+.env-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.env-row--new {
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.env-row__color {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 2px;
+  border: 1px solid var(--slate-600);
+  border-radius: 4px;
+  background: var(--slate-900);
+  cursor: pointer;
+}
+
+.env-row__color::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.env-row__color::-webkit-color-swatch {
+  border: 0;
+  border-radius: 2px;
+}
+
+.env-row__name {
+  flex: 1;
+}
+
+.env-row__protected {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: var(--text-sm);
 }
 
 /* ---------- Settings ---------- */
@@ -788,7 +887,7 @@ fieldset {
 }
 
 .tab {
-  /* Environment colour slots in here later; the active tab shows glint until then. */
+  /* The top border: the Source's Environment colour, or glint on the active tab of an unlabelled one. */
   --tab-marker: transparent;
   display: flex;
   align-items: center;
@@ -808,6 +907,11 @@ fieldset {
   background: var(--slate-850);
   color: var(--text);
   margin-bottom: -1px;
+}
+
+/* Every tab of a labelled Source carries its colour, active or not, so prod is never mistaken. */
+.tab.has-environment {
+  --tab-marker: var(--env);
 }
 
 .tab__icon {

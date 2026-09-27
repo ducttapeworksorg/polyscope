@@ -1,5 +1,6 @@
-import { useState, type ReactNode } from 'react'
-import { textEncodings, type LanguageId, type TextEncoding } from '@shared/core-api'
+import { useState } from 'react'
+import { textEncodings, type Environment, type LanguageId, type TextEncoding } from '@shared/core-api'
+import { environmentStyle } from '../environments'
 import { t } from '../i18n'
 import { formatDateTime, formatSize } from '../i18n/format'
 import { allLanguages, languageName } from '../monaco'
@@ -9,8 +10,8 @@ import { QuickPick, type PickOption } from './QuickPick'
 
 interface Props {
   activeTab: OpenTab | null
-  /** The active tab's Environment segment, leading the bar when its Source has one. */
-  environment?: ReactNode
+  /** The active tab's Source's Environment, leading the bar in its colour. */
+  environment?: Environment
   /** Reopens the active tab's file in `encoding`, or as detected when null. */
   onPickEncoding(encoding: TextEncoding | null): void
   onPickLanguage(language: LanguageId): void
@@ -29,7 +30,7 @@ interface OpenPicker {
   anchor: HTMLElement
 }
 
-/** Facts about the active tab: where it's from, then its size, modified time, encoding and language. */
+/** Facts about the active tab: its Environment and where it's from, then its size, modified time, encoding and language. */
 export function StatusBar({ activeTab, environment, onPickEncoding, onPickLanguage }: Props) {
   const [picker, setPicker] = useState<OpenPicker | null>(null)
   const closePicker = () => {
@@ -66,7 +67,11 @@ export function StatusBar({ activeTab, environment, onPickEncoding, onPickLangua
 
   return (
     <footer className="statusbar">
-      {environment}
+      {environment && (
+        <span className="statusbar__item statusbar__environment" style={environmentStyle(environment)} title={t('environments.status')}>
+          {environment.name}
+        </span>
+      )}
       <span className="statusbar__item">
         <Icon />
         {source.name}
