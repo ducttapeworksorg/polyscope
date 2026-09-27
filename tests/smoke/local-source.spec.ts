@@ -22,6 +22,13 @@ async function addSource(window: Page, name: string, rootPath: string, environme
   await expect(dialog).toBeHidden()
 }
 
+/** Clicks one of a Source's action buttons, which show once its row is pointed at. */
+async function sourceAction(window: Page, name: string, action: string) {
+  const row = window.getByRole('treeitem', { name, exact: true })
+  await row.hover()
+  await row.getByRole('button', { name: action }).click()
+}
+
 test.beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'polyscope-smoke-'))
   await mkdir(join(dir, 'root', 'logs'), { recursive: true })
@@ -184,17 +191,13 @@ test('binary, hex, encodings, languages and compressed files', async () => {
 test('edit, duplicate, reorder and delete Sources', async () => {
   const window = await app.firstWindow()
   await addSource(window, 'Fixture', join(dir, 'root'))
-  const sourceMenu = async (name: string) => {
-    await window.getByRole('treeitem', { name, exact: true }).click({ button: 'right' })
-    return window.getByRole('menu', { name: `Actions for ${name}` })
-  }
 
-  await (await sourceMenu('Fixture')).getByRole('menuitem', { name: 'Edit…' }).click()
+  await sourceAction(window, 'Fixture', 'Edit…')
   const edit = window.getByRole('dialog', { name: 'Edit Fixture' })
   await edit.getByLabel('Name').fill('Renamed')
   await edit.getByRole('button', { name: 'Save' }).click()
 
-  await (await sourceMenu('Renamed')).getByRole('menuitem', { name: 'Duplicate' }).click()
+  await sourceAction(window, 'Renamed', 'Duplicate')
   await expect(window.getByRole('tree')).toHaveCount(2)
   await expect(window.getByRole('tree').nth(1)).toHaveAccessibleName('Renamed copy')
 
@@ -204,7 +207,7 @@ test('edit, duplicate, reorder and delete Sources', async () => {
     .dragTo(window.getByRole('treeitem', { name: 'Renamed', exact: true }), { targetPosition: { x: 40, y: 2 } })
   await expect(window.getByRole('tree').first()).toHaveAccessibleName('Renamed copy')
 
-  await (await sourceMenu('Renamed')).getByRole('menuitem', { name: 'Delete…' }).click()
+  await sourceAction(window, 'Renamed', 'Delete…')
   await window.getByRole('alertdialog', { name: 'Delete Renamed?' }).getByRole('button', { name: 'Delete' }).click()
   await expect(window.getByRole('tree')).toHaveCount(1)
   await expect(window.getByRole('tree')).toHaveAccessibleName('Renamed copy')
@@ -252,8 +255,7 @@ test('connect, fail, retry, disconnect and reconnect a Source', async () => {
   await expect(window.getByRole('treeitem', { name: 'new.log' })).toBeVisible()
 
   // Disconnecting collapses the Source but keeps its tab, with a way back.
-  await sourceRow.click({ button: 'right' })
-  await window.getByRole('menu', { name: 'Actions for Fixture' }).getByRole('menuitem', { name: 'Disconnect' }).click()
+  await sourceAction(window, 'Fixture', 'Disconnect')
   await expect(window.getByRole('treeitem')).toHaveCount(1)
   await expect(window.getByRole('tab', { name: 'app.log' })).toBeVisible()
   await expect(window.getByText('Source disconnected')).toBeVisible()
@@ -293,8 +295,7 @@ test('label a Source with an Environment, shown on its sidebar row, tabs and the
   await environments.getByLabel('Colour of uat').fill('#0090ff')
   await closeEnvironments()
 
-  await source.click({ button: 'right' })
-  await window.getByRole('menu', { name: 'Actions for Fixture' }).getByRole('menuitem', { name: 'Edit…' }).click()
+  await sourceAction(window, 'Fixture prod', 'Edit…')
   const edit = window.getByRole('dialog', { name: 'Edit Fixture' })
   await edit.getByLabel('Environment').selectOption({ label: 'uat' })
   await edit.getByRole('button', { name: 'Save' }).click()
@@ -311,4 +312,36 @@ test('label a Source with an Environment, shown on its sidebar row, tabs and the
   await expect(badge).toHaveCount(0)
   await expect(segment).toHaveCount(0)
   await expect(tab).toBeVisible()
+})
+
+test('start maximized, and resize the sidebar by dragging its edge, remembered after a relaunch', async () => {
+  const window = await app.firstWindow()
+  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isMaximized())).toBe(true)
+
+  const sidebar = window.getByRole('navigation')
+  const handle = window.getByRole('separator', { name: 'Resize Sources' })
+  const width = async () => (await sidebar.boundingBox())!.width
+  const before = await width()
+  const box = (await handle.boundingBox())!
+  await window.mouse.move(box.x + box.width / 2, box.y + 100)
+  await window.mouse.down()
+  await window.mouse.move(box.x + box.width / 2 + 120, box.y + 100, { steps: 5 })
+  await window.mouse.up()
+  expect(await width()).toBeCloseTo(before + 120, -1)
+
+  // Dragged far past its limit, it stops there.
+  await window.mouse.move(box.x + 120 + box.width / 2, box.y + 100)
+  await window.mouse.down()
+  await window.mouse.move(box.x + 2000, box.y + 100, { steps: 5 })
+  await window.mouse.up()
+  await expect(handle).toHaveAttribute('aria-valuenow', '640')
+
+  await handle.focus()
+  await window.keyboard.press('ArrowLeft')
+  await expect(handle).toHaveAttribute('aria-valuenow', '624')
+
+  await app.close()
+  app = await launch()
+  const relaunched = await app.firstWindow()
+  await expect(relaunched.getByRole('separator', { name: 'Resize Sources' })).toHaveAttribute('aria-valuenow', '624')
 })

@@ -38,7 +38,10 @@ function createWindow(theme: Theme): void {
     }
   })
 
-  mainWindow.once('ready-to-show', () => mainWindow?.show())
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.maximize()
+    mainWindow?.show()
+  })
   mainWindow.on('closed', () => (mainWindow = null))
 
   // The renderer never navigates; anything that tries to is sent to the OS browser.

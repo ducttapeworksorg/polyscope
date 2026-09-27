@@ -9,6 +9,7 @@ export const en = {
   'sidebar.settings': 'Settings',
   'sidebar.settingsTooltip': 'Settings ({shortcut})',
   'sidebar.showDetails': 'Show sizes and modified times',
+  'sidebar.resize': 'Resize Sources',
 
   'sourceType.local': 'Local Filesystem',
   'sourceType.local.hint': 'A folder on this computer',
@@ -53,11 +54,11 @@ export const en = {
   'localSource.showHidden': 'Show hidden files',
   'localSource.showHidden.hint': 'Dotfiles, and files marked hidden on Windows.',
 
-  'sourceMenu.refresh': 'Refresh',
-  'sourceMenu.disconnect': 'Disconnect',
-  'sourceMenu.edit': 'Edit…',
-  'sourceMenu.duplicate': 'Duplicate',
-  'sourceMenu.delete': 'Delete…',
+  'sourceActions.refresh': 'Refresh',
+  'sourceActions.disconnect': 'Disconnect',
+  'sourceActions.edit': 'Edit…',
+  'sourceActions.duplicate': 'Duplicate',
+  'sourceActions.delete': 'Delete…',
 
   'deleteSource.title': 'Delete {name}?',
   'deleteSource.body': 'Polyscope forgets this Source and any secrets stored for it. Nothing it points at is touched.',

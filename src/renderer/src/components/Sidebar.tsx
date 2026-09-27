@@ -7,9 +7,9 @@ import { t } from '../i18n'
 import { uiFor } from '../source-types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
-import { DetailsIcon, GearIcon, PlusIcon } from './icons'
+import { DetailsIcon, DuplicateIcon, GearIcon, PencilIcon, PlusIcon, TrashIcon, UnlinkIcon } from './icons'
 import { SourceDialog } from './SourceDialog'
-import { SourceTree } from './SourceTree'
+import { SourceTree, type SourceAction } from './SourceTree'
 
 interface Props {
   /** In sidebar order: grouped by Source Type, groups in their user-chosen order. */
@@ -113,13 +113,14 @@ export function Sidebar(props: Props) {
     setDragging(what)
   }
 
-  const sourceMenuItems = (source: SourceInfo): MenuItem[] => [
+  // Right-aligned, so the ones every Source has keep their place whether or not it's connected.
+  const sourceActions = (source: SourceInfo): SourceAction[] => [
     ...((connections.get(source.id) ?? disconnected).state !== 'disconnected'
-      ? [{ label: t('sourceMenu.disconnect'), onSelect: () => onDisconnect(source) }]
+      ? [{ label: t('sourceActions.disconnect'), icon: <UnlinkIcon />, onSelect: () => onDisconnect(source) }]
       : []),
-    { label: t('sourceMenu.edit'), onSelect: () => setDialog({ kind: 'edit', source }) },
-    { label: t('sourceMenu.duplicate'), onSelect: () => void run(() => core.duplicateSource(source.id)) },
-    { label: t('sourceMenu.delete'), onSelect: () => setDialog({ kind: 'delete', source }) }
+    { label: t('sourceActions.edit'), icon: <PencilIcon />, onSelect: () => setDialog({ kind: 'edit', source }) },
+    { label: t('sourceActions.duplicate'), icon: <DuplicateIcon />, onSelect: () => void run(() => core.duplicateSource(source.id)) },
+    { label: t('sourceActions.delete'), icon: <TrashIcon />, onSelect: () => setDialog({ kind: 'delete', source }), danger: true }
   ]
 
   const sourceRowProps = (source: SourceInfo): HTMLAttributes<HTMLDivElement> => ({
@@ -239,7 +240,7 @@ export function Sidebar(props: Props) {
                   connection={connections.get(source.id) ?? disconnected}
                   environment={environmentOf(environments, source)}
                   onConnect={() => onConnect(source)}
-                  sourceMenuItems={sourceMenuItems(source)}
+                  sourceActions={sourceActions(source)}
                   onContextMenu={openMenu}
                   selectedKey={selectedKey}
                   onSelect={setSelectedKey}

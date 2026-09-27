@@ -75,6 +75,30 @@ export const ReloadIcon = () => (
   </svg>
 )
 
+export const PencilIcon = () => (
+  <svg {...base}>
+    <path d="M10.75 2.5l2.75 2.75-7.5 7.5-3.5.75.75-3.5z" />
+    <path d="M9.25 4l2.75 2.75" />
+  </svg>
+)
+
+/** Two overlapping sheets, for making a copy. */
+export const DuplicateIcon = () => (
+  <svg {...base}>
+    <rect x="5.25" y="5.25" width="8" height="8" rx="1" />
+    <path d="M10.75 5.25V3.5c0-.4-.35-.75-.75-.75H3.5c-.4 0-.75.35-.75.75V10c0 .4.35.75.75.75h1.75" />
+  </svg>
+)
+
+/** A chain link pulled apart, for disconnecting. */
+export const UnlinkIcon = () => (
+  <svg {...base}>
+    <path d="M7 4.5l1.6-1.6a2.5 2.5 0 0 1 3.5 3.5L10.5 8" />
+    <path d="M9 11.5l-1.6 1.6a2.5 2.5 0 0 1-3.5-3.5L5.5 8" />
+    <path d="M2.25 5.5h1.5M5.5 2.25v1.5M13.75 10.5h-1.5M10.5 13.75v-1.5" />
+  </svg>
+)
+
 export const GearIcon = () => (
   <svg {...base}>
     <circle cx="8" cy="8" r="2" />

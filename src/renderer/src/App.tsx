@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import type { ConnectionState, EntryNode, Environment, OpenedFile, OpenOptions, SourceInfo } from '@shared/core-api'
 import type { Settings, Theme } from '@shared/settings'
 import { EnvironmentsDialog } from './components/EnvironmentsDialog'
 import { ApertureMark } from './components/icons'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Sidebar } from './components/Sidebar'
+import { SidebarResizer, sidebarMinWidth, useSidebarWidth, workbenchMinWidth } from './components/SidebarResizer'
 import { nodeKey } from './components/SourceTree'
 import { StatusBar } from './components/StatusBar'
 import { Tabs } from './components/Tabs'
@@ -48,6 +49,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   // A theme being tried out in the Settings dialog, shown instead of the saved one until it closes.
   const [previewTheme, setPreviewTheme] = useState<Theme | null>(null)
+  const [sidebarWidth, setSidebarWidth] = useSidebarWidth()
 
   useEffect(() => {
     const unsubscribe = core.onSettingsChanged(setSettings)
@@ -191,8 +193,11 @@ export function App() {
   const activeEnvironment = activeTab ? environmentOf(environments, activeTab.source) : undefined
   const activeConnection: ConnectionState = (activeTab && connections.get(activeTab.source.id)) || { state: 'disconnected' }
 
+  // A narrower window takes its room from the sidebar first, down to the sidebar's own minimum.
+  const layout = { '--sidebar-width': `max(${sidebarMinWidth}px, min(${sidebarWidth}px, 100vw - ${workbenchMinWidth}px))` } as CSSProperties
+
   return (
-    <div className="app">
+    <div className="app" style={layout}>
       <Sidebar
         sources={sources}
         environments={environments}
@@ -207,6 +212,7 @@ export function App() {
         onToggleDetails={() => void toggleTreeDetails()}
         theme={previewTheme ?? settings.theme}
       />
+      <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />
 
       {settingsOpen && (
         <SettingsDialog

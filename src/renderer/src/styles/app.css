@@ -109,6 +109,7 @@ fieldset {
 /* ---------- Layout ---------- */
 
 .app {
+  position: relative;
   display: grid;
   grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr) 24px;
@@ -126,10 +127,48 @@ fieldset {
   grid-column: 1 / -1;
 }
 
-@media (max-width: 760px) {
-  :root {
-    --sidebar-width: 220px;
-  }
+/* The sidebar's right edge: a wide, invisible grip over a hairline that lights up while in use. */
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 24px;
+  left: var(--sidebar-width);
+  z-index: 5;
+  width: 9px;
+  margin-left: -5px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 3px;
+  width: 3px;
+  background: transparent;
+  transition: background-color 120ms ease-out;
+}
+
+/* A short delay on hover, so passing the pointer across the edge doesn't flash it. */
+.sidebar-resizer:hover::after {
+  background: var(--slate-600);
+  transition-delay: 250ms;
+}
+
+.sidebar-resizer.is-dragging::after,
+.sidebar-resizer:focus-visible::after {
+  background: var(--glint);
+  transition-delay: 0s;
+}
+
+.sidebar-resizer:focus-visible {
+  outline: none;
+}
+
+/* While dragging, the pointer keeps its resize cursor everywhere and nothing gets text-selected. */
+body.is-resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 /* ---------- Controls ---------- */
@@ -150,6 +189,10 @@ fieldset {
 .icon-button:hover {
   background: var(--slate-700);
   color: var(--text);
+}
+
+.icon-button--danger:hover {
+  color: var(--danger);
 }
 
 .button {
@@ -813,6 +856,53 @@ fieldset {
   font-weight: 400;
 }
 
+/* A Source's actions, right-aligned; shown while its row is pointed at, focused or selected. */
+.tree-row__actions {
+  display: none;
+  flex: none;
+  gap: 1px;
+  margin-left: auto;
+  margin-right: -6px;
+  padding-left: 6px;
+  font-weight: 400;
+}
+
+/* With the actions showing on a narrow sidebar, the name keeps a few letters and the badge gives way too. */
+.tree-row--source .tree-row__label {
+  min-width: 3ch;
+}
+
+.tree-row--source .env-badge {
+  flex-shrink: 1;
+  min-width: 3ch;
+}
+
+.tree-row__status + .tree-row__actions {
+  margin-left: 0;
+}
+
+.tree-row--source:hover .tree-row__actions,
+.tree-row--source:focus-within .tree-row__actions,
+.tree-row--source[aria-selected='true'] .tree-row__actions {
+  display: flex;
+}
+
+@media (hover: none) {
+  .tree-row__actions {
+    display: flex;
+  }
+}
+
+.tree-row__actions .icon-button {
+  width: 22px;
+  height: 22px;
+}
+
+/* On the selected row the usual hover fill would vanish into the selection, so it steps up a shade. */
+.tree-row[aria-selected='true'] .tree-row__actions .icon-button:hover {
+  background: var(--slate-600);
+}
+
 .tree-row__status--error,
 .tree-row--source.is-error .tree-row__icon {
   color: var(--danger);
@@ -1056,7 +1146,8 @@ fieldset {
     animation: none;
   }
 
-  .tree-row__twisty svg {
+  .tree-row__twisty svg,
+  .sidebar-resizer::after {
     transition: none;
   }
 }

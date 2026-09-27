@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type CSSProperties,
@@ -16,7 +17,7 @@ import { formatDateTime, formatRelativeTime, formatSize } from '../i18n/format'
 import { uiFor } from '../source-types'
 import type { MenuItem } from './ContextMenu'
 import { EnvironmentBadge } from './EnvironmentBadge'
-import { ChevronIcon, WarningIcon } from './icons'
+import { ChevronIcon, ReloadIcon, WarningIcon } from './icons'
 import { MaterialIcon } from './MaterialIcon'
 
 interface Props {
@@ -26,8 +27,8 @@ interface Props {
   environment?: Environment
   /** Connects the Source, resolving to its root's children or null if it couldn't connect. */
   onConnect(): Promise<EntryNode[] | null>
-  /** Menu items for the Source's own row; the tree puts its own, like Refresh, ahead of them. */
-  sourceMenuItems: MenuItem[]
+  /** Buttons at the end of the Source's own row; the tree puts its own, like Refresh, ahead of them. */
+  sourceActions: SourceAction[]
   onContextMenu(event: MouseEvent<HTMLElement>, label: string, items: MenuItem[]): void
   selectedKey: string | null
   onSelect(key: string): void
@@ -40,6 +41,15 @@ interface Props {
   /** Whether entries show their size and modified time after their name. */
   showDetails: boolean
   theme: Theme
+}
+
+/** One of a Source's actions, offered as an icon button on its row. */
+export interface SourceAction {
+  label: string
+  icon: ReactNode
+  onSelect(): void
+  /** Destructive, like Delete: tinted as a warning under the pointer. */
+  danger?: boolean
 }
 
 export const nodeKey = (sourceId: string, path: SourcePath) => `${sourceId}:${path}`
@@ -63,6 +73,10 @@ interface RowProps {
   badge?: ReactNode
   /** Size and modified time, dimmed after the name. */
   details?: ReactNode
+  /** Buttons at the end of the row, e.g. the Source's actions. */
+  actions?: ReactNode
+  /** Names the row by these elements, when its content holds more than its name (like buttons). */
+  labelledBy?: string
   className?: string
   extra?: HTMLAttributes<HTMLDivElement>
 }
@@ -82,9 +96,10 @@ function useNow(ticking: boolean) {
 }
 
 export function SourceTree(props: Props) {
-  const { source, connection, onConnect, sourceMenuItems, onContextMenu, selectedKey, onSelect, onOpenFile } = props
+  const { source, connection, onConnect, sourceActions, onContextMenu, selectedKey, onSelect, onOpenFile } = props
   const { sourceRowProps, treeProps, showDetails, theme, environment } = props
   const now = useNow(showDetails)
+  const id = useId()
   const [expanded, setExpanded] = useState<ReadonlySet<SourcePath>>(new Set())
   const [listings, setListings] = useState<ReadonlyMap<SourcePath, Listing>>(new Map())
   // Bumped whenever the connection is lost, so listings still on their way from it are ignored.
@@ -139,7 +154,9 @@ export function SourceTree(props: Props) {
     setExpanded((prev) => new Set(prev).add(''))
   }
 
-  const row = ({ path, depth, label, icon, folder, onActivate, onDoubleActivate, menuItems, status, badge, details, className = '', extra }: RowProps) => {
+  const row = (props: RowProps) => {
+    const { path, depth, label, icon, folder, onActivate, onDoubleActivate, menuItems, status, badge, details, actions, labelledBy } = props
+    const { className = '', extra } = props
     const key = nodeKey(source.id, path)
     const isExpanded = folder && expanded.has(path)
     const activate = () => {
@@ -163,6 +180,7 @@ export function SourceTree(props: Props) {
         aria-level={depth + 1}
         aria-expanded={folder ? isExpanded : undefined}
         aria-selected={selectedKey === key}
+        aria-labelledby={labelledBy}
         className={`tree-row ${className} ${extra?.className ?? ''}`}
         style={depthStyle(depth)}
         onClick={activate}
@@ -172,10 +190,13 @@ export function SourceTree(props: Props) {
       >
         <span className={`tree-row__twisty ${isExpanded ? 'is-open' : ''}`}>{folder && <ChevronIcon />}</span>
         <span className="tree-row__icon">{icon}</span>
-        <span className="tree-row__label">{label}</span>
+        <span className="tree-row__label" id={labelledBy && `${id}-label`}>
+          {label}
+        </span>
         {badge}
         {details}
         {status}
+        {actions}
       </div>
     )
   }
@@ -244,13 +265,38 @@ export function SourceTree(props: Props) {
         icon: <MaterialIcon icon={node.icon} theme={theme} open={isFolder && expanded.has(node.path)} />,
         onActivate: () => (isFolder ? toggle(node.path) : onOpenFile(source, node)),
         onDoubleActivate: isFolder ? undefined : () => onOpenFile(source, node, { pinned: true }),
-        menuItems: isFolder ? [{ label: t('sourceMenu.refresh'), onSelect: () => refresh(node.path) }] : undefined,
+        menuItems: isFolder ? [{ label: t('sourceActions.refresh'), onSelect: () => refresh(node.path) }] : undefined,
         details: showDetails ? details(node) : undefined,
         extra: { title: tooltip(node) }
       })
       return isFolder && expanded.has(node.path) ? [self, ...renderChildren(node.path, depth + 1)] : [self]
     })
   }
+
+  const actions: SourceAction[] = [
+    ...(connected ? [{ label: t('sourceActions.refresh'), icon: <ReloadIcon />, onSelect: () => refresh('') }] : []),
+    ...sourceActions
+  ]
+  // The buttons are the row's own controls: using one neither toggles, selects nor drags the row.
+  const stop = (event: { stopPropagation(): void }) => event.stopPropagation()
+  const actionButtons = (
+    <span className="tree-row__actions" onClick={stop} onDoubleClick={stop} onKeyDown={stop}>
+      {actions.map((action) => (
+        <button
+          key={action.label}
+          type="button"
+          className={`icon-button ${action.danger ? 'icon-button--danger' : ''}`}
+          aria-label={action.label}
+          title={action.label}
+          draggable={false}
+          onDragStart={(event) => event.preventDefault()}
+          onClick={action.onSelect}
+        >
+          {action.icon}
+        </button>
+      ))}
+    </span>
+  )
 
   const { Icon } = uiFor(source.type)
   const connectError = connection.state === 'error' ? t('tree.connectFailed', { message: describeFailure(connection) }) : null
@@ -272,9 +318,10 @@ export function SourceTree(props: Props) {
         folder: true,
         icon: <Icon />,
         onActivate: () => void toggleSource(),
-        menuItems: [...(connected ? [{ label: t('sourceMenu.refresh'), onSelect: () => refresh('') }] : []), ...sourceMenuItems],
         status,
-        badge: environment && <EnvironmentBadge environment={environment} />,
+        badge: environment && <EnvironmentBadge id={`${id}-badge`} environment={environment} />,
+        actions: actionButtons,
+        labelledBy: environment ? `${id}-label ${id}-badge` : `${id}-label`,
         className: `tree-row--source ${connectError ? 'is-error' : ''}`,
         extra: { ...sourceRowProps, title: connectError ?? undefined }
       })}
