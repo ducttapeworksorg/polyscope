@@ -16,6 +16,7 @@ import type {
   TreeNode
 } from '@shared/core-api'
 import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings } from '@shared/settings'
+import { listAwsProfiles } from './aws-profiles'
 import { CoreError } from './core-error'
 import { createEnvironmentStore, defaultEnvironments, isColor } from './environment-store'
 import { checkEncoding, decode, decompress, detectEncoding, hexDump, hexDumpLimit } from './file-content'
@@ -24,7 +25,7 @@ import type { FileSource } from './file-source'
 import { languageFor } from './languages'
 import { createLocalFileSource } from './local-file-source'
 import { createRegistryStore, emptyRegistry, type SavedSource } from './registry-store'
-import { createS3FileSource } from './s3-file-source'
+import { createS3FileSource, readCaBundle, type S3Target } from './s3-file-source'
 import { createSecretStore, type SecretStore } from './secret-store'
 import { createSettingsStore } from './settings-store'
 
@@ -34,7 +35,16 @@ const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base'
 
 /** Fills in settings added since a Source was saved with their defaults. */
 const withDefaults = (source: SavedSource): SavedSource =>
-  source.type === 'local' ? { ...source, showHidden: source.showHidden ?? true } : source
+  source.type === 'local'
+    ? { ...source, showHidden: source.showHidden ?? true }
+    : {
+        ...source,
+        auth: source.auth ?? 'keys',
+        profile: source.profile ?? '',
+        verifyTls: source.verifyTls ?? true,
+        caBundlePath: source.caBundlePath ?? '',
+        proxyUrl: source.proxyUrl ?? ''
+      }
 
 /** A Source without its Environment label. */
 const unlabelled = <S extends SavedSource>({ environmentId: _, ...source }: S) => source as S
@@ -42,21 +52,23 @@ const unlabelled = <S extends SavedSource>({ environmentId: _, ...source }: S) =
 /** Where a Source points and how it gets there: its settings, less its id, name and label. */
 type Target =
   | Pick<LocalSourceInfo, 'type' | 'rootPath' | 'showHidden'>
-  | Pick<S3SourceInfo, 'type' | 'host' | 'bucket' | 'prefix' | 'region' | 'pathStyle' | 'accessKeyId'>
+  | Omit<S3SourceInfo, 'id' | 'name' | 'environmentId' | 'secretKeySet'>
+
+type S3Settings = Extract<Target, { type: 's3' }>
 
 /** The name an S3 Source's secret key is stored under. */
 const secretKeyName = 'secretKey'
 
 const isBlank = (value: string | undefined) => !value?.trim()
 
-/** An S3 host as a URL with a scheme (https unless given), or blank for AWS itself. */
-function normaliseHost(input: string) {
-  const host = input.trim()
-  if (!host) return ''
-  const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(host) ? host : `https://${host}`
+/** An http(s) address as a URL with a scheme (`scheme` unless given), or blank if it's blank; failing with `code` if it's neither. */
+function normaliseUrl(input: string, scheme: 'http' | 'https', code: 'INVALID_HOST' | 'INVALID_PROXY') {
+  const address = input.trim()
+  if (!address) return ''
+  const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(address) ? address : `${scheme}://${address}`
   const parsed = URL.canParse(url) ? new URL(url) : null
   if (!parsed?.hostname || !['http:', 'https:'].includes(parsed.protocol)) {
-    throw new CoreError('INVALID_HOST', `Not an http(s) address: ${input}`)
+    throw new CoreError(code, `Not an http(s) address: ${input}`)
   }
   return url.replace(/\/+$/, '')
 }
@@ -65,14 +77,39 @@ function normaliseHost(input: string) {
 function targetOf(input: NewSource): Target {
   if (input.type === 'local') return { type: 'local', rootPath: input.rootPath.trim(), showHidden: input.showHidden ?? true }
   const s3: NewS3Source = input
-  const host = normaliseHost(s3.host ?? '')
+  // Blank for AWS itself; a store is most likely https, a proxy http.
+  const host = normaliseUrl(s3.host ?? '', 'https', 'INVALID_HOST')
   const bucket = s3.bucket?.trim() ?? ''
   if (!bucket) throw new CoreError('BUCKET_REQUIRED', 'An S3 Source needs a bucket')
-  const accessKeyId = s3.accessKeyId?.trim() ?? ''
-  if (!accessKeyId) throw new CoreError('ACCESS_KEY_REQUIRED', 'An S3 Source needs an access key')
-  const prefix = (s3.prefix ?? '').trim().replace(/^\/+|\/+$/g, '')
-  const region = s3.region?.trim() || 'us-east-1'
-  return { type: 's3', host, bucket, prefix, region, pathStyle: s3.pathStyle ?? false, accessKeyId }
+  const auth = s3.auth ?? 'keys'
+  // Only what the chosen way of signing in uses is kept: an access key typed before switching to a profile goes.
+  const accessKeyId = auth === 'keys' ? (s3.accessKeyId?.trim() ?? '') : ''
+  if (auth === 'keys' && !accessKeyId) throw new CoreError('ACCESS_KEY_REQUIRED', 'An S3 Source needs an access key')
+  return {
+    type: 's3',
+    host,
+    bucket,
+    prefix: (s3.prefix ?? '').trim().replace(/^\/+|\/+$/g, ''),
+    region: s3.region?.trim() || 'us-east-1',
+    pathStyle: s3.pathStyle ?? false,
+    auth,
+    accessKeyId,
+    profile: auth === 'profile' ? (s3.profile?.trim() ?? '') : '',
+    verifyTls: s3.verifyTls ?? true,
+    caBundlePath: s3.caBundlePath?.trim() ?? '',
+    proxyUrl: normaliseUrl(s3.proxyUrl ?? '', 'http', 'INVALID_PROXY')
+  }
+}
+
+/** What an S3 File Source needs to reach its store: the settings, with the secret key (when signing in with keys) and CA bundle read in. */
+async function s3TargetOf(settings: S3Settings, secretKey?: string): Promise<S3Target> {
+  const { host, bucket, prefix, region, pathStyle, verifyTls, proxyUrl } = settings
+  let credentials: S3Target['credentials']
+  if (settings.auth === 'profile') credentials = { profile: settings.profile }
+  else if (secretKey === undefined) throw new CoreError('SECRET_KEY_REQUIRED', 'No secret key is stored for this Source')
+  else credentials = { accessKeyId: settings.accessKeyId, secretAccessKey: secretKey }
+  const caBundle = settings.caBundlePath ? await readCaBundle(settings.caBundlePath) : undefined
+  return { host, bucket, prefix, region, pathStyle, credentials, verifyTls, proxyUrl, ...(caBundle && { caBundle }) }
 }
 
 export interface CoreOptions {
@@ -213,19 +250,16 @@ export function createCore(options: CoreOptions = {}): Core {
 
   /**
    * Opens a Source's File Source and lists its root: what connecting, or testing a connection, has to get through.
-   * An S3 Source needs its `secretKey`; it proves it can sign in by listing.
+   * An S3 Source signing in with keys needs its `secretKey`; it proves it can sign in by listing.
    */
   const open = async (target: Target, secretKey?: string) => {
-    let fileSource: FileSource
-    if (target.type === 'local') fileSource = await reachLocal(target)
-    else if (secretKey === undefined) throw new CoreError('SECRET_KEY_REQUIRED', 'No secret key is stored for this Source')
-    else fileSource = createS3FileSource({ ...target, secretAccessKey: secretKey })
+    const fileSource = target.type === 'local' ? await reachLocal(target) : createS3FileSource(await s3TargetOf(target, secretKey))
     return { fileSource, nodes: await listNodes(fileSource, '') }
   }
 
   /** The secret key typed in `input`, or else the one stored for `sourceId`; undefined if there's neither. */
   const secretKeyFor = async (input: NewSource, sourceId?: string) => {
-    if (input.type !== 's3') return undefined
+    if (input.type !== 's3' || (input.auth ?? 'keys') !== 'keys') return undefined
     if (!isBlank(input.secretAccessKey)) return input.secretAccessKey
     return sourceId === undefined ? undefined : secrets.get(sourceId, secretKeyName)
   }
@@ -247,7 +281,7 @@ export function createCore(options: CoreOptions = {}): Core {
     }
     // An S3 Source isn't reached until it's connected: it may be saved while its store is away.
     const typed = await secretKeyFor(input)
-    if (typed === undefined && (await secretKeyFor(input, editing)) === undefined) {
+    if (target.auth === 'keys' && typed === undefined && (await secretKeyFor(input, editing)) === undefined) {
       throw new CoreError('SECRET_KEY_REQUIRED', 'An S3 Source needs a secret key')
     }
     return { saved: { ...target, name, ...label }, ...(typed !== undefined && { secretKey: typed }) }
@@ -310,7 +344,7 @@ export function createCore(options: CoreOptions = {}): Core {
         throw error
       }
       // A Source that no longer signs in with a secret key has no use for the one it had.
-      if (source.type !== 's3') await secrets.remove(sourceId)
+      if (source.type !== 's3' || source.auth !== 'keys') await secrets.remove(sourceId)
       // A new name keeps the connection; anything else, a new secret included, needs connecting afresh.
       if (!sameTarget(before, source) || secretKey !== undefined) connections.delete(sourceId)
       return handOut(source)
@@ -468,6 +502,8 @@ export function createCore(options: CoreOptions = {}): Core {
       const shown = bytes.subarray(0, hexDumpLimit)
       return { view: 'hex', ...common, content: hexDump(shown), contentLength: bytes.length, shownLength: shown.length }
     },
+
+    listAwsProfiles,
 
     async getSettings() {
       await settingsLoaded

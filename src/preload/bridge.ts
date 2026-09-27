@@ -5,6 +5,8 @@ import type { Settings } from '@shared/settings'
 export interface PolyscopeBridge {
   invokeCore(method: CoreMethod, args: unknown[]): Promise<CoreResult<unknown>>
   pickFolder(): Promise<string | null>
+  /** Asks for a file, offering to show those matching each filter in turn (`*` for any); null if none was picked. */
+  pickFile(filters: { name: string; extensions: string[] }[]): Promise<string | null>
   /** Subscribes to the core's settings changes; returns a function that unsubscribes. */
   onSettingsChanged(listener: (settings: Settings) => void): () => void
 }

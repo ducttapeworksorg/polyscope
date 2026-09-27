@@ -37,6 +37,7 @@ export const core: CoreApi & CoreEvents = {
   disconnect: call('disconnect'),
   expand: call('expand'),
   openFile: call('openFile'),
+  listAwsProfiles: call('listAwsProfiles'),
   getSettings: call('getSettings'),
   updateSettings: call('updateSettings'),
   onSettingsChanged: (listener) => window.polyscope.onSettingsChanged(listener)

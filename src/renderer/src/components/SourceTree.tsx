@@ -364,6 +364,19 @@ export function SourceTree(props: Props) {
         <WarningIcon />
       </span>
     ) : null
+  // Always there while verification is off, connected or not, so it's never forgotten.
+  const tlsOff = source.type === 's3' && !source.verifyTls
+  const badges = (
+    <>
+      {tlsOff && (
+        <span id={`${id}-tls`} className="tls-badge" role="img" aria-label={t('tree.tlsOff.tooltip')} title={t('tree.tlsOff.tooltip')}>
+          <WarningIcon />
+          {t('tree.tlsOff')}
+        </span>
+      )}
+      {environment && <EnvironmentBadge id={`${id}-badge`} environment={environment} />}
+    </>
+  )
 
   return (
     <div {...treeProps} role="tree" aria-label={source.name} className={`source-tree ${treeProps?.className ?? ''}`}>
@@ -375,9 +388,9 @@ export function SourceTree(props: Props) {
         icon: <Icon />,
         onActivate: () => void toggleSource(),
         status,
-        badge: environment && <EnvironmentBadge id={`${id}-badge`} environment={environment} />,
+        badge: badges,
         actions: actionButtons,
-        labelledBy: environment ? `${id}-label ${id}-badge` : `${id}-label`,
+        labelledBy: [`${id}-label`, tlsOff && `${id}-tls`, environment && `${id}-badge`].filter(Boolean).join(' '),
         className: `tree-row--source ${connectError ? 'is-error' : ''}`,
         extra: { ...sourceRowProps, title: connectError ?? undefined }
       })}

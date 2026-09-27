@@ -38,7 +38,7 @@ const testClient = () => {
     endpoint: settings.host,
     region: 'us-east-1',
     forcePathStyle: true,
-    credentials: { accessKeyId: settings.accessKeyId, secretAccessKey: settings.secretAccessKey! }
+    credentials: { accessKeyId: settings.accessKeyId!, secretAccessKey: settings.secretAccessKey! }
   })
   return client
 }

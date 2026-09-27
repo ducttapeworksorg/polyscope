@@ -1,10 +1,11 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NewS3Source, TreeNode } from '@shared/core-api'
 import { createCore } from './core'
 import { createSecretStore } from './secret-store'
+import { startProxy, startTlsFront } from './s3-test-network'
 import { hasTestStore, seedPrefix, testS3Source } from './s3-test-store'
 
 let dir: string
@@ -14,8 +15,22 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.unstubAllEnvs()
   await rm(dir, { recursive: true, force: true })
 })
+
+/** Points the AWS SDK (and Polyscope) at config and credentials files of the test's own, empty unless given. */
+async function awsFiles({ config = '', credentials = '' } = {}) {
+  const configFile = join(dir, 'aws-config')
+  const credentialsFile = join(dir, 'aws-credentials')
+  await writeFile(configFile, config)
+  await writeFile(credentialsFile, credentials)
+  vi.stubEnv('AWS_CONFIG_FILE', configFile)
+  vi.stubEnv('AWS_SHARED_CREDENTIALS_FILE', credentialsFile)
+  vi.stubEnv('AWS_PROFILE', undefined)
+  vi.stubEnv('AWS_ACCESS_KEY_ID', undefined)
+  vi.stubEnv('AWS_SECRET_ACCESS_KEY', undefined)
+}
 
 /** Settings for a store that needn't exist: nothing here connects to it. */
 const offline = (changes: Partial<NewS3Source> = {}): NewS3Source => ({
@@ -45,8 +60,13 @@ describe('adding an S3 Source', () => {
       prefix: 'app/logs',
       region: 'us-east-1',
       pathStyle: true,
+      auth: 'keys',
       accessKeyId: 'AKIAEXAMPLE',
-      secretKeySet: true
+      secretKeySet: true,
+      profile: '',
+      verifyTls: true,
+      caBundlePath: '',
+      proxyUrl: ''
     }
     expect(added).toEqual(expected)
     expect(await core.listSources()).toEqual([expected])
@@ -294,5 +314,226 @@ describe.skipIf(!hasTestStore)('an S3 Source against the test store', () => {
     await core.editSource(source.id, { ...testS3Source('Bucket', prefix), secretAccessKey: 'rotated' })
 
     expect(await core.connectionState(source.id)).toEqual({ state: 'disconnected' })
+  })
+})
+
+describe('an S3 Source signing in with an AWS profile', () => {
+  const withProfile = (profile?: string) => offline({ auth: 'profile', profile, accessKeyId: undefined, secretAccessKey: undefined })
+  const plain = { encrypt: (plain: string) => Buffer.from(plain), decrypt: (encrypted: Buffer) => encrypted.toString() }
+
+  it('needs no keys, and is listed with its profile', async () => {
+    const core = createCore()
+
+    const added = await core.addSource(withProfile(' work-sso '))
+
+    expect(added).toMatchObject({ auth: 'profile', profile: 'work-sso', accessKeyId: '', secretKeySet: false })
+  })
+
+  it('may leave the profile blank for the default credential chain', async () => {
+    expect(await createCore().addSource(withProfile(''))).toMatchObject({ auth: 'profile', profile: '' })
+  })
+
+  it('keeps no keys typed before switching to a profile', async () => {
+    const secrets = createSecretStore({ cipher: plain })
+    const core = createCore({ secrets })
+
+    const added = await core.addSource(offline({ auth: 'profile', profile: 'work' }))
+
+    expect(added).toMatchObject({ accessKeyId: '', secretKeySet: false })
+    expect(await secrets.get(added.id, 'secretKey')).toBeUndefined()
+  })
+
+  it('forgets the stored secret key when an edit switches to a profile', async () => {
+    const secrets = createSecretStore({ cipher: plain })
+    const core = createCore({ secrets })
+    const source = await core.addSource(offline())
+
+    const edited = await core.editSource(source.id, withProfile('work'))
+
+    expect(edited).toMatchObject({ auth: 'profile', secretKeySet: false })
+    expect(await secrets.get(source.id, 'secretKey')).toBeUndefined()
+  })
+
+  it('goes into the Error state when the profile isn’t in the local AWS config', async () => {
+    await awsFiles({ config: '[profile other]\nregion = eu-west-1\n' })
+    const core = createCore()
+    const source = await core.addSource(withProfile('missing'))
+
+    await expect(core.connect(source.id)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' })
+    expect(await core.connectionState(source.id)).toMatchObject({ state: 'error', code: 'CREDENTIALS_UNAVAILABLE' })
+  })
+})
+
+describe('the local AWS profiles', () => {
+  it('are those in the config and credentials files, by name, default first', async () => {
+    await awsFiles({
+      config: [
+        '[default]',
+        'region = eu-west-1',
+        '[profile work-sso]',
+        'sso_session = corp',
+        '[sso-session corp]',
+        'sso_start_url = https://corp.awsapps.com/start',
+        '[ profile shared ]',
+        '[services local]',
+        's3 =',
+        '  endpoint_url = http://localhost:9000'
+      ].join('\n'),
+      credentials: '[default]\naws_access_key_id = A\n[ci]\naws_access_key_id = B\n# [commented]\n[shared]\n'
+    })
+
+    expect(await createCore().listAwsProfiles()).toEqual(['default', 'ci', 'shared', 'work-sso'])
+  })
+
+  it('are none without the files', async () => {
+    vi.stubEnv('AWS_CONFIG_FILE', join(dir, 'no-config'))
+    vi.stubEnv('AWS_SHARED_CREDENTIALS_FILE', join(dir, 'no-credentials'))
+
+    expect(await createCore().listAwsProfiles()).toEqual([])
+  })
+})
+
+describe('an S3 Source’s trust and proxy settings', () => {
+  it('are normalised', async () => {
+    const core = createCore()
+
+    const added = await core.addSource(offline({ verifyTls: false, caBundlePath: ' /etc/ssl/corp.pem ', proxyUrl: ' proxy.corp:3128/ ' }))
+
+    expect(added).toMatchObject({ verifyTls: false, caBundlePath: '/etc/ssl/corp.pem', proxyUrl: 'http://proxy.corp:3128' })
+  })
+
+  it('keep an https proxy', async () => {
+    expect(await createCore().addSource(offline({ proxyUrl: 'https://proxy.corp' }))).toMatchObject({ proxyUrl: 'https://proxy.corp' })
+  })
+
+  it.each(['socks5://proxy.corp:1080', 'http://'])('refuse a proxy that isn’t an http(s) address: %s', async (proxyUrl) => {
+    await expect(createCore().addSource(offline({ proxyUrl }))).rejects.toMatchObject({ code: 'INVALID_PROXY' })
+  })
+
+  it('take their defaults for a Source saved before they existed', async () => {
+    const dataDir = join(dir, 'user-data')
+    await mkdir(dataDir)
+    const saved = { id: 'old', type: 's3', name: 'Old', host: '', bucket: 'b', prefix: '', region: 'us-east-1', pathStyle: false, accessKeyId: 'AKIA' }
+    await writeFile(join(dataDir, 'sources.json'), JSON.stringify({ version: 1, sources: [saved], groupOrder: ['local', 's3'] }))
+
+    const [source] = await createCore({ dataDir }).listSources()
+
+    expect(source).toMatchObject({ auth: 'keys', profile: '', verifyTls: true, caBundlePath: '', proxyUrl: '' })
+  })
+
+  it('keep a Source from connecting when its CA bundle can’t be read', async () => {
+    const core = createCore()
+    const source = await core.addSource(offline({ caBundlePath: join(dir, 'missing.pem') }))
+
+    await expect(core.connect(source.id)).rejects.toMatchObject({ code: 'CA_BUNDLE_UNREADABLE' })
+  })
+
+  it('keep a Source from connecting when its CA bundle holds no certificates', async () => {
+    const bundle = join(dir, 'empty.pem')
+    await writeFile(bundle, 'not a certificate\n')
+    const core = createCore()
+    const source = await core.addSource(offline({ caBundlePath: bundle }))
+
+    await expect(core.connect(source.id)).rejects.toMatchObject({ code: 'CA_BUNDLE_UNREADABLE' })
+  })
+})
+
+describe.skipIf(!hasTestStore)('an S3 Source in a corporate network, against the test store', () => {
+  const disposals: (() => Promise<void>)[] = []
+  afterEach(async () => {
+    await Promise.all(disposals.splice(0).map((dispose) => dispose()))
+  }, 120_000)
+  const seeded = async () => {
+    const { prefix, remove } = await seedPrefix({ 'a.log': 'a' })
+    disposals.push(remove)
+    return prefix
+  }
+  /** The test store behind TLS, with a certificate from a private CA: its `host`, and a `caBundlePath` that trusts it. */
+  const behindTls = async () => {
+    const front = await startTlsFront(testS3Source('', '').host)
+    disposals.push(front.close)
+    return { host: front.url, caBundlePath: front.caPath }
+  }
+  const proxy = async () => {
+    const started = await startProxy()
+    disposals.push(started.close)
+    return started
+  }
+  const connects = async (settings: NewS3Source) => {
+    const core = createCore()
+    const source = await core.addSource(settings)
+    return names(await core.connect(source.id))
+  }
+
+  it('refuses a certificate from an unknown CA while verifying TLS', async () => {
+    const { host } = await behindTls()
+    const settings = { ...testS3Source('Bucket', await seeded()), host }
+    const core = createCore()
+    const source = await core.addSource(settings)
+
+    await expect(core.connect(source.id)).rejects.toMatchObject({ code: 'CERTIFICATE_UNTRUSTED' })
+    await expect(core.testConnection(settings)).rejects.toMatchObject({ code: 'CERTIFICATE_UNTRUSTED' })
+  })
+
+  it('trusts a certificate from the CA bundle', async () => {
+    const settings = { ...testS3Source('Bucket', await seeded()), ...(await behindTls()) }
+
+    expect(await connects(settings)).toEqual(['a.log'])
+  })
+
+  it('accepts any certificate with TLS verification off', async () => {
+    const { host } = await behindTls()
+    const settings = { ...testS3Source('Bucket', await seeded()), host, verifyTls: false }
+
+    expect(await connects(settings)).toEqual(['a.log'])
+  })
+
+  it('goes through its own proxy, whatever NO_PROXY says', async () => {
+    vi.stubEnv('NO_PROXY', '*')
+    const { url, tunnels } = await proxy()
+    const tls = await behindTls()
+    const settings = { ...testS3Source('Bucket', await seeded()), ...tls, proxyUrl: url }
+
+    expect(await connects(settings)).toEqual(['a.log'])
+    expect(tunnels).toContain(new URL(tls.host).host)
+  })
+
+  it('goes through HTTPS_PROXY without a proxy of its own', async () => {
+    const { url, tunnels } = await proxy()
+    vi.stubEnv('HTTPS_PROXY', url)
+    vi.stubEnv('NO_PROXY', undefined)
+    const tls = await behindTls()
+    const settings = { ...testS3Source('Bucket', await seeded()), ...tls }
+
+    expect(await connects(settings)).toEqual(['a.log'])
+    expect(tunnels).toContain(new URL(tls.host).host)
+  })
+
+  it('goes straight to hosts NO_PROXY lists', async () => {
+    const { url, tunnels } = await proxy()
+    vi.stubEnv('HTTPS_PROXY', url)
+    vi.stubEnv('NO_PROXY', '127.0.0.1')
+    const settings = { ...testS3Source('Bucket', await seeded()), ...(await behindTls()) }
+
+    expect(await connects(settings)).toEqual(['a.log'])
+    expect(tunnels).toEqual([])
+  })
+
+  it('signs in with a profile from the credentials file', async () => {
+    const { accessKeyId, secretAccessKey } = testS3Source('', '')
+    await awsFiles({ credentials: `[polyscope]\naws_access_key_id = ${accessKeyId}\naws_secret_access_key = ${secretAccessKey}\n` })
+    const settings = { ...testS3Source('Bucket', await seeded()), auth: 'profile' as const, profile: 'polyscope' }
+
+    expect(await connects({ ...settings, accessKeyId: undefined, secretAccessKey: undefined })).toEqual(['a.log'])
+  })
+
+  it('signs in with the default credential chain when no profile is named', async () => {
+    const { accessKeyId = '', secretAccessKey = '' } = testS3Source('', '')
+    await awsFiles()
+    vi.stubEnv('AWS_ACCESS_KEY_ID', accessKeyId)
+    vi.stubEnv('AWS_SECRET_ACCESS_KEY', secretAccessKey)
+    const settings = { ...testS3Source('Bucket', await seeded()), auth: 'profile' as const, profile: '' }
+
+    expect(await connects({ ...settings, accessKeyId: undefined, secretAccessKey: undefined })).toEqual(['a.log'])
   })
 })

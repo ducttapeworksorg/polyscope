@@ -5,6 +5,10 @@ import {
   S3Client,
   S3ServiceException
 } from '@aws-sdk/client-s3'
+import { readFile } from 'node:fs/promises'
+import { Agent as HttpAgent } from 'node:http'
+import { Agent as HttpsAgent } from 'node:https'
+import { getCACertificates } from 'node:tls'
 import type { CoreErrorCode, SourcePath } from '@shared/core-api'
 import { CoreError } from './core-error'
 import type { FileEntry, FileSource, FileStat } from './file-source'
@@ -18,8 +22,13 @@ export interface S3Target {
   prefix: string
   region: string
   pathStyle: boolean
-  accessKeyId: string
-  secretAccessKey: string
+  /** Typed keys, or the name of an AWS profile to sign in with: blank for the default credential chain. */
+  credentials: { accessKeyId: string; secretAccessKey: string } | { profile: string }
+  verifyTls: boolean
+  /** PEM CA certificates to trust as well as Node's own and the OS trust store. */
+  caBundle?: string
+  /** A proxy for every request; blank to follow HTTPS_PROXY / NO_PROXY. */
+  proxyUrl: string
 }
 
 /** The most entries S3 lists in one request, and so in one page of the tree. */
@@ -38,8 +47,34 @@ const s3Codes: Record<string, CoreErrorCode> = {
   ExpiredToken: 'AUTH_FAILED'
 }
 
-// Failures to reach the store at all, as Node reports them.
-const networkCodes = new Set(['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH'])
+// Failures to reach the store (or the proxy in between) at all, as Node reports them.
+const networkCodes = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ETIMEDOUT',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ERR_PROXY_TUNNEL'
+])
+
+// Certificates Node won't trust, by the code it gives.
+const certificateCodes = new Set([
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'CERT_UNTRUSTED',
+  'CERT_HAS_EXPIRED',
+  'CERT_NOT_YET_VALID',
+  'CERT_REVOKED',
+  'ERR_TLS_CERT_ALTNAME_INVALID'
+])
+
+// What the SDK throws when it can't come by credentials at all: a missing profile, an expired SSO session…
+const credentialErrors = new Set(['CredentialsProviderError', 'TokenProviderError'])
 
 const isWholeNumber = (n: number) => Number.isSafeInteger(n) && n >= 0
 
@@ -56,18 +91,46 @@ function toCoreError(error: unknown, what: string): CoreError {
   const message = error instanceof Error ? error.message : String(error)
   const code = s3Codes[nameOf(error)]
   if (code) return new CoreError(code, `${what}: ${message || nameOf(error)}`)
-  if (networkCodes.has((error as NodeJS.ErrnoException).code ?? '')) return new CoreError('UNREACHABLE', `${what}: ${message}`)
+  if (credentialErrors.has(nameOf(error))) return new CoreError('CREDENTIALS_UNAVAILABLE', message)
+  const errno = (error as NodeJS.ErrnoException).code ?? ''
+  if (networkCodes.has(errno)) return new CoreError('UNREACHABLE', `${what}: ${message}`)
+  if (certificateCodes.has(errno)) return new CoreError('CERTIFICATE_UNTRUSTED', `${what}: ${message}`)
   return new CoreError('UNKNOWN', `${what}: ${message}`)
+}
+
+/** Reads a CA bundle, which must hold at least one PEM certificate. */
+export async function readCaBundle(path: string) {
+  let bundle: string
+  try {
+    bundle = await readFile(path, 'utf8')
+  } catch (error) {
+    throw new CoreError('CA_BUNDLE_UNREADABLE', error instanceof Error ? error.message : String(error))
+  }
+  if (!bundle.includes('-----BEGIN CERTIFICATE-----')) throw new CoreError('CA_BUNDLE_UNREADABLE', `No PEM certificates in ${path}`)
+  return bundle
+}
+
+/** The agents requests go out through: trusting Node's CAs, the OS's and the target's own, and via its proxy. */
+function agentsFor({ verifyTls, caBundle, proxyUrl }: S3Target) {
+  // A proxy of the Source's own takes every request; otherwise the environment's settings, as they are now, decide.
+  const proxyEnv = proxyUrl ? { HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl } : { ...process.env }
+  const ca = [...new Set([...getCACertificates('default'), ...getCACertificates('system')]), ...(caBundle ? [caBundle] : [])]
+  return {
+    httpAgent: new HttpAgent({ keepAlive: true, proxyEnv }),
+    httpsAgent: new HttpsAgent({ keepAlive: true, proxyEnv, ca, rejectUnauthorized: verifyTls })
+  }
 }
 
 /** A File Source over the keys under a bucket's prefix, with key prefixes (up to a '/') shown as folders. */
 export function createS3FileSource(target: S3Target, { pageSize = s3PageSize } = {}): FileSource {
-  const { bucket } = target
+  const { bucket, credentials } = target
   const client = new S3Client({
     ...(target.host && { endpoint: target.host }),
     region: target.region,
     forcePathStyle: target.pathStyle,
-    credentials: { accessKeyId: target.accessKeyId, secretAccessKey: target.secretAccessKey },
+    // Without keys or a profile the SDK goes down its default credential chain.
+    ...('profile' in credentials ? credentials.profile && { profile: credentials.profile } : { credentials }),
+    requestHandler: agentsFor(target),
     // Checksums only where S3 insists: many S3-compatible stores don't support the newer ones.
     requestChecksumCalculation: 'WHEN_REQUIRED',
     responseChecksumValidation: 'WHEN_REQUIRED'

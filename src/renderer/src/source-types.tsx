@@ -1,6 +1,7 @@
-import type { ComponentType } from 'react'
-import type { NewSource, S3SourceInfo, SourceInfo, SourcePath, SourceTypeId } from '@shared/core-api'
+import { useEffect, useState, type ComponentType } from 'react'
+import type { NewSource, S3Auth, S3SourceInfo, SourceInfo, SourcePath, SourceTypeId } from '@shared/core-api'
 import { BucketIcon, HardDriveIcon } from './components/icons'
+import { core } from './core-client'
 import { t, type MessageKey } from './i18n'
 
 export interface FieldsProps<S extends NewSource> {
@@ -90,7 +91,24 @@ function S3Fields({ value, onChange, editing }: FieldsProps<S3Settings>) {
       {hint && <span className="field__hint">{t(hint)}</span>}
     </label>
   )
-  const stored = editing?.type === 's3' ? editing.secretKeySet : undefined
+  const check = (key: 'pathStyle' | 'verifyTls', label: MessageKey, hint: MessageKey, fallback: boolean) => (
+    <label className="field field--check">
+      <input type="checkbox" checked={value[key] ?? fallback} onChange={(e) => onChange({ ...value, [key]: e.target.checked })} />
+      <span className="field__label">{t(label)}</span>
+      <span className="field__hint">{t(hint)}</span>
+    </label>
+  )
+  // Only a secret stored for keys counts: one signing in with a profile has none.
+  const stored = editing?.type === 's3' && editing.auth === 'keys' ? editing.secretKeySet : undefined
+  const auth = value.auth ?? 'keys'
+
+  const browseCaBundle = async () => {
+    const picked = await window.polyscope.pickFile([
+      { name: t('s3Source.caBundle.filter'), extensions: ['pem', 'crt', 'cer'] },
+      { name: t('s3Source.caBundle.allFiles'), extensions: ['*'] }
+    ])
+    if (picked) onChange({ ...value, caBundlePath: picked })
+  }
 
   return (
     <>
@@ -100,26 +118,99 @@ function S3Fields({ value, onChange, editing }: FieldsProps<S3Settings>) {
         {text('region', 's3Source.region', { mono: true })}
       </div>
       {text('prefix', 's3Source.prefix', { hint: 's3Source.prefix.hint', mono: true })}
-      <label className="field field--check">
-        <input type="checkbox" checked={value.pathStyle ?? false} onChange={(e) => onChange({ ...value, pathStyle: e.target.checked })} />
-        <span className="field__label">{t('s3Source.pathStyle')}</span>
-        <span className="field__hint">{t('s3Source.pathStyle.hint')}</span>
-      </label>
-      {text('accessKeyId', 's3Source.accessKey', { mono: true })}
-      <label className="field">
-        <span className="field__label">{t('s3Source.secretKey')}</span>
-        {/* Typed in, sent to the core once, and never shown again: the core only says whether one is stored. */}
-        <input
-          type="password"
-          className="field__input field__input--path"
-          value={value.secretAccessKey ?? ''}
-          onChange={(e) => onChange({ ...value, secretAccessKey: e.target.value })}
-          autoComplete="off"
-          spellCheck={false}
-        />
-        {stored !== undefined && <span className="field__hint">{t(stored ? 's3Source.secretKey.stored' : 's3Source.secretKey.missing')}</span>}
-      </label>
+      {check('pathStyle', 's3Source.pathStyle', 's3Source.pathStyle.hint', false)}
+
+      <div className="field">
+        <span className="field__label" id="s3-auth-label">
+          {t('s3Source.auth')}
+        </span>
+        <div className="segmented" role="radiogroup" aria-labelledby="s3-auth-label">
+          {(['keys', 'profile'] as const satisfies S3Auth[]).map((option) => (
+            <label key={option} className="segmented__option">
+              <input type="radio" name="s3-auth" value={option} checked={auth === option} onChange={() => onChange({ ...value, auth: option })} />
+              {t(`s3Source.auth.${option}`)}
+            </label>
+          ))}
+        </div>
+      </div>
+      {auth === 'keys' ? (
+        <>
+          {text('accessKeyId', 's3Source.accessKey', { mono: true })}
+          <label className="field">
+            <span className="field__label">{t('s3Source.secretKey')}</span>
+            {/* Typed in, sent to the core once, and never shown again: the core only says whether one is stored. */}
+            <input
+              type="password"
+              className="field__input field__input--path"
+              value={value.secretAccessKey ?? ''}
+              onChange={(e) => onChange({ ...value, secretAccessKey: e.target.value })}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            {stored !== undefined && (
+              <span className="field__hint">{t(stored ? 's3Source.secretKey.stored' : 's3Source.secretKey.missing')}</span>
+            )}
+          </label>
+        </>
+      ) : (
+        <ProfileField value={value.profile ?? ''} onChange={(profile) => onChange({ ...value, profile })} />
+      )}
+
+      <div className="field">
+        <label className="field__label" htmlFor="s3-ca-bundle">
+          {t('s3Source.caBundle')}
+        </label>
+        <div className="field__row">
+          <input
+            id="s3-ca-bundle"
+            className="field__input field__input--path"
+            value={value.caBundlePath ?? ''}
+            onChange={(e) => onChange({ ...value, caBundlePath: e.target.value })}
+            spellCheck={false}
+          />
+          <button type="button" className="button button--quiet" onClick={browseCaBundle}>
+            {t('s3Source.browse')}
+          </button>
+        </div>
+        <span className="field__hint">{t('s3Source.caBundle.hint')}</span>
+      </div>
+      {check('verifyTls', 's3Source.verifyTls', 's3Source.verifyTls.hint', true)}
+      {text('proxyUrl', 's3Source.proxy', { hint: 's3Source.proxy.hint', mono: true })}
     </>
+  )
+}
+
+/** Picks one of the local AWS profiles, or the default credential chain. */
+function ProfileField({ value, onChange }: { value: string; onChange(profile: string): void }) {
+  const [profiles, setProfiles] = useState<string[]>([])
+  useEffect(() => {
+    let current = true
+    core.listAwsProfiles().then(
+      (listed) => current && setProfiles(listed),
+      () => undefined
+    )
+    return () => {
+      current = false
+    }
+  }, [])
+  // A profile no longer in the files stays choosable, so opening the dialog doesn't quietly change it.
+  const choices = value && !profiles.includes(value) ? [value, ...profiles] : profiles
+
+  return (
+    <div className="field">
+      <label className="field__label" htmlFor="s3-profile">
+        {t('s3Source.profile')}
+      </label>
+      <select id="s3-profile" className="field__input field__select" value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">{t('s3Source.profile.default')}</option>
+        {choices.map((profile) => (
+          <option key={profile} value={profile}>
+            {profile}
+          </option>
+        ))}
+      </select>
+      <span className="field__hint">{t('s3Source.profile.hint')}</span>
+    </div>
   )
 }
 
@@ -142,7 +233,22 @@ export const sourceTypeUi: SourceTypeUis = {
     label: 'sourceType.s3',
     hint: 'sourceType.s3.hint',
     Icon: BucketIcon,
-    blank: () => ({ type: 's3', name: '', host: '', bucket: '', prefix: '', region: '', pathStyle: false, accessKeyId: '', secretAccessKey: '' }),
+    blank: () => ({
+      type: 's3',
+      name: '',
+      host: '',
+      bucket: '',
+      prefix: '',
+      region: '',
+      pathStyle: false,
+      auth: 'keys',
+      accessKeyId: '',
+      secretAccessKey: '',
+      profile: '',
+      verifyTls: true,
+      caBundlePath: '',
+      proxyUrl: ''
+    }),
     // Everything but the secret key, which the renderer never has: left blank, the stored one stays.
     settingsOf: ({ id: _, environmentId: __, secretKeySet: ___, ...settings }) => ({ ...settings, secretAccessKey: '' }),
     fullPath: objectUrl,

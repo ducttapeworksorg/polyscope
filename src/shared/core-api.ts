@@ -30,12 +30,29 @@ export interface NewS3Source {
   region?: string
   /** Addresses the bucket in the path rather than the host name, as MinIO and most self-hosted stores need; off unless given. */
   pathStyle?: boolean
-  accessKeyId: string
-  /** Goes into the OS keychain and never comes back out of the core. Blank or left out when editing keeps the stored one. */
+  /** How the Source signs in: typed keys, or an AWS profile. Keys unless given. */
+  auth?: S3Auth
+  /** Signing in with keys: needed then, ignored otherwise. */
+  accessKeyId?: string
+  /**
+   * Signing in with keys: goes into the OS keychain and never comes back out of the core.
+   * Blank or left out when editing keeps the stored one.
+   */
   secretAccessKey?: string
+  /** Signing in with a profile: its name in the local AWS config, SSO ones included; the default credential chain when blank or left out. */
+  profile?: string
+  /** Whether the store's TLS certificate is checked; on unless turned off. */
+  verifyTls?: boolean
+  /** A PEM file of CA certificates trusted as well as the OS trust store; none when blank or left out. */
+  caBundlePath?: string
+  /** A proxy for this Source alone, e.g. `http://proxy.corp:3128`; when blank or left out, HTTPS_PROXY / NO_PROXY decide. */
+  proxyUrl?: string
   /** The Environment the Source is labelled with; unlabelled when left out. */
   environmentId?: string
 }
+
+/** How an S3 Source signs in: typed access and secret keys, or an AWS profile (or the default credential chain). */
+export type S3Auth = 'keys' | 'profile'
 
 /** The user-editable settings of a Source; its Source Type decides which fields exist. */
 export type NewSource = NewLocalSource | NewS3Source
@@ -62,9 +79,18 @@ export interface S3SourceInfo extends SourceIdentity {
   prefix: string
   region: string
   pathStyle: boolean
+  auth: S3Auth
+  /** Blank when signing in with a profile. */
   accessKeyId: string
-  /** Whether a secret key is stored for the Source; the key itself never leaves the core. */
+  /** Whether a secret key is stored for the Source; the key itself never leaves the core. Always false when signing in with a profile. */
   secretKeySet: boolean
+  /** Blank for the default credential chain, and when signing in with keys. */
+  profile: string
+  verifyTls: boolean
+  /** Blank for none. */
+  caBundlePath: string
+  /** Normalised: a URL with its scheme; blank to follow HTTPS_PROXY / NO_PROXY. */
+  proxyUrl: string
 }
 
 export type SourceInfo = LocalSourceInfo | S3SourceInfo
@@ -226,6 +252,10 @@ export type CoreErrorCode =
   | 'SECRET_KEY_REQUIRED'
   | 'BUCKET_NOT_FOUND'
   | 'AUTH_FAILED'
+  | 'CREDENTIALS_UNAVAILABLE'
+  | 'INVALID_PROXY'
+  | 'CA_BUNDLE_UNREADABLE'
+  | 'CERTIFICATE_UNTRUSTED'
   | 'UNREACHABLE'
   | 'UNKNOWN'
 
@@ -266,6 +296,8 @@ export interface CoreApi {
   expand(sourceId: string, path: SourcePath, cursor?: string): Promise<TreeNode[]>
   /** Reads a file and decides how to show it; `options` reopens it another way, e.g. in another encoding. */
   openFile(sourceId: string, path: SourcePath, options?: OpenOptions): Promise<OpenedFile>
+  /** The profiles in the local AWS config and credentials files, by name, `default` first; none if there are no such files. */
+  listAwsProfiles(): Promise<string[]>
   getSettings(): Promise<Settings>
   /** Changes the given settings, keeping the rest; all of them together must still be valid. */
   updateSettings(changes: Partial<Settings>): Promise<Settings>
@@ -297,6 +329,7 @@ export const coreMethods: readonly CoreMethod[] = [
   'disconnect',
   'expand',
   'openFile',
+  'listAwsProfiles',
   'getSettings',
   'updateSettings'
 ]

@@ -1,4 +1,4 @@
-import { dialog, ipcMain, type BrowserWindow } from 'electron'
+import { dialog, ipcMain, type BrowserWindow, type FileFilter, type OpenDialogOptions } from 'electron'
 import { coreMethods, type CoreApi, type CoreEvents, type CoreMethod, type CoreResult } from '@shared/core-api'
 import { CoreError } from './core/core-error'
 
@@ -25,11 +25,21 @@ export function forwardCoreEvents(core: CoreEvents, getWindow: () => BrowserWind
   core.onSettingsChanged((settings) => getWindow()?.webContents.send('core:settingsChanged', settings))
 }
 
+const isFileFilter = (value: unknown): value is FileFilter =>
+  typeof value === 'object' &&
+  value !== null &&
+  typeof (value as FileFilter).name === 'string' &&
+  Array.isArray((value as FileFilter).extensions) &&
+  (value as FileFilter).extensions.every((e) => typeof e === 'string')
+
 export function registerShellIpc(getWindow: () => BrowserWindow | null): void {
-  ipcMain.handle('shell:pickFolder', async () => {
+  const pick = async (options: OpenDialogOptions) => {
     const window = getWindow()
-    const options = { properties: ['openDirectory' as const] }
     const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options)
     return result.canceled ? null : (result.filePaths[0] ?? null)
-  })
+  }
+  ipcMain.handle('shell:pickFolder', () => pick({ properties: ['openDirectory'] }))
+  ipcMain.handle('shell:pickFile', (_event, filters: unknown) =>
+    pick({ properties: ['openFile'], filters: Array.isArray(filters) ? filters.filter(isFileFilter) : [] })
+  )
 }
