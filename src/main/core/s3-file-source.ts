@@ -12,6 +12,7 @@ import { getCACertificates } from 'node:tls'
 import type { CoreErrorCode, SourcePath } from '@shared/core-api'
 import { CoreError } from './core-error'
 import type { FileEntry, FileSource, FileStat } from './file-source'
+import { certificateCodes, networkCodes } from './network-errors'
 
 /** Where an S3 Source points and how it signs in, normalised and with its secret filled in. */
 export interface S3Target {
@@ -46,32 +47,6 @@ const s3Codes: Record<string, CoreErrorCode> = {
   InvalidToken: 'AUTH_FAILED',
   ExpiredToken: 'AUTH_FAILED'
 }
-
-// Failures to reach the store (or the proxy in between) at all, as Node reports them.
-const networkCodes = new Set([
-  'ECONNREFUSED',
-  'ECONNRESET',
-  'ENOTFOUND',
-  'EAI_AGAIN',
-  'ETIMEDOUT',
-  'EHOSTUNREACH',
-  'ENETUNREACH',
-  'ERR_PROXY_TUNNEL'
-])
-
-// Certificates Node won't trust, by the code it gives.
-const certificateCodes = new Set([
-  'DEPTH_ZERO_SELF_SIGNED_CERT',
-  'SELF_SIGNED_CERT_IN_CHAIN',
-  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
-  'UNABLE_TO_GET_ISSUER_CERT',
-  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
-  'CERT_UNTRUSTED',
-  'CERT_HAS_EXPIRED',
-  'CERT_NOT_YET_VALID',
-  'CERT_REVOKED',
-  'ERR_TLS_CERT_ALTNAME_INVALID'
-])
 
 // What the SDK throws when it can't come by credentials at all: a missing profile, an expired SSO session…
 const credentialErrors = new Set(['CredentialsProviderError', 'TokenProviderError'])

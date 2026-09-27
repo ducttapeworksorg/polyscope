@@ -88,3 +88,44 @@ jobs:
 
       # The rest of the suite already runs in the build job; only the S3 tests need the store.
       - run: npx vitest run src/main/core/s3
+
+  # Kubernetes Logs against a kind cluster, seeded with the Workloads the tests expect (tests/kind/seed.yaml).
+  integration-kubernetes:
+    name: integration (Kubernetes)
+    runs-on: ubuntu-latest
+    env:
+      POLYSCOPE_TEST_KUBE_CONTEXT: kind-polyscope
+      POLYSCOPE_TEST_KUBE_NAMESPACE: polyscope-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: polyscope
+
+      - name: Seed the cluster
+        run: |
+          # A bare pod isn't retried like a Workload's: its namespace's default ServiceAccount has to be there first.
+          kubectl create namespace polyscope-test
+          kubectl -n polyscope-test wait --for=create serviceaccount/default --timeout=60s
+          kubectl apply -f tests/kind/seed.yaml
+          # The CronJob never comes due by itself; one run gives it a Job.
+          kubectl -n polyscope-test create job nightly-manual --from=cronjob/nightly
+          kubectl -n polyscope-test rollout status deployment/web --timeout=180s
+          kubectl -n polyscope-test rollout status statefulset/db --timeout=180s
+          kubectl -n polyscope-test rollout status daemonset/agent --timeout=180s
+          kubectl -n polyscope-test wait --for=condition=complete job/migrate job/nightly-manual --timeout=180s
+          kubectl -n polyscope-test wait --for=condition=Ready pod/counter --timeout=180s
+
+      - run: npm ci
+
+      - run: npx vitest run src/main/core/kubernetes
+
+      - name: Show the seeded namespace
+        if: failure()
+        run: kubectl -n polyscope-test get all -o wide

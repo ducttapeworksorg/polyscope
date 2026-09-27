@@ -1,7 +1,7 @@
 import { useEffect, useState, type ComponentType } from 'react'
-import type { NewSource, S3Auth, S3SourceInfo, SourceInfo, SourcePath, SourceTypeId } from '@shared/core-api'
-import { BucketIcon, HardDriveIcon } from './components/icons'
-import { core } from './core-client'
+import type { KubeContext, NewSource, S3Auth, S3SourceInfo, SourceInfo, SourcePath, SourceTypeId } from '@shared/core-api'
+import { BucketIcon, HardDriveIcon, KubernetesLogsIcon } from './components/icons'
+import { core, describeError } from './core-client'
 import { t, type MessageKey } from './i18n'
 
 export interface FieldsProps<S extends NewSource> {
@@ -214,6 +214,77 @@ function ProfileField({ value, onChange }: { value: string; onChange(profile: st
   )
 }
 
+type KubernetesLogsSettings = Extract<NewSource, { type: 'kubernetesLogs' }>
+
+function KubernetesLogsFields({ value, onChange }: FieldsProps<KubernetesLogsSettings>) {
+  // Null until the kubeconfig has been read.
+  const [contexts, setContexts] = useState<KubeContext[] | null>(null)
+  const [problem, setProblem] = useState<string | null>(null)
+
+  /** Picks a context, filling in its namespace (or `default`) unless one was typed already. */
+  const pick = (context: string, listed = contexts ?? []) => {
+    const namespace = value.namespace.trim() ? value.namespace : (listed.find((c) => c.name === context)?.namespace ?? 'default')
+    onChange({ ...value, context, namespace })
+  }
+
+  useEffect(() => {
+    let current = true
+    core.listKubeContexts().then(
+      (listed) => {
+        if (!current) return
+        setContexts(listed)
+        // A new Source starts on the kubeconfig's current context, as kubectl would.
+        const currentContext = listed.find((c) => c.current)
+        if (currentContext && !value.context) pick(currentContext.name, listed)
+      },
+      (error) => {
+        if (!current) return
+        setContexts([])
+        setProblem(describeError(error))
+      }
+    )
+    return () => {
+      current = false
+    }
+    // Read once, when the fields appear: the settings as they were then are the ones to fill in.
+  }, [])
+
+  // A context no longer in the kubeconfig stays choosable, so opening the dialog doesn't quietly change it.
+  const names = contexts?.map((c) => c.name) ?? []
+  const choices = value.context && !names.includes(value.context) ? [value.context, ...names] : names
+
+  return (
+    <>
+      <div className="field">
+        <label className="field__label" htmlFor="kubernetes-context">
+          {t('kubernetesSource.context')}
+        </label>
+        <select id="kubernetes-context" className="field__input field__select" value={value.context} onChange={(e) => pick(e.target.value)}>
+          {!value.context && <option value="">{t('kubernetesSource.context.choose')}</option>}
+          {choices.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <span className="field__hint">
+          {problem ?? t(contexts?.length === 0 ? 'kubernetesSource.context.none' : 'kubernetesSource.context.hint')}
+        </span>
+      </div>
+      <label className="field">
+        <span className="field__label">{t('kubernetesSource.namespace')}</span>
+        <input
+          className="field__input field__input--path"
+          value={value.namespace}
+          onChange={(e) => onChange({ ...value, namespace: e.target.value })}
+          spellCheck={false}
+        />
+        <span className="field__hint">{t('kubernetesSource.namespace.hint')}</span>
+      </label>
+    </>
+  )
+}
+
 /** Where a Source path is in its bucket, as an `s3://` URL. */
 function objectUrl({ bucket, prefix }: S3SourceInfo, path: SourcePath) {
   return `s3://${bucket}/${[prefix, path].filter(Boolean).join('/')}`
@@ -253,15 +324,24 @@ export const sourceTypeUi: SourceTypeUis = {
     settingsOf: ({ id: _, environmentId: __, secretKeySet: ___, ...settings }) => ({ ...settings, secretAccessKey: '' }),
     fullPath: objectUrl,
     Fields: S3Fields
+  },
+  kubernetesLogs: {
+    label: 'sourceType.kubernetesLogs',
+    hint: 'sourceType.kubernetesLogs.hint',
+    Icon: KubernetesLogsIcon,
+    blank: () => ({ type: 'kubernetesLogs', name: '', context: '', namespace: '' }),
+    settingsOf: ({ name, context, namespace }) => ({ type: 'kubernetesLogs', name, context, namespace }),
+    fullPath: ({ context, namespace }, path) => `${context}: ${namespace}${path ? `/${path}` : ''}`,
+    Fields: KubernetesLogsFields
   }
 }
 
 /**
- * Where a Source points, as a string that changes whenever anything but its name, label or secrets does:
- * a Source whose target changed is a different place, with nothing loaded from the old one carrying over.
+ * Where a Source points, as a string that changes whenever anything but its name, label, secrets or remembered
+ * view choices does: a Source whose target changed is a different place, with nothing loaded from the old one carrying over.
  */
 export function targetOf(source: SourceInfo) {
-  const { id: _, name: __, environmentId: ___, ...settings } = source
+  const { id: _, name: __, environmentId: ___, lastNLines: _____, ...settings } = source
   const { secretKeySet: ____, ...target } = settings as typeof settings & { secretKeySet?: boolean }
   return JSON.stringify(Object.entries(target).sort())
 }

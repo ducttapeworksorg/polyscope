@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { OpenedFile, SourceInfo, TextFile } from '@shared/core-api'
+import type { SourceInfo, TextFile } from '@shared/core-api'
 import {
   activateTab,
   closeAllTabs,
@@ -10,6 +10,7 @@ import {
   pinTab,
   reopenTab,
   setLanguage,
+  type TabContent,
   type Workspace
 } from './workspace'
 
@@ -24,7 +25,7 @@ const file = (path: string, content = ''): TextFile => ({
   size: content.length,
   modifiedTime: 0
 })
-const contentOf = (opened: OpenedFile) => (opened.view === 'binary' ? null : opened.content)
+const contentOf = (opened: TabContent) => ('content' in opened ? opened.content : null)
 const tab = (key: string) => ({ key, source, file: file(key) })
 
 /** Each tab as its key, with a '*' when it's the preview tab and brackets around the active one. */

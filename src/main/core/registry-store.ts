@@ -1,9 +1,15 @@
 import { join } from 'node:path'
-import { sourceTypeIds, type LocalSourceInfo, type S3SourceInfo, type SourceTypeId } from '@shared/core-api'
+import {
+  sourceTypeIds,
+  type KubernetesLogsSourceInfo,
+  type LocalSourceInfo,
+  type S3SourceInfo,
+  type SourceTypeId
+} from '@shared/core-api'
 import { jsonFileWriter, readJsonFile } from './json-file'
 
 /** A Source as saved: what the core API hands out, less what it works out on the way (like whether a secret is set). */
-export type SavedSource = LocalSourceInfo | Omit<S3SourceInfo, 'secretKeySet'>
+export type SavedSource = LocalSourceInfo | Omit<S3SourceInfo, 'secretKeySet'> | KubernetesLogsSourceInfo
 
 /** Everything the user configured about their Sources, as saved between launches. */
 export interface Registry {

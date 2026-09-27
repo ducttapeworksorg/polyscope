@@ -9,7 +9,7 @@ import {
   type MouseEvent,
   type ReactNode
 } from 'react'
-import type { ConnectionState, EntryNode, Environment, SourceInfo, SourcePath, TreeNode } from '@shared/core-api'
+import type { ConnectionState, ContainerNode, EntryNode, Environment, LogNode, SourceInfo, SourcePath, TreeNode } from '@shared/core-api'
 import type { Theme } from '@shared/settings'
 import { core, describeError, describeFailure } from '../core-client'
 import { t } from '../i18n'
@@ -34,6 +34,8 @@ interface Props {
   onSelect(key: string): void
   /** Opens a file in the preview tab, or in a tab of its own when pinned. */
   onOpenFile(source: SourceInfo, node: EntryNode, options?: { pinned: boolean }): void
+  /** Opens a container's Log Stream in the preview tab, or in a tab of its own when pinned. */
+  onOpenLog(source: SourceInfo, node: ContainerNode, options?: { pinned: boolean }): void
   /** Extra attributes for the Source's own row, e.g. for dragging it. */
   sourceRowProps?: HTMLAttributes<HTMLDivElement>
   /** Extra attributes for the whole tree, e.g. to make it a drop target. */
@@ -60,16 +62,21 @@ type More =
   | { cursor: string; state: 'loading' }
   | { cursor: string; state: 'failed'; message: string }
 
-type Listing = { state: 'loading' } | { state: 'loaded'; nodes: EntryNode[]; more?: More } | { state: 'failed'; message: string }
+/** What a tree shows as a row: a File Source's folders and files, or a Log Source's groups, Workloads, pods and containers. */
+type ShownNode = EntryNode | LogNode
+
+const isLogNode = (node: ShownNode): node is LogNode => node.kind !== 'folder' && node.kind !== 'file'
+
+type Listing = { state: 'loading' } | { state: 'loaded'; nodes: ShownNode[]; more?: More } | { state: 'failed'; message: string }
 
 /** A page of listed nodes as a listing, or a failed one if it's an error node; `before` are the pages loaded already. */
-function listingOf(page: TreeNode[], before: EntryNode[] = []): Listing {
+function listingOf(page: TreeNode[], before: ShownNode[] = []): Listing {
   const failure = page.find((n) => n.kind === 'error')
   if (failure) return { state: 'failed', message: describeFailure(failure) }
   const more = page.find((n) => n.kind === 'more')
-  const entries = [...before, ...page.filter((n): n is EntryNode => n.kind === 'folder' || n.kind === 'file')]
+  const entries = [...before, ...page.filter((n): n is ShownNode => n.kind !== 'error' && n.kind !== 'more')]
   // Each page comes folders first; joined, a later page's folders still go ahead of every file.
-  const nodes = [...entries.filter((n) => n.kind === 'folder'), ...entries.filter((n) => n.kind === 'file')]
+  const nodes = [...entries.filter((n) => n.kind === 'folder'), ...entries.filter((n) => n.kind !== 'folder')]
   return more ? { state: 'loaded', nodes, more: { cursor: more.cursor, state: 'idle' } } : { state: 'loaded', nodes }
 }
 
@@ -111,7 +118,7 @@ function useNow(ticking: boolean) {
 }
 
 export function SourceTree(props: Props) {
-  const { source, connection, onConnect, sourceActions, onContextMenu, selectedKey, onSelect, onOpenFile } = props
+  const { source, connection, onConnect, sourceActions, onContextMenu, selectedKey, onSelect, onOpenFile, onOpenLog } = props
   const { sourceRowProps, treeProps, showDetails, theme, environment } = props
   const now = useNow(showDetails)
   const id = useId()
@@ -165,8 +172,8 @@ export function SourceTree(props: Props) {
     )
   }
 
-  /** Reloads a folder's children and makes sure they're shown. */
-  const refresh = (path: SourcePath) => {
+  /** Reloads a folder's (or other node's) children and makes sure they're shown. */
+  const refreshNode = (path: SourcePath) => {
     setExpanded((prev) => new Set(prev).add(path))
     load(path)
   }
@@ -246,10 +253,46 @@ export function SourceTree(props: Props) {
     )
 
   /** Where the entry really is and, when known, exactly when it was last modified. */
-  const tooltip = (node: EntryNode) => {
+  const tooltip = (node: ShownNode) => {
     const where = uiFor(source.type).fullPath(source, node.path)
-    return node.modifiedTime === undefined ? where : `${where}\n${t('tree.modified', { time: formatDateTime(node.modifiedTime) })}`
+    if (!('modifiedTime' in node) || node.modifiedTime === undefined) return where
+    return `${where}\n${t('tree.modified', { time: formatDateTime(node.modifiedTime) })}`
   }
+
+  /** A Log Source's node: groups, Workloads and pods expand like folders; a container opens its Log Stream. */
+  const logRow = (node: LogNode, depth: number) => {
+    const refresh = { label: t('sourceActions.refresh'), onSelect: () => refreshNode(node.path) }
+    const common = { path: node.path, depth, extra: { title: tooltip(node) } }
+    if (node.kind === 'container') {
+      const role = node.role && (
+        <span className="tree-row__role" title={t(`containerRole.${node.role}.tooltip`)}>
+          {t(`containerRole.${node.role}`)}
+        </span>
+      )
+      return row({
+        ...common,
+        label: node.name,
+        folder: false,
+        icon: <MaterialIcon icon="log" theme={theme} />,
+        onActivate: () => onOpenLog(source, node),
+        onDoubleActivate: () => onOpenLog(source, node, { pinned: true }),
+        badge: role
+      })
+    }
+    const isGroup = node.kind === 'group'
+    return row({
+      ...common,
+      label: isGroup ? t(`workloadGroup.${node.workloadKind}`) : node.name,
+      folder: true,
+      icon: <MaterialIcon icon={isGroup ? 'folder-kubernetes' : 'kubernetes'} theme={theme} open={isGroup && expanded.has(node.path)} />,
+      onActivate: () => toggle(node.path),
+      menuItems: [refresh]
+    })
+  }
+
+  /** What an empty listing says: a namespace or node of a Log Source has no folders to be empty. */
+  const emptyNote = (path: SourcePath) =>
+    source.type !== 'kubernetesLogs' ? 'tree.emptyFolder' : path ? 'tree.emptyLogNode' : 'tree.emptyNamespace'
 
   const note = (path: SourcePath, depth: number, children: ReactNode, className = '') => (
     <div key={`${path}#note`} className={`tree-note ${className}`} style={depthStyle(depth)}>
@@ -273,8 +316,12 @@ export function SourceTree(props: Props) {
       )
       return [note(path, depth, content, 'tree-note--error')]
     }
-    if (listing.nodes.length === 0 && !listing.more) return [note(path, depth, t('tree.emptyFolder'))]
+    if (listing.nodes.length === 0 && !listing.more) return [note(path, depth, t(emptyNote(path)))]
     const rows = listing.nodes.flatMap((node) => {
+      if (isLogNode(node)) {
+        const self = logRow(node, depth)
+        return node.kind !== 'container' && expanded.has(node.path) ? [self, ...renderChildren(node.path, depth + 1)] : [self]
+      }
       if (node.problem) {
         const reason = describeFailure(node.problem)
         return [
@@ -300,7 +347,7 @@ export function SourceTree(props: Props) {
         icon: <MaterialIcon icon={node.icon} theme={theme} open={isFolder && expanded.has(node.path)} />,
         onActivate: () => (isFolder ? toggle(node.path) : onOpenFile(source, node)),
         onDoubleActivate: isFolder ? undefined : () => onOpenFile(source, node, { pinned: true }),
-        menuItems: isFolder ? [{ label: t('sourceActions.refresh'), onSelect: () => refresh(node.path) }] : undefined,
+        menuItems: isFolder ? [{ label: t('sourceActions.refresh'), onSelect: () => refreshNode(node.path) }] : undefined,
         details: showDetails ? details(node) : undefined,
         extra: { title: tooltip(node) }
       })
@@ -330,7 +377,7 @@ export function SourceTree(props: Props) {
   }
 
   const actions: SourceAction[] = [
-    ...(connected ? [{ label: t('sourceActions.refresh'), icon: <ReloadIcon />, onSelect: () => refresh('') }] : []),
+    ...(connected ? [{ label: t('sourceActions.refresh'), icon: <ReloadIcon />, onSelect: () => refreshNode('') }] : []),
     ...sourceActions
   ]
   // The buttons are the row's own controls: using one neither toggles, selects nor drags the row.

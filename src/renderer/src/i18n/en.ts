@@ -1,11 +1,11 @@
-import type { Compression, CoreErrorCode, TextEncoding } from '@shared/core-api'
+import type { Compression, ContainerRole, CoreErrorCode, TextEncoding, WorkloadKind } from '@shared/core-api'
 import type { SettingProblem } from '@shared/settings'
 
 export const en = {
   'sidebar.heading': 'Sources',
   'sidebar.add': 'Add Source',
   'sidebar.empty.title': 'No Sources yet',
-  'sidebar.empty.body': 'Add a folder on this computer or an S3 bucket to browse its files.',
+  'sidebar.empty.body': 'Add a folder on this computer, an S3 bucket or a Kubernetes namespace to browse its files and logs.',
   'sidebar.settings': 'Settings',
   'sidebar.settingsTooltip': 'Settings ({shortcut})',
   'sidebar.showDetails': 'Show sizes and modified times',
@@ -15,6 +15,8 @@ export const en = {
   'sourceType.local.hint': 'A folder on this computer',
   'sourceType.s3': 'S3-compatible Storage',
   'sourceType.s3.hint': 'A bucket on AWS, MinIO, Ceph…',
+  'sourceType.kubernetesLogs': 'Kubernetes Logs',
+  'sourceType.kubernetesLogs.hint': 'Container logs in a namespace',
 
   'sourceDialog.addTitle': 'Add Source',
   'sourceDialog.editTitle': 'Edit {name}',
@@ -84,6 +86,24 @@ export const en = {
   's3Source.proxy': 'Proxy',
   's3Source.proxy.hint': 'Optional, like http://proxy.corp:3128. Otherwise HTTPS_PROXY and NO_PROXY apply.',
 
+  'kubernetesSource.context': 'Context',
+  'kubernetesSource.context.choose': 'Choose a context',
+  'kubernetesSource.context.hint': 'From your kubeconfig. Auth plugins like aws or kubelogin work as they do for kubectl.',
+  'kubernetesSource.context.none': 'No contexts found. Polyscope reads the kubeconfig kubectl uses: KUBECONFIG, or ~/.kube/config.',
+  'kubernetesSource.namespace': 'Namespace',
+  'kubernetesSource.namespace.hint': 'The Source shows the Workloads and pods of this one namespace.',
+
+  'workloadGroup.Deployment': 'Deployments',
+  'workloadGroup.StatefulSet': 'StatefulSets',
+  'workloadGroup.DaemonSet': 'DaemonSets',
+  'workloadGroup.CronJob': 'CronJobs',
+  'workloadGroup.Job': 'Jobs',
+  'workloadGroup.Pod': 'Pods',
+  'containerRole.init': 'init',
+  'containerRole.sidecar': 'sidecar',
+  'containerRole.init.tooltip': 'Init container: runs to completion before the others start.',
+  'containerRole.sidecar.tooltip': 'Sidecar container: starts before the others and keeps running alongside them.',
+
   'sourceActions.refresh': 'Refresh',
   'sourceActions.disconnect': 'Disconnect',
   'sourceActions.edit': 'Edit…',
@@ -96,6 +116,8 @@ export const en = {
 
   'tree.loading': 'Loading…',
   'tree.emptyFolder': 'Empty folder',
+  'tree.emptyNamespace': 'No Workloads or pods in this namespace',
+  'tree.emptyLogNode': 'Nothing here',
   'tree.retry': 'Retry',
   'tree.menuLabel': 'Actions for {name}',
   'tree.connecting': 'Connecting…',
@@ -138,13 +160,21 @@ export const en = {
   'settings.problem.belowOpenAnywayLimit': 'Must be at least the “open anyway” limit.',
 
   'viewer.empty.noSources': 'Add a Source to start browsing.',
-  'viewer.empty.noTabs': 'Open a file from the sidebar to read it here.',
+  'viewer.empty.noTabs': 'Open a file or a container’s log from the sidebar to read it here.',
   'viewer.opening': 'Opening {name}…',
   'viewer.disconnected': 'Source disconnected',
   'viewer.reconnect': 'Reconnect',
   'viewer.reconnecting': 'Reconnecting…',
   'viewer.binary': 'Binary file, {bytes} bytes',
   'viewer.showAsHex': 'Show as hex',
+
+  'logView.lastNLines': 'Last N lines',
+  'logView.choice.all': 'All',
+  'logView.typed': 'Number of lines',
+  'logView.tooLarge': 'The whole log is larger than the Large File threshold ({size}). Showing all of it may slow Polyscope down.',
+  'logView.showAll': 'Show all anyway',
+  'status.lines': '{count} lines',
+  'status.oneLine': '1 line',
 
   'status.readOnly': 'Read-only',
   'status.size': 'Size',
@@ -195,15 +225,26 @@ export const en = {
   'error.ACCESS_KEY_REQUIRED': 'Enter an access key.',
   'error.SECRET_KEY_REQUIRED': 'Enter the secret key.',
   'error.BUCKET_NOT_FOUND': 'That bucket doesn’t exist.',
-  'error.AUTH_FAILED': 'The store refused the credentials.',
+  'error.AUTH_FAILED': 'The server refused the credentials.',
   'error.CREDENTIALS_UNAVAILABLE': 'Couldn’t get credentials: {message}',
   'error.INVALID_PROXY': 'That proxy isn’t an http or https address.',
   'error.CA_BUNDLE_UNREADABLE': 'Couldn’t use the CA bundle: {message}',
   'error.CERTIFICATE_UNTRUSTED': 'The store’s certificate isn’t trusted. Add its CA bundle, or turn off TLS verification: {message}',
-  'error.UNREACHABLE': 'Couldn’t reach the store: {message}',
+  'error.UNREACHABLE': 'The server can’t be reached: {message}',
+  'error.CONTEXT_REQUIRED': 'Choose a kubeconfig context.',
+  'error.CONTEXT_NOT_FOUND': 'That context isn’t in your kubeconfig.',
+  'error.KUBECONFIG_UNREADABLE': 'Couldn’t read your kubeconfig: {message}',
+  'error.INVALID_NAMESPACE': 'That isn’t a namespace name: use lowercase letters, digits and dashes.',
+  'error.NAMESPACE_NOT_FOUND': 'That namespace doesn’t exist in the cluster.',
+  'error.NOT_A_LOG_STREAM': 'Only containers have logs.',
+  'error.LOG_UNAVAILABLE': 'This container has no log to show: {message}',
+  'error.LOG_TOO_LARGE': 'The whole log is larger than the Large File threshold.',
+  'error.INVALID_LINE_COUNT': 'Enter a whole number of lines greater than zero.',
   'error.UNKNOWN': 'Couldn’t complete that: {message}'
 } satisfies Record<string, string> &
   Record<`error.${CoreErrorCode}`, string> &
   Record<`settings.problem.${SettingProblem}`, string> &
   Record<`encoding.${TextEncoding}`, string> &
-  Record<`compression.${Compression}`, string>
+  Record<`compression.${Compression}`, string> &
+  Record<`workloadGroup.${WorkloadKind}`, string> &
+  Record<`containerRole.${ContainerRole}`, string>

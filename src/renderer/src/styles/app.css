@@ -703,6 +703,32 @@ body.is-resizing {
   pointer-events: none;
 }
 
+/* ---------- Log view ---------- */
+
+/* The "Last N lines" control at the top of a log view. */
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-sm);
+}
+
+.log-toolbar__label {
+  color: var(--text-dim);
+}
+
+.log-toolbar .segmented__option {
+  padding: 1px 10px;
+}
+
+.log-toolbar__input {
+  width: 9em;
+  height: 24px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- Context menu ---------- */
 
 .context-menu {
@@ -879,6 +905,17 @@ body.is-resizing {
 
 .tree-row--source .tree-row__icon {
   color: var(--text);
+}
+
+/* Marks init and sidecar containers, dimmed after the name. */
+.tree-row__role {
+  flex: none;
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
 }
 
 .tree-row__status {

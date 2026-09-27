@@ -1,0 +1,143 @@
+# What the Kubernetes integration tests expect to find in their test namespace. CI applies it to a kind
+# cluster, then runs the CronJob once (as nightly-manual) so it has a Job; see .github/workflows/ci.yml.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: polyscope-test
+---
+# One replica, with an init container, a native sidecar (an init container that keeps running) and the app.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: polyscope-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: web }
+  template:
+    metadata:
+      labels: { app: web }
+    spec:
+      terminationGracePeriodSeconds: 1
+      initContainers:
+        - name: setup
+          image: busybox:1.36
+          command: ['sh', '-c', 'echo setup done']
+        - name: proxy
+          image: busybox:1.36
+          restartPolicy: Always
+          command: ['sh', '-c', 'echo proxy up; sleep 3600000']
+      containers:
+        - name: app
+          image: busybox:1.36
+          command: ['sh', '-c', 'echo web ready; sleep 3600000']
+---
+# Keeps crashing, so it restarts over and over.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crasher
+  namespace: polyscope-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: crasher }
+  template:
+    metadata:
+      labels: { app: crasher }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: crash
+          image: busybox:1.36
+          command: ['sh', '-c', 'echo crashing; exit 1']
+---
+# Two containers in one pod.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: db
+  namespace: polyscope-test
+spec:
+  serviceName: db
+  replicas: 1
+  selector:
+    matchLabels: { app: db }
+  template:
+    metadata:
+      labels: { app: db }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: db
+          image: busybox:1.36
+          command: ['sh', '-c', 'echo db ready; sleep 3600000']
+        - name: backup
+          image: busybox:1.36
+          command: ['sh', '-c', 'echo backup idle; sleep 3600000']
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: agent
+  namespace: polyscope-test
+spec:
+  selector:
+    matchLabels: { app: agent }
+  template:
+    metadata:
+      labels: { app: agent }
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: agent
+          image: busybox:1.36
+          command: ['sh', '-c', 'echo agent watching; sleep 3600000']
+---
+# Never due by itself: CI runs it once as nightly-manual.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nightly
+  namespace: polyscope-test
+spec:
+  schedule: '0 0 1 1 *'
+  suspend: true
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: report
+              image: busybox:1.36
+              command: ['sh', '-c', 'echo report done']
+---
+# A Job of its own, outside any CronJob.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+  namespace: polyscope-test
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: busybox:1.36
+          command: ['sh', '-c', 'echo migrated']
+---
+# No Workload owns it. Prints `line 1` to `line 100`, then waits.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: counter
+  namespace: polyscope-test
+spec:
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: counter
+      image: busybox:1.36
+      command: ['sh', '-c', 'for i in $(seq 1 100); do echo "line $i"; done; sleep 3600000']

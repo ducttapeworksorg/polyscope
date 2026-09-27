@@ -2,10 +2,10 @@ import { useState } from 'react'
 import { textEncodings, type Environment, type LanguageId, type TextEncoding } from '@shared/core-api'
 import { environmentStyle } from '../environments'
 import { t } from '../i18n'
-import { formatDateTime, formatSize } from '../i18n/format'
+import { formatCount, formatDateTime, formatSize } from '../i18n/format'
 import { allLanguages, languageName } from '../monaco'
 import { uiFor } from '../source-types'
-import type { OpenTab } from '../workspace'
+import { isLog, type OpenTab } from '../workspace'
 import { QuickPick, type PickOption } from './QuickPick'
 
 interface Props {
@@ -30,7 +30,10 @@ interface OpenPicker {
   anchor: HTMLElement
 }
 
-/** Facts about the active tab: its Environment and where it's from, then its size, modified time, encoding and language. */
+/**
+ * Facts about the active tab: its Environment and where it's from, then a file's size, modified time,
+ * encoding and language, or how many lines of a Log Stream are shown.
+ */
 export function StatusBar({ activeTab, environment, onPickEncoding, onPickLanguage }: Props) {
   const [picker, setPicker] = useState<OpenPicker | null>(null)
   const closePicker = () => {
@@ -77,32 +80,41 @@ export function StatusBar({ activeTab, environment, onPickEncoding, onPickLangua
         {source.name}
       </span>
       <span className="statusbar__item statusbar__item--path">{file.path}</span>
-      <span className="statusbar__item statusbar__item--end" title={t('status.size')}>
-        {formatSize(file.size)}
-        {file.compression && ` (${t(`compression.${file.compression}`)})`}
-      </span>
-      <span className="statusbar__item" title={t('status.modified')}>
-        {formatDateTime(file.modifiedTime)}
-      </span>
-      <button
-        type="button"
-        className="statusbar__item statusbar__button"
-        title={t('status.reopenWithEncoding')}
-        aria-label={t('status.encodingLabel', { encoding: statusEncoding(activeTab) })}
-        onClick={(event) => setPicker({ kind: 'encoding', tabKey: activeTab.key, anchor: event.currentTarget })}
-      >
-        {statusEncoding(activeTab)}
-      </button>
-      {language && (
-        <button
-          type="button"
-          className="statusbar__item statusbar__button"
-          title={t('status.selectLanguage')}
-          aria-label={t('status.languageLabel', { language: languageName(language) })}
-          onClick={(event) => setPicker({ kind: 'language', tabKey: activeTab.key, anchor: event.currentTarget })}
-        >
-          {languageName(language)}
-        </button>
+      {isLog(file) ? (
+        <>
+          <span className="statusbar__item statusbar__item--end">{file.view === 'log' && lineCount(file.content)}</span>
+          <span className="statusbar__item">{languageName('log')}</span>
+        </>
+      ) : (
+        <>
+          <span className="statusbar__item statusbar__item--end" title={t('status.size')}>
+            {formatSize(file.size)}
+            {file.compression && ` (${t(`compression.${file.compression}`)})`}
+          </span>
+          <span className="statusbar__item" title={t('status.modified')}>
+            {formatDateTime(file.modifiedTime)}
+          </span>
+          <button
+            type="button"
+            className="statusbar__item statusbar__button"
+            title={t('status.reopenWithEncoding')}
+            aria-label={t('status.encodingLabel', { encoding: statusEncoding(activeTab) })}
+            onClick={(event) => setPicker({ kind: 'encoding', tabKey: activeTab.key, anchor: event.currentTarget })}
+          >
+            {statusEncoding(activeTab)}
+          </button>
+          {language && (
+            <button
+              type="button"
+              className="statusbar__item statusbar__button"
+              title={t('status.selectLanguage')}
+              aria-label={t('status.languageLabel', { language: languageName(language) })}
+              onClick={(event) => setPicker({ kind: 'language', tabKey: activeTab.key, anchor: event.currentTarget })}
+            >
+              {languageName(language)}
+            </button>
+          )}
+        </>
       )}
       <span className="statusbar__item">{t('status.readOnly')}</span>
 
@@ -132,8 +144,15 @@ export function StatusBar({ activeTab, environment, onPickEncoding, onPickLangua
   )
 }
 
+/** How many lines a Log Stream's snapshot shows. */
+function lineCount(content: string) {
+  const count = content ? content.split('\n').length : 0
+  return count === 1 ? t('status.oneLine') : t('status.lines', { count: formatCount(count) })
+}
+
 /** What the encoding item says: the encoding text was decoded with, or how undecoded bytes are shown. */
 function statusEncoding({ file }: OpenTab) {
+  if (isLog(file)) return ''
   if (file.view === 'editor') return encodingLabel(file.encoding)
   if (file.view === 'binary') return t('encoding.binary')
   // A large file's dump stops short of its end, and says so.

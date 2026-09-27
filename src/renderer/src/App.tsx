@@ -1,8 +1,19 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
-import type { ConnectionState, EntryNode, Environment, OpenedFile, OpenOptions, SourceInfo, TreeNode } from '@shared/core-api'
+import type {
+  ConnectionState,
+  ContainerNode,
+  EntryNode,
+  Environment,
+  LastNLines,
+  OpenLogOptions,
+  OpenOptions,
+  SourceInfo,
+  TreeNode
+} from '@shared/core-api'
 import type { Settings, Theme } from '@shared/settings'
 import { EnvironmentsDialog } from './components/EnvironmentsDialog'
 import { ApertureMark } from './components/icons'
+import { LastNLinesControl } from './components/LastNLinesControl'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Sidebar } from './components/Sidebar'
 import { SidebarResizer, sidebarMinWidth, useSidebarWidth, workbenchMinWidth } from './components/SidebarResizer'
@@ -10,7 +21,7 @@ import { nodeKey } from './components/SourceTree'
 import { StatusBar } from './components/StatusBar'
 import { Tabs } from './components/Tabs'
 import { Viewer } from './components/Viewer'
-import { core, describeError, describeFailure } from './core-client'
+import { core, CoreCallError, describeError, describeFailure } from './core-client'
 import { environmentOf } from './environments'
 import { t } from './i18n'
 import { targetOf } from './source-types'
@@ -21,10 +32,12 @@ import {
   closeOtherTabs,
   closeTab,
   emptyWorkspace,
+  isLog,
   openTab,
   pinTab,
   reopenTab,
   setLanguage,
+  type TabContent,
   type Workspace
 } from './workspace'
 
@@ -37,10 +50,12 @@ export function App() {
   const [environments, setEnvironments] = useState<Environment[]>([])
   const [environmentsOpen, setEnvironmentsOpen] = useState(false)
   const [workspace, setWorkspace] = useState<Workspace>(emptyWorkspace)
-  // Files being opened, by tab key, so a double-click's second click waits for the first instead of reading again.
-  const pendingOpens = useRef(new Map<string, Promise<OpenedFile>>())
+  // Files and logs being opened, by tab key, so a double-click's second click waits for the first instead of reading again.
+  const pendingOpens = useRef(new Map<string, Promise<TabContent>>())
   // The file asked for last; a slower read of one asked for earlier doesn't take over from it.
   const latestOpen = useRef<string | null>(null)
+  // The fetch of a log tab's lines asked for last, by tab key.
+  const latestLogFetch = useRef(new Map<string, object>())
   const [opening, setOpening] = useState<string | null>(null)
   const [openError, setOpenError] = useState<string | null>(null)
   // Mirrors the core's per-Source connection state; a Source with no entry is Disconnected.
@@ -130,17 +145,41 @@ export function App() {
   const { tabs } = workspace
   const activeTab = tabs.find((tab) => tab.key === workspace.activeKey) ?? null
 
-  /** Reads a file to open it, sharing the read with any other click opening the same file meanwhile. */
-  const readForOpening = (key: string, sourceId: string, path: string) => {
+  /** Reads a file or log to open it, sharing the read with any other click opening the same one meanwhile. */
+  const readForOpening = (key: string, read: () => Promise<TabContent>) => {
     let pending = pendingOpens.current.get(key)
     if (!pending) {
-      pending = core.openFile(sourceId, path).finally(() => pendingOpens.current.delete(key))
+      pending = read().finally(() => pendingOpens.current.delete(key))
       pendingOpens.current.set(key, pending)
     }
     return pending
   }
 
-  const openFile = async (source: SourceInfo, node: EntryNode, { pinned = false } = {}) => {
+  /**
+   * Fetches a container's log. When all of it is asked for but it's over the Large File threshold, the tab
+   * says so instead of showing it, until the user goes ahead or picks fewer lines.
+   */
+  const readLog = async (sourceId: string, path: string, options?: OpenLogOptions): Promise<TabContent> => {
+    try {
+      return await core.openLog(sourceId, path, options)
+    } catch (error) {
+      if (!(error instanceof CoreCallError) || error.code !== 'LOG_TOO_LARGE') throw error
+      return { view: 'logTooLarge', path, name: path.slice(path.lastIndexOf('/') + 1) }
+    }
+  }
+
+  const openFile = (source: SourceInfo, node: EntryNode, options?: { pinned: boolean }) =>
+    openInTab(source, node, options, () => core.openFile(source.id, node.path))
+
+  const openLog = (source: SourceInfo, node: ContainerNode, options?: { pinned: boolean }) =>
+    openInTab(source, node, options, () => readLog(source.id, node.path))
+
+  const openInTab = async (
+    source: SourceInfo,
+    node: EntryNode | ContainerNode,
+    { pinned = false } = {},
+    read: () => Promise<TabContent>
+  ) => {
     const key = nodeKey(source.id, node.path)
     setOpenError(null)
     latestOpen.current = key
@@ -148,7 +187,7 @@ export function App() {
     if (open) return setWorkspace((ws) => openTab(ws, open, { pinned }))
     setOpening(node.name)
     try {
-      const file = await readForOpening(key, source.id, node.path)
+      const file = await readForOpening(key, read)
       if (latestOpen.current === key) setWorkspace((ws) => openTab(ws, { key, source, file }, { pinned }))
     } catch (error) {
       if (latestOpen.current === key) setOpenError(describeError(error))
@@ -165,6 +204,7 @@ export function App() {
   const reopenTabAs = async (key: string, openAs?: OpenOptions) => {
     const tab = tabs.find((open) => open.key === key)
     if (!tab) return
+    if (isLog(tab.file)) return reopenLog(key)
     const options = openAs ?? tab.openAs ?? {}
     setOpenError(null)
     setWorkspace((ws) => pinTab(ws, key))
@@ -174,6 +214,35 @@ export function App() {
     } catch (error) {
       setOpenError(describeError(error))
     }
+  }
+
+  /** Fetches a log tab's lines again: as many as `options` asks for, or else as many as it shows. Pins the tab. */
+  const reopenLog = async (key: string, options: OpenLogOptions = {}) => {
+    const tab = tabs.find((open) => open.key === key)
+    if (!tab) return
+    const shown = tab.file.view === 'log' ? tab.file.lastNLines : 'all'
+    // Only the latest fetch for a tab lands: picking 1K then 50K quickly must end on 50K, whichever answers first.
+    const request = {}
+    latestLogFetch.current.set(key, request)
+    const isLatest = () => latestLogFetch.current.get(key) === request
+    setOpenError(null)
+    setWorkspace((ws) => pinTab(ws, key))
+    try {
+      const file = await readLog(tab.source.id, tab.file.path, { lastNLines: shown, ...options })
+      if (isLatest()) setWorkspace((ws) => reopenTab(ws, key, file))
+    } catch (error) {
+      if (isLatest()) setOpenError(describeError(error))
+    }
+  }
+
+  /** Shows another number of a log tab's last lines, and remembers it for the tab's Source. */
+  const changeLastNLines = async (key: string, lastNLines: LastNLines) => {
+    const tab = tabs.find((open) => open.key === key)
+    if (!tab) return
+    await Promise.all([
+      reopenLog(key, { lastNLines }),
+      core.rememberLastNLines(tab.source.id, lastNLines).then(reloadSources, (error) => setOpenError(describeError(error)))
+    ])
   }
 
   // The new value arrives through onSettingsChanged; if it can't be saved, the toggle stays as it was.
@@ -200,6 +269,7 @@ export function App() {
         onDisconnect={(source) => void disconnect(source)}
         onSourcesChanged={() => void reloadSources()}
         onOpenFile={openFile}
+        onOpenLog={openLog}
         onOpenSettings={() => setSettingsOpen(true)}
         showDetails={settings.showTreeDetails}
         onToggleDetails={() => void toggleTreeDetails()}
@@ -269,8 +339,20 @@ export function App() {
             </button>
           </div>
         )}
+        {activeTab && isLog(activeTab.file) && (
+          <LastNLinesControl
+            value={activeTab.file.view === 'log' ? activeTab.file.lastNLines : 'all'}
+            onChange={(lastNLines) => void changeLastNLines(activeTab.key, lastNLines)}
+          />
+        )}
         <div className="viewer">
-          <Viewer tabs={tabs} activeTab={activeTab} onShowHex={(key) => void reopenTabAs(key, { hex: true })} />
+          <Viewer
+            tabs={tabs}
+            activeTab={activeTab}
+            onShowHex={(key) => void reopenTabAs(key, { hex: true })}
+            onShowWholeLog={(key) => void reopenLog(key, { lastNLines: 'all', allowLarge: true })}
+            largeFileThreshold={settings.largeFileThreshold}
+          />
           {!activeTab && (
             <div className="viewer__empty">
               <ApertureMark />

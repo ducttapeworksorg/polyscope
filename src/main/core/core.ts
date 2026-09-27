@@ -5,7 +5,10 @@ import type {
   CoreEvents,
   EntryNode,
   Environment,
+  KubernetesLogsSourceInfo,
+  LastNLines,
   LocalSourceInfo,
+  LogNode,
   NewEnvironment,
   NewS3Source,
   NewSource,
@@ -15,6 +18,7 @@ import type {
   SourceTypeId,
   TreeNode
 } from '@shared/core-api'
+import { workloadKinds } from '@shared/core-api'
 import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings } from '@shared/settings'
 import { listAwsProfiles } from './aws-profiles'
 import { CoreError } from './core-error'
@@ -22,8 +26,11 @@ import { createEnvironmentStore, defaultEnvironments, isColor } from './environm
 import { checkEncoding, decode, decompress, detectEncoding, hexDump, hexDumpLimit } from './file-content'
 import { fileIcon, folderIcon } from './file-icons'
 import type { FileSource } from './file-source'
+import { kubeConfigFor, listKubeContexts } from './kubeconfig'
+import { createKubernetesLogSource } from './kubernetes-log-source'
 import { languageFor } from './languages'
 import { createLocalFileSource } from './local-file-source'
+import type { LogSource } from './log-source'
 import { createRegistryStore, emptyRegistry, type SavedSource } from './registry-store'
 import { createS3FileSource, readCaBundle, type S3Target } from './s3-file-source'
 import { createSecretStore, type SecretStore } from './secret-store'
@@ -33,11 +40,24 @@ const asCoreError = (error: unknown) =>
   error instanceof CoreError ? error : new CoreError('UNKNOWN', error instanceof Error ? error.message : String(error))
 const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 
-/** Fills in settings added since a Source was saved with their defaults. */
-const withDefaults = (source: SavedSource): SavedSource =>
-  source.type === 'local'
-    ? { ...source, showHidden: source.showHidden ?? true }
-    : {
+const isLastNLines = (value: unknown): value is LastNLines => value === 'all' || (Number.isSafeInteger(value) && (value as number) > 0)
+
+function checkLastNLines(value: unknown): LastNLines {
+  if (!isLastNLines(value)) throw new CoreError('INVALID_LINE_COUNT', `Not a whole number of lines greater than zero, or all: ${String(value)}`)
+  return value
+}
+
+/** A Source without its remembered "Last N lines". */
+const withoutLastNLines = <S extends SavedSource>({ lastNLines: _, ...source }: S) => source as S
+
+/** Fills in settings added since a Source was saved with their defaults, and drops a "Last N lines" that makes no sense. */
+function withDefaults(saved: SavedSource): SavedSource {
+  const source = saved.lastNLines === undefined || isLastNLines(saved.lastNLines) ? saved : withoutLastNLines(saved)
+  switch (source.type) {
+    case 'local':
+      return { ...source, showHidden: source.showHidden ?? true }
+    case 's3':
+      return {
         ...source,
         auth: source.auth ?? 'keys',
         profile: source.profile ?? '',
@@ -45,14 +65,19 @@ const withDefaults = (source: SavedSource): SavedSource =>
         caBundlePath: source.caBundlePath ?? '',
         proxyUrl: source.proxyUrl ?? ''
       }
+    case 'kubernetesLogs':
+      return source
+  }
+}
 
 /** A Source without its Environment label. */
 const unlabelled = <S extends SavedSource>({ environmentId: _, ...source }: S) => source as S
 
-/** Where a Source points and how it gets there: its settings, less its id, name and label. */
+/** Where a Source points and how it gets there: its settings, less its id, name, label and remembered view choices. */
 type Target =
   | Pick<LocalSourceInfo, 'type' | 'rootPath' | 'showHidden'>
-  | Omit<S3SourceInfo, 'id' | 'name' | 'environmentId' | 'secretKeySet'>
+  | Omit<S3SourceInfo, 'id' | 'name' | 'environmentId' | 'lastNLines' | 'secretKeySet'>
+  | Pick<KubernetesLogsSourceInfo, 'type' | 'context' | 'namespace'>
 
 type S3Settings = Extract<Target, { type: 's3' }>
 
@@ -73,9 +98,19 @@ function normaliseUrl(input: string, scheme: 'http' | 'https', code: 'INVALID_HO
   return url.replace(/\/+$/, '')
 }
 
+/** A Kubernetes namespace name: a DNS label, lowercase letters, digits and '-', at most 63 characters. */
+const isNamespace = (name: string) => name.length <= 63 && /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(name)
+
 /** Checks the settings specific to a Source's Source Type and returns them normalised. */
 function targetOf(input: NewSource): Target {
   if (input.type === 'local') return { type: 'local', rootPath: input.rootPath.trim(), showHidden: input.showHidden ?? true }
+  if (input.type === 'kubernetesLogs') {
+    const context = input.context?.trim() ?? ''
+    if (!context) throw new CoreError('CONTEXT_REQUIRED', 'A Kubernetes Source needs a kubeconfig context')
+    const namespace = input.namespace?.trim() ?? ''
+    if (!isNamespace(namespace)) throw new CoreError('INVALID_NAMESPACE', `Not a namespace name: ${namespace}`)
+    return { type: 'kubernetesLogs', context, namespace }
+  }
   const s3: NewS3Source = input
   // Blank for AWS itself; a store is most likely https, a proxy http.
   const host = normaliseUrl(s3.host ?? '', 'https', 'INVALID_HOST')
@@ -111,6 +146,9 @@ async function s3TargetOf(settings: S3Settings, secretKey?: string): Promise<S3T
   const caBundle = settings.caBundlePath ? await readCaBundle(settings.caBundlePath) : undefined
   return { host, bucket, prefix, region, pathStyle, credentials, verifyTls, proxyUrl, ...(caBundle && { caBundle }) }
 }
+
+/** What a Connected Source reads from: files, or Log Streams. */
+type Backend = { kind: 'files'; fileSource: FileSource } | { kind: 'logs'; logSource: LogSource }
 
 export interface CoreOptions {
   /** Where the registry is saved between launches; without it, nothing outlives the core. */
@@ -170,7 +208,7 @@ export function createCore(options: CoreOptions = {}): Core {
   }
   // Only Sources that aren't Disconnected have an entry. Each connect attempt puts in a new entry,
   // so an attempt can tell when a disconnect (or a newer attempt) has replaced it.
-  type Connection = Exclude<ConnectionState, { state: 'connected' | 'disconnected' }> | { state: 'connected'; fileSource: FileSource }
+  type Connection = Exclude<ConnectionState, { state: 'connected' | 'disconnected' }> | { state: 'connected'; backend: Backend }
   const connections = new Map<string, Connection>()
 
   const sourceFor = (sourceId: string) => {
@@ -205,18 +243,30 @@ export function createCore(options: CoreOptions = {}): Core {
   const handOut = async (saved: SavedSource): Promise<SourceInfo> => {
     const source =
       saved.environmentId === undefined || environments.some((e) => e.id === saved.environmentId) ? { ...saved } : unlabelled(saved)
-    if (source.type === 'local') return source
+    if (source.type !== 's3') return source
     // Only whether there is a secret: the secret itself stays in the core.
     return { ...source, secretKeySet: (await secrets.get(source.id, secretKeyName)) !== undefined }
   }
 
-  const fileSourceFor = (sourceId: string) => {
+  const backendFor = (sourceId: string) => {
     const source = sourceFor(sourceId)
     const connection = connections.get(source.id)
     if (connection?.state !== 'connected') {
       throw new CoreError('SOURCE_DISCONNECTED', `${source.name} is not connected`)
     }
-    return connection.fileSource
+    return connection.backend
+  }
+
+  const fileSourceFor = (sourceId: string, path: SourcePath) => {
+    const backend = backendFor(sourceId)
+    if (backend.kind !== 'files') throw new CoreError('NOT_A_FILE', `A Log Source has no files: ${path}`)
+    return backend.fileSource
+  }
+
+  const logSourceFor = (sourceId: string, path: SourcePath) => {
+    const backend = backendFor(sourceId)
+    if (backend.kind !== 'logs') throw new CoreError('NOT_A_LOG_STREAM', `A File Source has no Log Streams: ${path}`)
+    return backend.logSource
   }
 
   /** A page of a folder's children, folders first, then files, each by name; a more node ends it if there are more. */
@@ -239,6 +289,18 @@ export function createCore(options: CoreOptions = {}): Core {
     return page.cursor === undefined ? nodes : [...nodes, { kind: 'more', path, cursor: page.cursor }]
   }
 
+  /** A Log Source node's children: groups in the order of their kind, containers in their pod's, the rest by name. */
+  const listLogNodes = async (logSource: LogSource, path: SourcePath): Promise<TreeNode[]> => {
+    const nodes = await logSource.listChildren(path)
+    if (nodes.every((node) => node.kind === 'container')) return nodes
+    const rank = (node: LogNode) => (node.kind === 'group' ? workloadKinds.indexOf(node.workloadKind) : 0)
+    return nodes.toSorted((a, b) => rank(a) - rank(b) || byName.compare(a.name, b.name))
+  }
+
+  /** Lists a node's children in whichever kind of Source it is. */
+  const listBackend = (backend: Backend, path: SourcePath, cursor?: string) =>
+    backend.kind === 'files' ? listNodes(backend.fileSource, path, cursor) : listLogNodes(backend.logSource, path)
+
   /** Opens a Local File Source at its root folder, once it's clear the folder is there. */
   const reachLocal = async ({ rootPath, showHidden }: Extract<Target, { type: 'local' }>) => {
     const fileSource = createLocalFileSource(rootPath, { showHidden })
@@ -248,13 +310,23 @@ export function createCore(options: CoreOptions = {}): Core {
     return fileSource
   }
 
+  /** Opens a Kubernetes Logs Source's namespace, once it's clear the context and namespace are there. */
+  const reachKubernetes = async ({ context, namespace }: Extract<Target, { type: 'kubernetesLogs' }>) => {
+    const logSource = createKubernetesLogSource(kubeConfigFor(context), namespace)
+    await logSource.checkNamespace()
+    return logSource
+  }
+
   /**
-   * Opens a Source's File Source and lists its root: what connecting, or testing a connection, has to get through.
+   * Opens a Source's File or Log Source and lists its root: what connecting, or testing a connection, has to get through.
    * An S3 Source signing in with keys needs its `secretKey`; it proves it can sign in by listing.
    */
   const open = async (target: Target, secretKey?: string) => {
-    const fileSource = target.type === 'local' ? await reachLocal(target) : createS3FileSource(await s3TargetOf(target, secretKey))
-    return { fileSource, nodes: await listNodes(fileSource, '') }
+    let backend: Backend
+    if (target.type === 'local') backend = { kind: 'files', fileSource: await reachLocal(target) }
+    else if (target.type === 's3') backend = { kind: 'files', fileSource: createS3FileSource(await s3TargetOf(target, secretKey)) }
+    else backend = { kind: 'logs', logSource: await reachKubernetes(target) }
+    return { backend, nodes: await listBackend(backend, '') }
   }
 
   /** The secret key typed in `input`, or else the one stored for `sourceId`; undefined if there's neither. */
@@ -279,6 +351,8 @@ export function createCore(options: CoreOptions = {}): Core {
       await reachLocal(target)
       return { saved: { ...target, name, ...label } }
     }
+    // Nor is a cluster: it may be away, or its context not in the kubeconfig yet.
+    if (target.type === 'kubernetesLogs') return { saved: { ...target, name, ...label } }
     // An S3 Source isn't reached until it's connected: it may be saved while its store is away.
     const typed = await secretKeyFor(input)
     if (target.auth === 'keys' && typed === undefined && (await secretKeyFor(input, editing)) === undefined) {
@@ -287,8 +361,9 @@ export function createCore(options: CoreOptions = {}): Core {
     return { saved: { ...target, name, ...label }, ...(typed !== undefined && { secretKey: typed }) }
   }
 
-  /** Every setting but the name and label, in a form that compares equal whatever order the keys were saved in. */
-  const target = ({ name: _, environmentId: __, ...settings }: SavedSource) => JSON.stringify(Object.entries(settings).sort())
+  /** Every setting but the name, label and remembered view choices, in a form that compares equal whatever order the keys were saved in. */
+  const target = ({ name: _, environmentId: __, lastNLines: ___, ...settings }: SavedSource) =>
+    JSON.stringify(Object.entries(settings).sort())
   const sameTarget = (a: SavedSource, b: SavedSource) => target(a) === target(b)
 
   const copyName = (name: string) => {
@@ -331,8 +406,10 @@ export function createCore(options: CoreOptions = {}): Core {
       await loaded
       sourceFor(sourceId) // an unknown Source is reported before any invalid settings
       const { saved, secretKey } = await validate(input, sourceId)
-      const source = { id: sourceId, ...saved } as SavedSource
       const before = sourceFor(sourceId)
+      // What the user picked in its log views isn't among the settings edited, so it stays.
+      const remembered = before.lastNLines !== undefined && { lastNLines: before.lastNLines }
+      const source = { id: sourceId, ...saved, ...remembered } as SavedSource
       const previousKey = secretKey === undefined ? undefined : await secrets.get(sourceId, secretKeyName)
       if (secretKey !== undefined) await secrets.set(sourceId, secretKeyName, secretKey)
       try {
@@ -459,7 +536,7 @@ export function createCore(options: CoreOptions = {}): Core {
         settle({ state: 'error', code: failure.code, message: failure.message })
         throw failure
       }
-      settle({ state: 'connected', fileSource: opened.fileSource })
+      settle({ state: 'connected', backend: opened.backend })
       return opened.nodes
     },
 
@@ -476,9 +553,9 @@ export function createCore(options: CoreOptions = {}): Core {
 
     async expand(sourceId, path, cursor) {
       await loaded
-      const fileSource = fileSourceFor(sourceId)
+      const backend = backendFor(sourceId)
       try {
-        return await listNodes(fileSource, path, cursor)
+        return await listBackend(backend, path, cursor)
       } catch (error) {
         const { code, message } = asCoreError(error)
         return [{ kind: 'error', path, code, message }]
@@ -488,7 +565,7 @@ export function createCore(options: CoreOptions = {}): Core {
     async openFile(sourceId, path, options = {}) {
       await loaded
       const askedEncoding = options.encoding === undefined ? undefined : checkEncoding(options.encoding)
-      const fileSource = fileSourceFor(sourceId)
+      const fileSource = fileSourceFor(sourceId, path)
       const info = await fileSource.stat(path)
       if (info.kind !== 'file') throw new CoreError('NOT_A_FILE', `Not a file: ${path}`)
       const name = path.slice(path.lastIndexOf('/') + 1)
@@ -503,7 +580,45 @@ export function createCore(options: CoreOptions = {}): Core {
       return { view: 'hex', ...common, content: hexDump(shown), contentLength: bytes.length, shownLength: shown.length }
     },
 
+    async openLog(sourceId, path, options = {}) {
+      await loaded
+      const asked = options.lastNLines === undefined ? undefined : checkLastNLines(options.lastNLines)
+      const logSource = logSourceFor(sourceId, path)
+      await settingsLoaded
+      const lastNLines = asked ?? sourceFor(sourceId).lastNLines ?? settings.defaultLastNLines
+      let text: string
+      if (lastNLines !== 'all') text = await logSource.readLog(path, { tailLines: lastNLines })
+      else if (options.allowLarge) text = await logSource.readLog(path)
+      else {
+        // Reading one byte past the threshold is enough to tell, without fetching all of a huge log.
+        const threshold = settings.largeFileThreshold
+        text = await logSource.readLog(path, { limitBytes: threshold + 1 })
+        if (Buffer.byteLength(text) > threshold) {
+          throw new CoreError('LOG_TOO_LARGE', `The whole log is over the Large File threshold of ${threshold} bytes`)
+        }
+      }
+      const lines = text.replace(/\n$/, '').split('\n')
+      const segments = path.split('/')
+      return {
+        view: 'log',
+        path,
+        name: segments.at(-1)!,
+        pod: segments.at(-2) ?? '',
+        lastNLines,
+        content: (lastNLines === 'all' ? lines : lines.slice(-lastNLines)).join('\n')
+      }
+    },
+
+    async rememberLastNLines(sourceId, lastNLines) {
+      await loaded
+      const checked = lastNLines === null ? null : checkLastNLines(lastNLines)
+      const source = sourceFor(sourceId)
+      const changed = checked === null ? withoutLastNLines(source) : { ...source, lastNLines: checked }
+      await commit(() => (sources[sources.indexOf(source)] = changed))
+    },
+
     listAwsProfiles,
+    listKubeContexts,
 
     async getSettings() {
       await settingsLoaded

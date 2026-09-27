@@ -1,9 +1,9 @@
 import type { Environment } from '@shared/core-api'
 import { environmentOf, environmentStyle } from '../environments'
-import type { OpenTab } from '../workspace'
+import { isLog, type OpenTab } from '../workspace'
 import { t } from '../i18n'
 import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
-import { CloseIcon, FileIcon, ReloadIcon } from './icons'
+import { CloseIcon, FileIcon, LogIcon, ReloadIcon } from './icons'
 
 interface Props {
   tabs: OpenTab[]
@@ -51,9 +51,7 @@ export function Tabs({ tabs, activeKey, environments, onActivate, onPin, onReloa
               onAuxClick={(e) => e.button === 1 && onClose(tab.key)}
               onContextMenu={(e) => openMenu(e, { tab })}
             >
-              <span className="tab__icon">
-                <FileIcon />
-              </span>
+              <span className="tab__icon">{isLog(tab.file) ? <LogIcon /> : <FileIcon />}</span>
               <span className="tab__label">{tab.file.name}</span>
               <button
                 type="button"

@@ -44,6 +44,23 @@ export const BucketIcon = () => (
   </svg>
 )
 
+/** A Kubernetes wheel with lines of log beside it, for Kubernetes Logs. */
+export const KubernetesLogsIcon = () => (
+  <svg {...base}>
+    <circle cx="6.25" cy="6.25" r="4.5" />
+    <circle cx="6.25" cy="6.25" r="1.25" />
+    <path d="M6.25 1.75V5M6.25 7.5v3.25M1.75 6.25H5M7.5 6.25h3.25M3.1 3.1l2.25 2.25M7.15 7.15l2.25 2.25M9.4 3.1L7.15 5.35M5.35 7.15L3.1 9.4" />
+    <path d="M9.75 11.25h4.5M9.75 13.75h3" />
+  </svg>
+)
+
+/** Lines of text, for a Log Stream. */
+export const LogIcon = () => (
+  <svg {...base}>
+    <path d="M2.75 3.5h10.5M2.75 6.5h10.5M2.75 9.5h7M2.75 12.5h8.5" />
+  </svg>
+)
+
 export const WarningIcon = () => (
   <svg {...base}>
     <path d="M8 2.25l6.25 11H1.75z" />

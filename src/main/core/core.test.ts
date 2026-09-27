@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { TreeNode } from '@shared/core-api'
+import type { EntryNode, LocalSourceInfo, TreeNode } from '@shared/core-api'
 import { createCore } from './core'
 import { createSecretStore, type SecretCipher } from './secret-store'
 
@@ -16,7 +16,7 @@ const errorNode = (path: string, code: string) => ({ kind: 'error', path, code, 
 /** Nodes without their icon and metadata, for tests about what's listed rather than how it's shown. */
 const entries = (nodes: TreeNode[]) =>
   nodes.map((node) => {
-    if (node.kind === 'error') return node
+    if (node.kind !== 'folder' && node.kind !== 'file') return node
     const { icon: _, size: __, modifiedTime: ___, ...rest } = node
     return rest
   })
@@ -99,7 +99,8 @@ describe('tree metadata and icons', () => {
   const connected = async (rootPath = dir) => {
     const core = createCore()
     const source = await core.addSource(localSource('Logs', rootPath))
-    return { core, source, nodes: await core.connect(source.id) }
+    // A Local Filesystem Source's tree holds nothing but entries, error and more nodes.
+    return { core, source, nodes: (await core.connect(source.id)) as EntryNode[] }
   }
   const recently = () => ({ before: Date.now() - 60_000 })
   const isRecent = (time: number | undefined, { before }: { before: number }) =>
@@ -256,10 +257,10 @@ describe('Local Filesystem Sources in real-world folders', () => {
   const connected = async (rootPath: string, options: { showHidden?: boolean } = {}) => {
     const core = createCore()
     const source = await core.addSource({ type: 'local', name: 'Logs', rootPath, ...options })
-    return { core, source, nodes: await core.connect(source.id) }
+    return { core, source: source as LocalSourceInfo, nodes: (await core.connect(source.id)) as EntryNode[] }
   }
 
-  const names = (nodes: { name: string }[]) => nodes.map((n) => n.name)
+  const names = (nodes: TreeNode[]) => nodes.map((n) => ('name' in n ? n.name : n.kind))
   const loop = { code: 'SYMLINK_LOOP', message: expect.any(String) }
 
   describe('hidden files', () => {

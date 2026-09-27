@@ -1,10 +1,27 @@
-import type { LanguageId, OpenedFile, OpenOptions, SourceInfo } from '@shared/core-api'
+import type { LanguageId, LogSnapshot, OpenedFile, OpenOptions, SourceInfo, SourcePath } from '@shared/core-api'
 
-/** A file open in the viewer. Tabs live only in the renderer and are never persisted. */
+/**
+ * A Log Stream whose whole log was asked for but is larger than the Large File threshold: nothing of
+ * it is shown until the user says to go ahead anyway, or asks for fewer lines.
+ */
+export interface LogTooLarge {
+  view: 'logTooLarge'
+  path: SourcePath
+  /** The container's name. */
+  name: string
+}
+
+/** What a tab shows: a file, or a Log Stream. */
+export type TabContent = OpenedFile | LogSnapshot | LogTooLarge
+
+export const isLog = (content: TabContent): content is LogSnapshot | LogTooLarge =>
+  content.view === 'log' || content.view === 'logTooLarge'
+
+/** A file or Log Stream open in the viewer. Tabs live only in the renderer and are never persisted. */
 export interface OpenTab {
   key: string
   source: SourceInfo
-  file: OpenedFile
+  file: TabContent
   /** A tab that isn't pinned is the preview tab: the next file opened replaces it. */
   pinned: boolean
   /** How the file was last asked to be opened, e.g. in another encoding; reloads open it the same way. */
@@ -72,7 +89,7 @@ function updateTab(ws: Workspace, key: string, change: Partial<OpenTab>): Worksp
  * Puts a freshly read file in its tab, remembering how it was read (e.g. in an encoding picked for
  * it) so reloads read it the same way. Like any change to a tab, it pins it.
  */
-export const reopenTab = (ws: Workspace, key: string, file: OpenedFile, openAs: OpenOptions): Workspace =>
+export const reopenTab = (ws: Workspace, key: string, file: TabContent, openAs: OpenOptions = {}): Workspace =>
   updateTab(ws, key, { file, openAs, pinned: true })
 
 /** Highlights a tab’s file as `language` instead of the detected one, pinning the tab. */

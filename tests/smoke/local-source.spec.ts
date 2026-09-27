@@ -15,7 +15,7 @@ async function addSource(window: Page, name: string, rootPath: string, environme
   await window.getByRole('navigation').getByRole('button', { name: 'Add Source' }).first().click()
   const dialog = window.getByRole('dialog', { name: 'Add Source' })
   await expect(dialog.getByRole('radio', { name: /Local Filesystem/ })).toBeChecked()
-  await dialog.getByLabel('Name').fill(name)
+  await dialog.getByLabel('Name', { exact: true }).fill(name)
   await dialog.getByLabel('Root path').fill(rootPath)
   if (environment) await dialog.getByLabel('Environment').selectOption({ label: environment })
   await dialog.getByRole('button', { name: 'Add Source' }).click()
@@ -194,7 +194,7 @@ test('edit, duplicate, reorder and delete Sources', async () => {
 
   await sourceAction(window, 'Fixture', 'Edit…')
   const edit = window.getByRole('dialog', { name: 'Edit Fixture' })
-  await edit.getByLabel('Name').fill('Renamed')
+  await edit.getByLabel('Name', { exact: true }).fill('Renamed')
   await edit.getByRole('button', { name: 'Save' }).click()
 
   await sourceAction(window, 'Renamed', 'Duplicate')
@@ -225,7 +225,7 @@ test('connect, fail, retry, disconnect and reconnect a Source', async () => {
   await add.getByLabel('Root path').fill(root)
   await add.getByRole('button', { name: 'Test connection' }).click()
   await expect(add.getByRole('status')).toHaveText('Connection succeeded.')
-  await add.getByLabel('Name').fill('Fixture')
+  await add.getByLabel('Name', { exact: true }).fill('Fixture')
   await add.getByRole('button', { name: 'Add Source' }).click()
 
   // The root disappears before the first connect: the Source goes into Error, and expanding again retries.

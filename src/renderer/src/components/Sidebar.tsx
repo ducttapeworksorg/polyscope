@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, type DragEvent, type HTMLAttributes, type MouseEvent } from 'react'
-import type { ConnectionState, EntryNode, Environment, SourceInfo, SourceTypeId, TreeNode } from '@shared/core-api'
+import type { ConnectionState, ContainerNode, EntryNode, Environment, SourceInfo, SourceTypeId, TreeNode } from '@shared/core-api'
 import type { Theme } from '@shared/settings'
 import { core, describeError } from '../core-client'
 import { environmentOf } from '../environments'
@@ -26,6 +26,8 @@ interface Props {
   onSourcesChanged(): void
   /** Opens a file in the preview tab, or in a tab of its own when pinned. */
   onOpenFile(source: SourceInfo, node: EntryNode, options?: { pinned: boolean }): void
+  /** Opens a container's Log Stream in the preview tab, or in a tab of its own when pinned. */
+  onOpenLog(source: SourceInfo, node: ContainerNode, options?: { pinned: boolean }): void
   onOpenSettings(): void
   /** Whether tree rows show their size and modified time. */
   showDetails: boolean
@@ -69,7 +71,7 @@ const disconnected: ConnectionState = { state: 'disconnected' }
 const settingsShortcut = navigator.userAgent.includes('Mac') ? '⌘,' : 'Ctrl+,'
 
 export function Sidebar(props: Props) {
-  const { sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile, onOpenSettings } = props
+  const { sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile, onOpenLog, onOpenSettings } = props
   const { showDetails, onToggleDetails, theme, environments, onManageEnvironments } = props
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const { menu, open: openContextMenu, close: closeMenu } = useContextMenu<{ label: string; items: MenuItem[] }>()
@@ -245,6 +247,7 @@ export function Sidebar(props: Props) {
                   selectedKey={selectedKey}
                   onSelect={setSelectedKey}
                   onOpenFile={onOpenFile}
+                  onOpenLog={onOpenLog}
                   sourceRowProps={sourceRowProps(source)}
                   treeProps={treeProps(source, group)}
                   showDetails={showDetails}

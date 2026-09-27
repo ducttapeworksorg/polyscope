@@ -4,8 +4,12 @@ import type { Theme } from '@shared/settings'
 import { createCore } from './core/core'
 import { createSecretStore } from './core/secret-store'
 import { forwardCoreEvents, registerCoreIpc, registerShellIpc } from './ipc'
+import { loadLoginShellPath } from './login-shell-path'
 
 let mainWindow: BrowserWindow | null = null
+
+// Started straight away, so the shell runs while Electron gets ready; Sources only connect once it's done.
+const loginShellPathLoaded = loadLoginShellPath()
 
 // Lets tests (and anyone keeping separate profiles) point the app at another user-data directory.
 const userDataDir = app.commandLine.getSwitchValue('user-data-dir')
@@ -57,6 +61,7 @@ function createWindow(theme: Theme): void {
 }
 
 void app.whenReady().then(async () => {
+  await loginShellPathLoaded
   const dataDir = app.getPath('userData')
   const cipher = {
     encrypt: (plain: string) => safeStorage.encryptString(plain),

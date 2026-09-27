@@ -3,10 +3,10 @@
 
 import type { Settings } from './settings'
 
-export type SourceTypeId = 'local' | 's3'
+export type SourceTypeId = 'local' | 's3' | 'kubernetesLogs'
 
 /** Every Source Type, in the default order of its sidebar group. */
-export const sourceTypeIds: readonly SourceTypeId[] = ['local', 's3']
+export const sourceTypeIds: readonly SourceTypeId[] = ['local', 's3', 'kubernetesLogs']
 
 export interface NewLocalSource {
   type: 'local'
@@ -51,17 +51,36 @@ export interface NewS3Source {
   environmentId?: string
 }
 
+export interface NewKubernetesLogsSource {
+  type: 'kubernetesLogs'
+  name: string
+  /** A context in the user's kubeconfig; the cluster and credentials come from there, exec auth plugins included. */
+  context: string
+  /** The one namespace whose Workloads the Source shows. */
+  namespace: string
+  /** The Environment the Source is labelled with; unlabelled when left out. */
+  environmentId?: string
+}
+
 /** How an S3 Source signs in: typed access and secret keys, or an AWS profile (or the default credential chain). */
 export type S3Auth = 'keys' | 'profile'
 
 /** The user-editable settings of a Source; its Source Type decides which fields exist. */
-export type NewSource = NewLocalSource | NewS3Source
+export type NewSource = NewLocalSource | NewS3Source | NewKubernetesLogsSource
+
+/** How many of a log's last lines a log view fetches and keeps: a number of lines, or all of them. */
+export type LastNLines = number | 'all'
+
+/** The choices a log view offers before the user types a number of their own. */
+export const lastNLinesChoices: readonly LastNLines[] = [1_000, 10_000, 50_000, 100_000, 'all']
 
 interface SourceIdentity {
   id: string
   name: string
   /** Left out when the Source isn't labelled with an Environment. */
   environmentId?: string
+  /** The "Last N lines" last picked in a log view of the Source; left out to go by the Settings default. */
+  lastNLines?: LastNLines
 }
 
 export interface LocalSourceInfo extends SourceIdentity {
@@ -93,7 +112,22 @@ export interface S3SourceInfo extends SourceIdentity {
   proxyUrl: string
 }
 
-export type SourceInfo = LocalSourceInfo | S3SourceInfo
+export interface KubernetesLogsSourceInfo extends SourceIdentity {
+  type: 'kubernetesLogs'
+  context: string
+  namespace: string
+}
+
+export type SourceInfo = LocalSourceInfo | S3SourceInfo | KubernetesLogsSourceInfo
+
+/** A context in the user's kubeconfig, as offered when adding a Kubernetes Source. */
+export interface KubeContext {
+  name: string
+  /** The namespace the context defaults to, if it names one. */
+  namespace?: string
+  /** Whether it's the kubeconfig's current context. */
+  current: boolean
+}
 
 /** A user-defined label for the kind of system Sources point at, e.g. prod or dev. */
 export interface Environment {
@@ -156,7 +190,34 @@ export interface MoreNode {
   cursor: string
 }
 
-export type TreeNode = EntryNode | ErrorNode | MoreNode
+/** The kinds of Workload a Kubernetes Logs Source groups its tree by; a Pod stands for a pod no Workload owns. */
+export type WorkloadKind = 'Deployment' | 'StatefulSet' | 'DaemonSet' | 'CronJob' | 'Job' | 'Pod'
+
+export const workloadKinds: readonly WorkloadKind[] = ['Deployment', 'StatefulSet', 'DaemonSet', 'CronJob', 'Job', 'Pod']
+
+/**
+ * A node in a Log Source's tree. Its root holds one group per kind of Workload that has any; groups hold
+ * Workloads (or, for Pods, the pods themselves), a CronJob holds its Jobs, and the rest hold their pods,
+ * which hold their containers: the Log Streams.
+ */
+export type LogNode =
+  | { kind: 'group'; workloadKind: WorkloadKind; name: string; path: SourcePath }
+  | { kind: 'workload'; workloadKind: Exclude<WorkloadKind, 'Pod'>; name: string; path: SourcePath }
+  | { kind: 'pod'; name: string; path: SourcePath }
+  | {
+      kind: 'container'
+      name: string
+      path: SourcePath
+      /** Set for an init container, or a sidecar (an init container that keeps running); left out for the pod's main containers. */
+      role?: ContainerRole
+    }
+
+export type ContainerRole = 'init' | 'sidecar'
+
+/** A container in a Log Source's tree: what opens as a Log Stream. */
+export type ContainerNode = Extract<LogNode, { kind: 'container' }>
+
+export type TreeNode = EntryNode | LogNode | ErrorNode | MoreNode
 
 /** Whether the app is talking to a Source right now. Never persisted: every launch starts Disconnected. */
 export type ConnectionState =
@@ -224,6 +285,28 @@ export interface HexFile extends OpenedFileFacts {
 /** An opened file, in whichever view suits its content (or was asked for). */
 export type OpenedFile = TextFile | BinaryFile | HexFile
 
+/** The last lines of a container's log, as a snapshot. */
+export interface LogSnapshot {
+  view: 'log'
+  /** The container's path in its Source's tree. */
+  path: SourcePath
+  /** The container's name. */
+  name: string
+  /** The pod the container is in. */
+  pod: string
+  /** The lines asked for; the snapshot holds at most that many. */
+  lastNLines: LastNLines
+  /** The lines, joined by '\n', without a final line break. */
+  content: string
+}
+
+export interface OpenLogOptions {
+  /** How many of the last lines to fetch; the Source's remembered number (or the Settings default) when left out. */
+  lastNLines?: LastNLines
+  /** Fetches all of a log even when it's larger than the Large File threshold, rather than failing with LOG_TOO_LARGE. */
+  allowLarge?: boolean
+}
+
 export type CoreErrorCode =
   | 'NAME_REQUIRED'
   | 'ROOT_NOT_FOUND'
@@ -257,6 +340,15 @@ export type CoreErrorCode =
   | 'CA_BUNDLE_UNREADABLE'
   | 'CERTIFICATE_UNTRUSTED'
   | 'UNREACHABLE'
+  | 'CONTEXT_REQUIRED'
+  | 'CONTEXT_NOT_FOUND'
+  | 'KUBECONFIG_UNREADABLE'
+  | 'INVALID_NAMESPACE'
+  | 'NAMESPACE_NOT_FOUND'
+  | 'NOT_A_LOG_STREAM'
+  | 'LOG_UNAVAILABLE'
+  | 'LOG_TOO_LARGE'
+  | 'INVALID_LINE_COUNT'
   | 'UNKNOWN'
 
 export interface CoreApi {
@@ -296,8 +388,17 @@ export interface CoreApi {
   expand(sourceId: string, path: SourcePath, cursor?: string): Promise<TreeNode[]>
   /** Reads a file and decides how to show it; `options` reopens it another way, e.g. in another encoding. */
   openFile(sourceId: string, path: SourcePath, options?: OpenOptions): Promise<OpenedFile>
+  /**
+   * Fetches the last lines of a container's log in a Log Source. Asking for all of a log larger than the
+   * Large File threshold fails with LOG_TOO_LARGE, unless `allowLarge` says to go ahead.
+   */
+  openLog(sourceId: string, path: SourcePath, options?: OpenLogOptions): Promise<LogSnapshot>
+  /** Remembers the "Last N lines" for a Source's log views; null forgets it, going back to the Settings default. */
+  rememberLastNLines(sourceId: string, lastNLines: LastNLines | null): Promise<void>
   /** The profiles in the local AWS config and credentials files, by name, `default` first; none if there are no such files. */
   listAwsProfiles(): Promise<string[]>
+  /** The contexts in the user's kubeconfig (KUBECONFIG, or ~/.kube/config), by name; none if there is no kubeconfig. */
+  listKubeContexts(): Promise<KubeContext[]>
   getSettings(): Promise<Settings>
   /** Changes the given settings, keeping the rest; all of them together must still be valid. */
   updateSettings(changes: Partial<Settings>): Promise<Settings>
@@ -329,7 +430,10 @@ export const coreMethods: readonly CoreMethod[] = [
   'disconnect',
   'expand',
   'openFile',
+  'openLog',
+  'rememberLastNLines',
   'listAwsProfiles',
+  'listKubeContexts',
   'getSettings',
   'updateSettings'
 ]

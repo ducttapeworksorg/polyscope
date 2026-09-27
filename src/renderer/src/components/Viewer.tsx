@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { t } from '../i18n'
-import { formatCount } from '../i18n/format'
+import { formatCount, formatSize } from '../i18n/format'
 import { editorFontFamily, monaco } from '../monaco'
 import type { OpenTab } from '../workspace'
 
@@ -8,11 +8,16 @@ interface Props {
   tabs: OpenTab[]
   activeTab: OpenTab | null
   onShowHex(key: string): void
+  /** Fetches all of a Log Stream whose whole log is over the Large File threshold, the user having been warned. */
+  onShowWholeLog(key: string): void
+  /** In bytes, for the warning about a log larger than it. */
+  largeFileThreshold: number
 }
 
-/** What the editor shows for a tab, or null when its file is binary and shown as a placeholder instead. */
+/** What the editor shows for a tab, or null when it shows a placeholder instead: a binary file, a log too large to show. */
 function editorContent({ file, language }: OpenTab) {
-  if (file.view === 'binary') return null
+  if (file.view === 'binary' || file.view === 'logTooLarge') return null
+  if (file.view === 'log') return { text: file.content, language: 'log' }
   return { text: file.content, language: file.view === 'hex' ? 'plaintext' : (language ?? file.language) }
 }
 
@@ -23,8 +28,11 @@ interface TabModel {
   viewState: monaco.editor.ICodeEditorViewState | null
 }
 
-/** One read-only Monaco editor; each tab keeps its own model and scroll/cursor state. Binary files get a placeholder. */
-export function Viewer({ tabs, activeTab, onShowHex }: Props) {
+/**
+ * One read-only Monaco editor; each tab keeps its own model and scroll/cursor state. Binary files, and logs
+ * too large to show whole, get a placeholder.
+ */
+export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileThreshold }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const modelsRef = useRef(new Map<string, TabModel>())
@@ -92,20 +100,32 @@ export function Viewer({ tabs, activeTab, onShowHex }: Props) {
       models.set(activeTab.key, entry)
     }
     editor.setModel(entry.model)
-    if (entry.file !== activeTab.file) {
+    const fresh = entry.file !== activeTab.file
+    if (fresh) {
       // Reloaded or reopened: new content, but the reader stays where they were.
       entry.model.setValue(content.text)
       entry.file = activeTab.file
     }
     if (entry.model.getLanguageId() !== content.language) monaco.editor.setModelLanguage(entry.model, content.language)
-    if (entry.viewState) editor.restoreViewState(entry.viewState)
+    // A log's latest lines are at its end, so that's where it opens, and where new lines take the reader.
+    if (activeTab.file.view === 'log' && (fresh || !entry.viewState)) editor.revealLine(entry.model.getLineCount())
+    else if (entry.viewState) editor.restoreViewState(entry.viewState)
     shownKeyRef.current = activeTab.key
   }, [tabs, activeTab])
 
   const binary = activeTab?.file.view === 'binary' ? activeTab.file : null
+  const tooLarge = activeTab?.file.view === 'logTooLarge'
   return (
     <>
-      <div ref={hostRef} className="viewer__editor" hidden={!activeTab || !!binary} data-testid="editor" />
+      <div ref={hostRef} className="viewer__editor" hidden={!activeTab || !!binary || tooLarge} data-testid="editor" />
+      {activeTab && tooLarge && (
+        <div className="viewer__empty viewer__binary" role="alert">
+          <p>{t('logView.tooLarge', { size: formatSize(largeFileThreshold) })}</p>
+          <button type="button" className="button button--quiet" onClick={() => onShowWholeLog(activeTab.key)}>
+            {t('logView.showAll')}
+          </button>
+        </div>
+      )}
       {activeTab && binary && (
         <div className="viewer__empty viewer__binary">
           <p>{t('viewer.binary', { bytes: formatCount(binary.contentLength) })}</p>
