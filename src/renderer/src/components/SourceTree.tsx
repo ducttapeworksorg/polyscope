@@ -12,6 +12,7 @@ import {
 import type {
   ConnectionState,
   ContainerNode,
+  ContainerRole,
   EntryNode,
   Environment,
   LogNode,
@@ -270,6 +271,7 @@ export function SourceTree(props: Props) {
   const tooltip = (node: ShownNode) => {
     const where = uiFor(source.type).fullPath(source, node.path)
     if (node.kind === 'pod') return [where, ...podStatusLines(node.status)].join('\n')
+    if ('kubernetes' in node && node.kubernetes?.kind === 'pod') return [where, ...podStatusLines(node.kubernetes.status)].join('\n')
     if (!('modifiedTime' in node) || node.modifiedTime === undefined) return where
     return `${where}\n${t('tree.modified', { time: formatDateTime(node.modifiedTime) })}`
   }
@@ -293,7 +295,7 @@ export function SourceTree(props: Props) {
   }
 
   /** A pod's status dot, coloured by its health, after its restart badge if it has one container and that has restarted. */
-  const podIndicators = ({ status, containerCount }: PodNode) => (
+  const podIndicators = ({ status, containerCount }: Pick<PodNode, 'status' | 'containerCount'>) => (
     <span className="tree-row__indicators">
       {containerCount === 1 && status.restarts > 0 && restartBadge(status.restarts)}
       <span className={`pod-status pod-status--${status.health}`} role="img" aria-label={t('pod.status', { reason: status.reason })} />
@@ -317,16 +319,20 @@ export function SourceTree(props: Props) {
     return node?.kind === 'pod' && node.containerCount > 1
   }
 
+  /** A container's role, labelled after its name. */
+  const roleBadge = (role: ContainerRole | undefined) =>
+    role && (
+      <span className="tree-row__role" title={t(`containerRole.${role}.tooltip`)}>
+        {t(`containerRole.${role}`)}
+      </span>
+    )
+
   /** A Log Source's node: groups, Workloads and pods expand like folders; a container opens its Log Stream. */
   const logRow = (node: LogNode, depth: number) => {
     const refresh = { label: t('sourceActions.refresh'), onSelect: () => refreshNode(node.path) }
     const common = { path: node.path, depth, extra: { title: tooltip(node) } }
     if (node.kind === 'container') {
-      const role = node.role && (
-        <span className="tree-row__role" title={t(`containerRole.${node.role}.tooltip`)}>
-          {t(`containerRole.${node.role}`)}
-        </span>
-      )
+      const role = roleBadge(node.role)
       // A pod with one container carries its restarts itself; with several, each container carries its own.
       const restarts = node.restarts && inSeveralContainers(node.path) ? node.restarts : 0
       return row({
@@ -371,7 +377,10 @@ export function SourceTree(props: Props) {
 
   /** What an empty listing says: a namespace or node of a Log Source has no folders to be empty. */
   const emptyNote = (path: SourcePath) =>
-    source.type !== 'kubernetesLogs' ? 'tree.emptyFolder' : path ? 'tree.emptyLogNode' : 'tree.emptyNamespace'
+    source.type === 'kubernetesFiles' && !path ? 'tree.noPods'
+    : source.type !== 'kubernetesLogs' ? 'tree.emptyFolder'
+    : path ? 'tree.emptyLogNode'
+    : 'tree.emptyNamespace'
 
   const note = (path: SourcePath, depth: number, children: ReactNode, className = '') => (
     <div key={`${path}#note`} className={`tree-note ${className}`} style={depthStyle(depth)}>
@@ -419,12 +428,19 @@ export function SourceTree(props: Props) {
         ]
       }
       const isFolder = node.kind === 'folder'
+      // A Kubernetes Files Source's pods and containers are folders, shown the way the Logs tree shows them.
+      const { kubernetes } = node
       const self = row({
         path: node.path,
         depth,
         label: node.name,
         folder: isFolder,
-        icon: <MaterialIcon icon={node.icon} theme={theme} open={isFolder && expanded.has(node.path)} />,
+        icon:
+          kubernetes?.kind === 'pod' ? <KubernetesIcon workloadKind="Pod" />
+          : kubernetes?.kind === 'container' ? <KubernetesIcon container role={kubernetes.role} />
+          : <MaterialIcon icon={node.icon} theme={theme} open={isFolder && expanded.has(node.path)} />,
+        badge: kubernetes?.kind === 'container' ? roleBadge(kubernetes.role) : undefined,
+        status: kubernetes?.kind === 'pod' ? podIndicators(kubernetes) : undefined,
         onActivate: () => (isFolder ? toggle(node.path) : onOpenFile(source, node)),
         onDoubleActivate: isFolder ? undefined : () => onOpenFile(source, node, { pinned: true }),
         menuItems: isFolder ? [{ label: t('sourceActions.refresh'), onSelect: () => refreshNode(node.path) }] : undefined,

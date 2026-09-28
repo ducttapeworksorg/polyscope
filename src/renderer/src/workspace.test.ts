@@ -6,6 +6,7 @@ import {
   closeOtherTabs,
   closeTab,
   emptyWorkspace,
+  markPodGone,
   openTab,
   pinTab,
   reopenTab,
@@ -157,5 +158,25 @@ describe('choosing a language', () => {
     const ws = open('a')
 
     expect(setLanguage(ws, 'x', 'json')).toBe(ws)
+  })
+})
+
+describe('a tab whose pod is gone', () => {
+  it('keeps what it showed, marked as from a pod that no longer exists', () => {
+    const ws = markPodGone(reopenTab(open('a'), 'a', file('a', 'last read')), 'a', 'web-1')
+
+    expect(ws.tabs[0]).toMatchObject({ podGone: 'web-1', file: { content: 'last read' } })
+  })
+
+  it('loses the mark once it is read again', () => {
+    const ws = markPodGone(open('a'), 'a', 'web-1')
+
+    expect(reopenTab(ws, 'a', file('a', 'fresh')).tabs[0]).not.toHaveProperty('podGone')
+  })
+
+  it('ignores a tab that is not open', () => {
+    const ws = open('a')
+
+    expect(markPodGone(ws, 'x', 'web-1')).toBe(ws)
   })
 })

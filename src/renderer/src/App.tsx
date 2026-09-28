@@ -37,6 +37,7 @@ import {
   endFollow,
   followIdsOf,
   isLog,
+  markPodGone,
   openTab,
   pinTab,
   reopenLogTab,
@@ -273,7 +274,10 @@ export function App() {
       const file = await core.openFile(tab.source.id, tab.file.path, options)
       setWorkspace((ws) => reopenTab(ws, key, file, options))
     } catch (error) {
-      setOpenError(describeError(error))
+      // Replaced, say by a rollout: the tab keeps what it last read, saying where that came from.
+      if (error instanceof CoreCallError && error.code === 'POD_GONE') {
+        setWorkspace((ws) => markPodGone(ws, key, tab.file.path.split('/')[0]!))
+      } else setOpenError(describeError(error))
     }
   }
 
@@ -440,6 +444,11 @@ export function App() {
             >
               {t(activeConnection.state === 'connecting' ? 'viewer.reconnecting' : 'viewer.reconnect')}
             </button>
+          </div>
+        )}
+        {activeTab?.podGone && (
+          <div className="workbench__banner" role="status">
+            <span className="workbench__banner-text">{t('viewer.podGone', { pod: activeTab.podGone })}</span>
           </div>
         )}
         {activeTab && isLog(activeTab.file) && (

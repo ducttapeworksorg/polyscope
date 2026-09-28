@@ -1,4 +1,4 @@
-import type { EntryProblem, SourcePath } from '@shared/core-api'
+import type { EntryProblem, KubernetesEntry, SourcePath } from '@shared/core-api'
 
 export interface FileEntry {
   kind: 'folder' | 'file'
@@ -9,6 +9,8 @@ export interface FileEntry {
   modifiedTime?: number
   /** Set when the entry is listed but can't be expanded or opened, e.g. a symlink loop or no permission. */
   problem?: EntryProblem
+  /** Set by a Kubernetes Files Source on the folders standing for its pods and containers. */
+  kubernetes?: KubernetesEntry
 }
 
 export type FileStat =

@@ -5,7 +5,9 @@ import type {
   CoreEvents,
   EntryNode,
   Environment,
+  FilesWorkloadKind,
   FollowEvent,
+  KubernetesFilesSourceInfo,
   KubernetesLogsSourceInfo,
   LastNLines,
   LocalSourceInfo,
@@ -21,7 +23,7 @@ import type {
   SourceTypeId,
   TreeNode
 } from '@shared/core-api'
-import { workloadKinds } from '@shared/core-api'
+import { filesWorkloadKinds, workloadKinds } from '@shared/core-api'
 import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings } from '@shared/settings'
 import { listAwsProfiles } from './aws-profiles'
 import { CoreError } from './core-error'
@@ -30,6 +32,8 @@ import { checkEncoding, decode, decompress, detectEncoding, hexDump, hexDumpLimi
 import { fileIcon, folderIcon } from './file-icons'
 import type { FileSource } from './file-source'
 import { kubeConfigFor, listKubeContexts } from './kubeconfig'
+import { listNamespaces } from './kubernetes-api'
+import { createKubernetesFileSource, listWorkloads } from './kubernetes-file-source'
 import { createKubernetesLogSource } from './kubernetes-log-source'
 import { languageFor } from './languages'
 import { createLocalFileSource } from './local-file-source'
@@ -72,6 +76,7 @@ function withDefaults(saved: SavedSource): SavedSource {
         caBundlePath: source.caBundlePath ?? '',
         proxyUrl: source.proxyUrl ?? ''
       }
+    case 'kubernetesFiles':
     case 'kubernetesLogs':
       return source
   }
@@ -84,6 +89,7 @@ const unlabelled = <S extends SavedSource>({ environmentId: _, ...source }: S) =
 type Target =
   | Pick<LocalSourceInfo, 'type' | 'rootPath' | 'showHidden'>
   | Omit<S3SourceInfo, 'id' | 'name' | 'environmentId' | 'lastNLines' | 'secretKeySet'>
+  | Pick<KubernetesFilesSourceInfo, 'type' | 'context' | 'namespace' | 'workloadKind' | 'workloadName' | 'path'>
   | Pick<KubernetesLogsSourceInfo, 'type' | 'context' | 'namespace'>
 
 type S3Settings = Extract<Target, { type: 's3' }>
@@ -108,15 +114,47 @@ function normaliseUrl(input: string, scheme: 'http' | 'https', code: 'INVALID_HO
 /** A Kubernetes namespace name: a DNS label, lowercase letters, digits and '-', at most 63 characters. */
 const isNamespace = (name: string) => name.length <= 63 && /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(name)
 
+/** A folder's absolute path in a container, without repeated or trailing '/'; failing if it isn't absolute or climbs with '..'. */
+function normaliseContainerPath(input: string) {
+  const path = input.trim()
+  const segments = path.split('/').filter(Boolean)
+  if (!path.startsWith('/') || segments.some((s) => s === '..' || s === '.')) {
+    throw new CoreError('INVALID_CONTAINER_PATH', `Not an absolute path: ${input}`)
+  }
+  return `/${segments.join('/')}`
+}
+
+/** A kubeconfig context's name, checked and trimmed. */
+function contextOf(input: string | undefined) {
+  const context = input?.trim() ?? ''
+  if (!context) throw new CoreError('CONTEXT_REQUIRED', 'A Kubernetes Source needs a kubeconfig context')
+  return context
+}
+
+/** A Workload kind a Kubernetes Files Source can browse, checked. */
+function workloadKindOf(kind: FilesWorkloadKind) {
+  if (!filesWorkloadKinds.includes(kind)) throw new CoreError('INVALID_WORKLOAD_KIND', `Not a Deployment, StatefulSet or DaemonSet: ${String(kind)}`)
+  return kind
+}
+
+/** A Kubernetes Source's context and namespace, checked and trimmed. */
+function clusterOf(input: { context?: string; namespace?: string }) {
+  const context = contextOf(input.context)
+  const namespace = input.namespace?.trim() ?? ''
+  if (!isNamespace(namespace)) throw new CoreError('INVALID_NAMESPACE', `Not a namespace name: ${namespace}`)
+  return { context, namespace }
+}
+
 /** Checks the settings specific to a Source's Source Type and returns them normalised. */
 function targetOf(input: NewSource): Target {
   if (input.type === 'local') return { type: 'local', rootPath: input.rootPath.trim(), showHidden: input.showHidden ?? true }
-  if (input.type === 'kubernetesLogs') {
-    const context = input.context?.trim() ?? ''
-    if (!context) throw new CoreError('CONTEXT_REQUIRED', 'A Kubernetes Source needs a kubeconfig context')
-    const namespace = input.namespace?.trim() ?? ''
-    if (!isNamespace(namespace)) throw new CoreError('INVALID_NAMESPACE', `Not a namespace name: ${namespace}`)
-    return { type: 'kubernetesLogs', context, namespace }
+  if (input.type === 'kubernetesLogs') return { type: 'kubernetesLogs', ...clusterOf(input) }
+  if (input.type === 'kubernetesFiles') {
+    const cluster = clusterOf(input)
+    const workloadKind = workloadKindOf(input.workloadKind)
+    const workloadName = input.workloadName?.trim() ?? ''
+    if (!workloadName) throw new CoreError('WORKLOAD_REQUIRED', 'A Kubernetes Files Source needs a Workload')
+    return { type: 'kubernetesFiles', ...cluster, workloadKind, workloadName, path: normaliseContainerPath(input.path ?? '') }
   }
   const s3: NewS3Source = input
   // Blank for AWS itself; a store is most likely https, a proxy http.
@@ -357,7 +395,8 @@ export function createCore(options: CoreOptions = {}): Core {
           // A folder's size says nothing useful about what's in it, so only files show one.
           ...(e.kind === 'file' && e.size !== undefined && { size: e.size }),
           ...(e.modifiedTime !== undefined && { modifiedTime: e.modifiedTime }),
-          ...(e.problem && { problem: e.problem })
+          ...(e.problem && { problem: e.problem }),
+          ...(e.kubernetes && { kubernetes: e.kubernetes })
         })
       )
       .sort((a, b) => (a.kind === b.kind ? byName.compare(a.name, b.name) : a.kind === 'folder' ? -1 : 1))
@@ -385,6 +424,13 @@ export function createCore(options: CoreOptions = {}): Core {
     return fileSource
   }
 
+  /** Opens a Kubernetes Files Source's Workload, once it's clear the context, namespace and Workload are there. */
+  const reachKubernetesFiles = async ({ context, type: _, ...target }: Extract<Target, { type: 'kubernetesFiles' }>) => {
+    const fileSource = createKubernetesFileSource(kubeConfigFor(context), target)
+    await fileSource.check()
+    return fileSource
+  }
+
   /** Opens a Kubernetes Logs Source's namespace, once it's clear the context and namespace are there. */
   const reachKubernetes = async ({ context, namespace }: Extract<Target, { type: 'kubernetesLogs' }>) => {
     const logSource = createKubernetesLogSource(kubeConfigFor(context), namespace)
@@ -400,6 +446,7 @@ export function createCore(options: CoreOptions = {}): Core {
     let backend: Backend
     if (target.type === 'local') backend = { kind: 'files', fileSource: await reachLocal(target) }
     else if (target.type === 's3') backend = { kind: 'files', fileSource: createS3FileSource(await s3TargetOf(target, secretKey)) }
+    else if (target.type === 'kubernetesFiles') backend = { kind: 'files', fileSource: await reachKubernetesFiles(target) }
     else backend = { kind: 'logs', logSource: await reachKubernetes(target) }
     return { backend, nodes: await listBackend(backend, '') }
   }
@@ -427,7 +474,7 @@ export function createCore(options: CoreOptions = {}): Core {
       return { saved: { ...target, name, ...label } }
     }
     // Nor is a cluster: it may be away, or its context not in the kubeconfig yet.
-    if (target.type === 'kubernetesLogs') return { saved: { ...target, name, ...label } }
+    if (target.type === 'kubernetesLogs' || target.type === 'kubernetesFiles') return { saved: { ...target, name, ...label } }
     // An S3 Source isn't reached until it's connected: it may be saved while its store is away.
     const typed = await secretKeyFor(input)
     if (target.auth === 'keys' && typed === undefined && (await secretKeyFor(input, editing)) === undefined) {
@@ -716,6 +763,15 @@ export function createCore(options: CoreOptions = {}): Core {
 
     listAwsProfiles,
     listKubeContexts,
+
+    async listKubeNamespaces(context) {
+      return listNamespaces(kubeConfigFor(contextOf(context)))
+    },
+
+    async listKubeWorkloads(context, namespace, kind) {
+      const cluster = clusterOf({ context, namespace })
+      return listWorkloads(kubeConfigFor(cluster.context), cluster.namespace, workloadKindOf(kind))
+    },
 
     async getSettings() {
       await settingsLoaded

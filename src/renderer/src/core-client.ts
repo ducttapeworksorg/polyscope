@@ -45,6 +45,8 @@ export const core: CoreApi & CoreEvents = {
   rememberLastNLines: call('rememberLastNLines'),
   listAwsProfiles: call('listAwsProfiles'),
   listKubeContexts: call('listKubeContexts'),
+  listKubeNamespaces: call('listKubeNamespaces'),
+  listKubeWorkloads: call('listKubeWorkloads'),
   getSettings: call('getSettings'),
   updateSettings: call('updateSettings'),
   onSettingsChanged: (listener) => window.polyscope.onSettingsChanged(listener),

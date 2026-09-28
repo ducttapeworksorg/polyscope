@@ -3,10 +3,10 @@
 
 import type { Settings } from './settings'
 
-export type SourceTypeId = 'local' | 's3' | 'kubernetesLogs'
+export type SourceTypeId = 'local' | 's3' | 'kubernetesFiles' | 'kubernetesLogs'
 
 /** Every Source Type, in the default order of its sidebar group. */
-export const sourceTypeIds: readonly SourceTypeId[] = ['local', 's3', 'kubernetesLogs']
+export const sourceTypeIds: readonly SourceTypeId[] = ['local', 's3', 'kubernetesFiles', 'kubernetesLogs']
 
 export interface NewLocalSource {
   type: 'local'
@@ -62,11 +62,31 @@ export interface NewKubernetesLogsSource {
   environmentId?: string
 }
 
+/** The kinds of Workload a Kubernetes Files Source can browse: those whose pods run for good. */
+export type FilesWorkloadKind = Extract<WorkloadKind, 'Deployment' | 'StatefulSet' | 'DaemonSet'>
+
+export const filesWorkloadKinds: readonly FilesWorkloadKind[] = ['Deployment', 'StatefulSet', 'DaemonSet']
+
+export interface NewKubernetesFilesSource {
+  type: 'kubernetesFiles'
+  name: string
+  /** A context in the user's kubeconfig; the cluster and credentials come from there, exec auth plugins included. */
+  context: string
+  namespace: string
+  workloadKind: FilesWorkloadKind
+  /** The one Workload whose pods the Source browses. */
+  workloadName: string
+  /** The absolute path of the folder browsed in each container, e.g. `/var/log/app`. */
+  path: string
+  /** The Environment the Source is labelled with; unlabelled when left out. */
+  environmentId?: string
+}
+
 /** How an S3 Source signs in: typed access and secret keys, or an AWS profile (or the default credential chain). */
 export type S3Auth = 'keys' | 'profile'
 
 /** The user-editable settings of a Source; its Source Type decides which fields exist. */
-export type NewSource = NewLocalSource | NewS3Source | NewKubernetesLogsSource
+export type NewSource = NewLocalSource | NewS3Source | NewKubernetesFilesSource | NewKubernetesLogsSource
 
 /** How many of a log's last lines a log view fetches and keeps: a number of lines, or all of them. */
 export type LastNLines = number | 'all'
@@ -118,7 +138,17 @@ export interface KubernetesLogsSourceInfo extends SourceIdentity {
   namespace: string
 }
 
-export type SourceInfo = LocalSourceInfo | S3SourceInfo | KubernetesLogsSourceInfo
+export interface KubernetesFilesSourceInfo extends SourceIdentity {
+  type: 'kubernetesFiles'
+  context: string
+  namespace: string
+  workloadKind: FilesWorkloadKind
+  workloadName: string
+  /** Normalised: absolute, without a trailing '/' (but `/` itself for the root). */
+  path: string
+}
+
+export type SourceInfo = LocalSourceInfo | S3SourceInfo | KubernetesFilesSourceInfo | KubernetesLogsSourceInfo
 
 /** A context in the user's kubeconfig, as offered when adding a Kubernetes Source. */
 export interface KubeContext {
@@ -172,7 +202,19 @@ export interface EntryNode {
   modifiedTime?: number
   /** Set when the entry can't be expanded or opened, e.g. a symlink loop or no permission to read it. */
   problem?: EntryProblem
+  /** Set on the folders a Kubernetes Files Source shows for its pods and their containers. */
+  kubernetes?: KubernetesEntry
 }
+
+/** What a Kubernetes Files folder stands for: a pod, or (when its pod has several) a container. */
+export type KubernetesEntry =
+  | {
+      kind: 'pod'
+      status: PodStatus
+      /** How many of its containers can be browsed: its main containers and sidecars. */
+      containerCount: number
+    }
+  | { kind: 'container'; role?: Extract<ContainerRole, 'sidecar'> }
 
 /** Stands in for the children of `path` when they couldn't be listed; expanding `path` again retries. */
 export interface ErrorNode {
@@ -434,6 +476,17 @@ export type CoreErrorCode =
   | 'LOG_TOO_LARGE'
   | 'INVALID_LINE_COUNT'
   | 'NOT_FOLLOWABLE'
+  | 'INVALID_WORKLOAD_KIND'
+  | 'WORKLOAD_REQUIRED'
+  | 'WORKLOAD_NOT_FOUND'
+  | 'INVALID_CONTAINER_PATH'
+  /** A Kubernetes Files pod that's gone, say after a rollout replaced it. */
+  | 'POD_GONE'
+  | 'CONTAINER_NOT_RUNNING'
+  /** A container image without `sh`, so its files can't be listed or read. */
+  | 'NO_SHELL'
+  /** A container whose shell lacks a tool listing or reading needs; the message names it. */
+  | 'TOOLS_MISSING'
   | 'UNKNOWN'
 
 export interface CoreApi {
@@ -497,6 +550,10 @@ export interface CoreApi {
   listAwsProfiles(): Promise<string[]>
   /** The contexts in the user's kubeconfig (KUBECONFIG, or ~/.kube/config), by name; none if there is no kubeconfig. */
   listKubeContexts(): Promise<KubeContext[]>
+  /** The namespaces in a context's cluster, by name. */
+  listKubeNamespaces(context: string): Promise<string[]>
+  /** The Workloads of a kind in a namespace of a context's cluster, by name. */
+  listKubeWorkloads(context: string, namespace: string, kind: FilesWorkloadKind): Promise<string[]>
   getSettings(): Promise<Settings>
   /** Changes the given settings, keeping the rest; all of them together must still be valid. */
   updateSettings(changes: Partial<Settings>): Promise<Settings>
@@ -538,6 +595,8 @@ export const coreMethods: readonly CoreMethod[] = [
   'rememberLastNLines',
   'listAwsProfiles',
   'listKubeContexts',
+  'listKubeNamespaces',
+  'listKubeWorkloads',
   'getSettings',
   'updateSettings'
 ]

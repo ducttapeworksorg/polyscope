@@ -1,20 +1,11 @@
 import { request as httpRequest, type IncomingMessage, type RequestOptions } from 'node:http'
 import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
-import {
-  ApiException,
-  AppsV1Api,
-  BatchV1Api,
-  CoreV1Api,
-  type KubeConfig,
-  type V1ObjectMeta,
-  type V1Pod
-} from '@kubernetes/client-node'
+import { ApiException, type KubeConfig, type V1ObjectMeta, type V1Pod } from '@kubernetes/client-node'
 import type { ContainerRole, LogNode, SourcePath, WorkloadKind } from '@shared/core-api'
 import { CoreError } from './core-error'
+import { apisFor, asCoreError, call, checkNamespace, controllerOf, podsOfWorkload, serverMessage, type PodOwnerKind } from './kubernetes-api'
 import type { LogConnection, LogFollowOptions, LogReadOptions, LogSource, LogStreamInfo } from './log-source'
-import { certificateCodes, networkCodes } from './network-errors'
 import { containerInstanceOf, isSidecar, podStatusOf, readyCountOf, restartsOf } from './pod-status'
-import { missingPermission } from './rbac'
 
 /** Each group's path segment, which is also its name. */
 const groups = {
@@ -31,58 +22,6 @@ type Group = (typeof groups)[WorkloadKind]
 const kindOfGroup = Object.fromEntries(Object.entries(groups).map(([kind, group]) => [group, kind])) as Record<Group, WorkloadKind>
 
 const isGroup = (segment: string | undefined): segment is Group => Object.hasOwn(kindOfGroup, segment ?? '')
-
-/** What owns an object: the owner reference marked as its controller. */
-const controllerOf = (meta: V1ObjectMeta | undefined) => meta?.ownerReferences?.find((owner) => owner.controller)
-
-/** The error codes along an error and its causes, e.g. a failed fetch's ECONNREFUSED. */
-function codesOf(error: unknown): string[] {
-  const codes: string[] = []
-  for (let cause = error; cause instanceof Error && codes.length < 10; cause = cause.cause) {
-    const code = (cause as { code?: unknown }).code
-    if (typeof code === 'string') codes.push(code)
-  }
-  return codes
-}
-
-/** The message the API server gave with a failed call, which ApiException buries in a longer one. */
-function serverMessage({ code, body }: { code: number; body: unknown }): string {
-  let status: unknown = body
-  if (typeof body === 'string') {
-    try {
-      status = JSON.parse(body)
-    } catch {
-      return body || `HTTP ${code}`
-    }
-  }
-  const message = (status as { message?: unknown } | undefined)?.message
-  return typeof message === 'string' ? message : `HTTP ${code}`
-}
-
-/** A failed Kubernetes call as a CoreError. */
-function asCoreError(error: unknown): CoreError {
-  if (error instanceof CoreError) return error
-  if (error instanceof ApiException) {
-    const message = serverMessage(error)
-    if (error.code === 401) return new CoreError('AUTH_FAILED', message)
-    if (error.code === 403) {
-      const missing = missingPermission(message)
-      return missing ? new CoreError('MISSING_PERMISSION', missing) : new CoreError('PERMISSION_DENIED', message)
-    }
-    if (error.code === 404) return new CoreError('NOT_FOUND', message)
-    return new CoreError('UNKNOWN', message)
-  }
-  const message = error instanceof Error ? error.message : String(error)
-  const codes = codesOf(error)
-  // An exec auth plugin (aws, gke-gcloud-auth-plugin, kubelogin…) that isn't on the PATH.
-  const spawn = (error as { syscall?: unknown } | null)?.syscall
-  if (codes.includes('ENOENT') && typeof spawn === 'string' && spawn.startsWith('spawn')) {
-    return new CoreError('CREDENTIALS_UNAVAILABLE', `${spawn.slice('spawn '.length)} was not found: ${message}`)
-  }
-  if (codes.some((code) => networkCodes.has(code))) return new CoreError('UNREACHABLE', `${message} (${codes.join(', ')})`)
-  if (codes.some((code) => certificateCodes.has(code))) return new CoreError('CERTIFICATE_UNTRUSTED', message)
-  return new CoreError('UNKNOWN', message)
-}
 
 const notFound = (path: SourcePath) => new CoreError('NOT_FOUND', `Nothing at ${path} in the namespace`)
 
@@ -112,18 +51,7 @@ const join = (parent: SourcePath, name: string) => (parent ? `${parent}/${name}`
  * (`deployments`, `cronjobs`…), then name each object on the way down, e.g. `cronjobs/nightly/<job>/<pod>/<container>`.
  */
 export function createKubernetesLogSource(config: KubeConfig, namespace: string): LogSource & { checkNamespace(): Promise<void> } {
-  const core = config.makeApiClient(CoreV1Api)
-  const apps = config.makeApiClient(AppsV1Api)
-  const batch = config.makeApiClient(BatchV1Api)
-
-  /** Runs a Kubernetes call, turning its failure into a CoreError. */
-  const call = async <T>(request: () => Promise<T>): Promise<T> => {
-    try {
-      return await request()
-    } catch (error) {
-      throw asCoreError(error)
-    }
-  }
+  const { core, apps, batch } = apisFor(config)
 
   const listPods = async () => (await call(() => core.listNamespacedPod({ namespace }))).items
   const cronJobs = async () => (await call(() => batch.listNamespacedCronJob({ namespace }))).items
@@ -153,24 +81,9 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
 
   const isStandaloneJob = async (name: string) => names(await members('jobs')).includes(name)
 
-  const ownedBy = (uids: ReadonlySet<string | undefined>) => (pod: V1Pod) => uids.has(controllerOf(pod.metadata)?.uid)
-
   /** The pods of a Workload (a CronJob's Job included); NOT_FOUND if the group has no such Workload. */
-  const podsOf = async (group: Exclude<Group, 'pods' | 'cronjobs'>, name: string): Promise<V1Pod[]> => {
-    const read: () => Promise<{ metadata?: V1ObjectMeta }> = {
-      deployments: () => apps.readNamespacedDeployment({ name, namespace }),
-      statefulsets: () => apps.readNamespacedStatefulSet({ name, namespace }),
-      daemonsets: () => apps.readNamespacedDaemonSet({ name, namespace }),
-      jobs: () => batch.readNamespacedJob({ name, namespace })
-    }[group]
-    const [workload, pods] = await Promise.all([call(read), listPods()])
-    const uid = workload.metadata?.uid
-    if (group !== 'deployments') return pods.filter(ownedBy(new Set([uid])))
-    // A Deployment owns its pods through ReplicaSets, which the tree leaves out.
-    const replicaSets = (await call(() => apps.listNamespacedReplicaSet({ namespace }))).items
-    const replicaSetUids = new Set(replicaSets.filter((rs) => controllerOf(rs.metadata)?.uid === uid).map((rs) => rs.metadata?.uid))
-    return pods.filter(ownedBy(replicaSetUids))
-  }
+  const podsOf = (group: Exclude<Group, 'pods' | 'cronjobs'>, name: string): Promise<V1Pod[]> =>
+    podsOfWorkload({ core, apps, batch }, namespace, kindOfGroup[group] as PodOwnerKind, name, listPods())
 
   /** A CronJob's Jobs; NOT_FOUND if there's no such CronJob. */
   const jobsOf = async (cronJob: string) => {
@@ -356,15 +269,6 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
       return instance
     },
 
-    /** Fails with NAMESPACE_NOT_FOUND if the namespace isn't there; a user who may not read namespaces gets the benefit of the doubt. */
-    async checkNamespace() {
-      try {
-        await call(() => core.readNamespace({ name: namespace }))
-      } catch (error) {
-        const { code } = error as CoreError
-        if (code === 'NOT_FOUND') throw new CoreError('NAMESPACE_NOT_FOUND', `No namespace named ${namespace}`)
-        if (code !== 'MISSING_PERMISSION' && code !== 'PERMISSION_DENIED') throw error
-      }
-    }
+    checkNamespace: () => checkNamespace(core, namespace)
   }
 }

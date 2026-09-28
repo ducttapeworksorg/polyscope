@@ -1,4 +1,4 @@
-import type { Compression, ContainerRole, CoreErrorCode, TextEncoding, WorkloadKind } from '@shared/core-api'
+import type { Compression, ContainerRole, CoreErrorCode, FilesWorkloadKind, TextEncoding, WorkloadKind } from '@shared/core-api'
 import type { SettingProblem } from '@shared/settings'
 
 export const en = {
@@ -15,6 +15,8 @@ export const en = {
   'sourceType.local.hint': 'A folder on this computer',
   'sourceType.s3': 'S3-compatible Storage',
   'sourceType.s3.hint': 'A bucket on AWS, MinIO, Ceph…',
+  'sourceType.kubernetesFiles': 'Kubernetes Files',
+  'sourceType.kubernetesFiles.hint': 'Files inside a Workload’s pods',
   'sourceType.kubernetesLogs': 'Kubernetes Logs',
   'sourceType.kubernetesLogs.hint': 'Container logs in a namespace',
 
@@ -92,6 +94,15 @@ export const en = {
   'kubernetesSource.context.none': 'No contexts found. Polyscope reads the kubeconfig kubectl uses: KUBECONFIG, or ~/.kube/config.',
   'kubernetesSource.namespace': 'Namespace',
   'kubernetesSource.namespace.hint': 'The Source shows the Workloads and pods of this one namespace.',
+  'kubernetesFilesSource.namespace.hint': 'Where the Workload is.',
+  'kubernetesFilesSource.workloadKind': 'Workload kind',
+  'kubernetesFilesSource.workload': 'Workload',
+  'kubernetesFilesSource.workload.choose': 'Choose a Workload',
+  'kubernetesFilesSource.workload.loading': 'Loading…',
+  'kubernetesFilesSource.workload.none': 'No {kind} in namespace {namespace}.',
+  'kubernetesFilesSource.path': 'Path',
+  'kubernetesFilesSource.path.hint':
+    'The absolute path of a folder in the containers, like /var/log. Their files are read with sh and basic tools like stat, so images without them can’t be browsed.',
 
   'workloadGroup.Deployment': 'Deployments',
   'workloadGroup.StatefulSet': 'StatefulSets',
@@ -99,6 +110,9 @@ export const en = {
   'workloadGroup.CronJob': 'CronJobs',
   'workloadGroup.Job': 'Jobs',
   'workloadGroup.Pod': 'Pods',
+  'workloadKind.Deployment': 'Deployment',
+  'workloadKind.StatefulSet': 'StatefulSet',
+  'workloadKind.DaemonSet': 'DaemonSet',
   'containerRole.init': 'init',
   'containerRole.sidecar': 'sidecar',
   'containerRole.init.tooltip': 'Init container: runs to completion before the others start.',
@@ -123,6 +137,7 @@ export const en = {
   'tree.emptyFolder': 'Empty folder',
   'tree.emptyNamespace': 'No Workloads or pods in this namespace',
   'tree.emptyLogNode': 'Nothing here',
+  'tree.noPods': 'This Workload has no pods',
   'tree.retry': 'Retry',
   'tree.previousLog': 'Previous Log',
   'tree.previousLog.tooltip': 'The log of {container} before it last restarted',
@@ -170,6 +185,7 @@ export const en = {
   'viewer.empty.noTabs': 'Open a file or a container’s log from the sidebar to read it here.',
   'viewer.opening': 'Opening {name}…',
   'viewer.disconnected': 'Source disconnected',
+  'viewer.podGone': 'Pod {pod} no longer exists. Showing what was last read from it.',
   'viewer.reconnect': 'Reconnect',
   'viewer.reconnecting': 'Reconnecting…',
   'viewer.binary': 'Binary file, {bytes} bytes',
@@ -267,6 +283,14 @@ export const en = {
   'error.NOT_FOLLOWABLE': 'A Previous Log has ended, so it can’t be followed.',
   'error.LOG_TOO_LARGE': 'The whole log is larger than the Large File threshold.',
   'error.INVALID_LINE_COUNT': 'Enter a whole number of lines greater than zero.',
+  'error.INVALID_WORKLOAD_KIND': 'Choose a Deployment, StatefulSet or DaemonSet.',
+  'error.WORKLOAD_REQUIRED': 'Choose the Workload to browse.',
+  'error.WORKLOAD_NOT_FOUND': 'That Workload doesn’t exist in the namespace.',
+  'error.INVALID_CONTAINER_PATH': 'Enter an absolute path, like /var/log.',
+  'error.POD_GONE': 'This pod no longer exists.',
+  'error.CONTAINER_NOT_RUNNING': 'This container isn’t running, so its files can’t be read.',
+  'error.NO_SHELL': 'This container has no shell (sh), so its files can’t be listed or read.',
+  'error.TOOLS_MISSING': 'This container lacks a tool needed to read its files: {message}',
   'error.UNKNOWN': 'Couldn’t complete that: {message}'
 } satisfies Record<string, string> &
   Record<`error.${CoreErrorCode}`, string> &
@@ -274,4 +298,5 @@ export const en = {
   Record<`encoding.${TextEncoding}`, string> &
   Record<`compression.${Compression}`, string> &
   Record<`workloadGroup.${WorkloadKind}`, string> &
+  Record<`workloadKind.${FilesWorkloadKind}`, string> &
   Record<`containerRole.${ContainerRole}`, string>

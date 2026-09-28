@@ -1,6 +1,17 @@
-import { useEffect, useState, type ComponentType } from 'react'
-import type { KubeContext, NewSource, S3Auth, S3SourceInfo, SourceInfo, SourcePath, SourceTypeId } from '@shared/core-api'
-import { BucketIcon, HardDriveIcon, KubernetesLogsIcon } from './components/icons'
+import { useEffect, useId, useState, type ComponentType } from 'react'
+import {
+  filesWorkloadKinds,
+  type FilesWorkloadKind,
+  type KubeContext,
+  type KubernetesFilesSourceInfo,
+  type NewSource,
+  type S3Auth,
+  type S3SourceInfo,
+  type SourceInfo,
+  type SourcePath,
+  type SourceTypeId
+} from '@shared/core-api'
+import { BucketIcon, HardDriveIcon, KubernetesFilesIcon, KubernetesLogsIcon } from './components/icons'
 import { core, describeError } from './core-client'
 import { t, type MessageKey } from './i18n'
 
@@ -215,11 +226,38 @@ function ProfileField({ value, onChange }: { value: string; onChange(profile: st
 }
 
 type KubernetesLogsSettings = Extract<NewSource, { type: 'kubernetesLogs' }>
+type KubernetesFilesSettings = Extract<NewSource, { type: 'kubernetesFiles' }>
 
-function KubernetesLogsFields({ value, onChange }: FieldsProps<KubernetesLogsSettings>) {
+/** Calls `list` whenever `deps` change, giving what it last listed (null while listing, or with nothing to list) or why it couldn't. */
+function useListing<T>(list: () => Promise<T> | null, deps: unknown[]) {
+  const [listing, setListing] = useState<{ items: T | null; problem: string | null }>({ items: null, problem: null })
+  useEffect(() => {
+    const listed = list()
+    setListing({ items: null, problem: null })
+    if (!listed) return
+    let current = true
+    listed.then(
+      (items) => current && setListing({ items, problem: null }),
+      (error) => current && setListing({ items: null, problem: describeError(error) })
+    )
+    return () => {
+      current = false
+    }
+  }, deps)
+  return listing
+}
+
+/** A dropdown's choices: those listed, and the current value too if it isn't among them, so opening the dialog doesn't quietly change it. */
+const choicesOf = (listed: string[], value: string) => (value && !listed.includes(value) ? [value, ...listed] : listed)
+
+/** A kubeconfig context and a namespace in its cluster, as both Kubernetes Source Types have. */
+function ClusterFields<S extends KubernetesLogsSettings | KubernetesFilesSettings>({ value, onChange }: FieldsProps<S>) {
   // Null until the kubeconfig has been read.
   const [contexts, setContexts] = useState<KubeContext[] | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
+  // Only suggestions: a user who may not list namespaces types one in.
+  const namespaces = useListing(() => (value.context ? core.listKubeNamespaces(value.context) : null), [value.context])
+  const namespaceList = useId()
 
   /** Picks a context, filling in its namespace (or `default`) unless one was typed already. */
   const pick = (context: string, listed = contexts ?? []) => {
@@ -249,9 +287,7 @@ function KubernetesLogsFields({ value, onChange }: FieldsProps<KubernetesLogsSet
     // Read once, when the fields appear: the settings as they were then are the ones to fill in.
   }, [])
 
-  // A context no longer in the kubeconfig stays choosable, so opening the dialog doesn't quietly change it.
-  const names = contexts?.map((c) => c.name) ?? []
-  const choices = value.context && !names.includes(value.context) ? [value.context, ...names] : names
+  const choices = choicesOf(contexts?.map((c) => c.name) ?? [], value.context)
 
   return (
     <>
@@ -277,9 +313,99 @@ function KubernetesLogsFields({ value, onChange }: FieldsProps<KubernetesLogsSet
           className="field__input field__input--path"
           value={value.namespace}
           onChange={(e) => onChange({ ...value, namespace: e.target.value })}
+          list={namespaceList}
           spellCheck={false}
         />
-        <span className="field__hint">{t('kubernetesSource.namespace.hint')}</span>
+        <datalist id={namespaceList}>
+          {(namespaces.items ?? []).map((name) => (
+            <option key={name} value={name} />
+          ))}
+        </datalist>
+        <span className="field__hint">
+          {t(value.type === 'kubernetesFiles' ? 'kubernetesFilesSource.namespace.hint' : 'kubernetesSource.namespace.hint')}
+        </span>
+      </label>
+    </>
+  )
+}
+
+const KubernetesLogsFields = (props: FieldsProps<KubernetesLogsSettings>) => <ClusterFields {...props} />
+
+function KubernetesFilesFields({ value, onChange }: FieldsProps<KubernetesFilesSettings>) {
+  const { context, namespace, workloadKind } = value
+  const workloads = useListing(
+    () => (context && namespace.trim() ? core.listKubeWorkloads(context, namespace.trim(), workloadKind) : null),
+    [context, namespace, workloadKind]
+  )
+  const choices = choicesOf(workloads.items ?? [], value.workloadName)
+  const kind = t(`workloadKind.${workloadKind}`)
+  const workloadHint =
+    workloads.problem ?? (workloads.items?.length === 0 ? t('kubernetesFilesSource.workload.none', { kind, namespace }) : null)
+
+  return (
+    <>
+      <ClusterFields value={value} onChange={onChange} />
+      <div className="field-pair">
+        <div className="field">
+          <label className="field__label" htmlFor="kubernetes-workload-kind">
+            {t('kubernetesFilesSource.workloadKind')}
+          </label>
+          <select
+            id="kubernetes-workload-kind"
+            className="field__input field__select"
+            value={workloadKind}
+            onChange={(e) => onChange({ ...value, workloadKind: e.target.value as FilesWorkloadKind, workloadName: '' })}
+          >
+            {filesWorkloadKinds.map((option) => (
+              <option key={option} value={option}>
+                {t(`workloadKind.${option}`)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label className="field__label" htmlFor="kubernetes-workload">
+            {t('kubernetesFilesSource.workload')}
+          </label>
+          {workloads.problem ? (
+            // Can't be listed, say for lack of permission: typed in instead.
+            <input
+              id="kubernetes-workload"
+              className="field__input field__input--path"
+              value={value.workloadName}
+              onChange={(e) => onChange({ ...value, workloadName: e.target.value })}
+              spellCheck={false}
+            />
+          ) : (
+            <select
+              id="kubernetes-workload"
+              className="field__input field__select"
+              value={value.workloadName}
+              onChange={(e) => onChange({ ...value, workloadName: e.target.value })}
+            >
+              {!value.workloadName && (
+                <option value="">{t(workloads.items ? 'kubernetesFilesSource.workload.choose' : 'kubernetesFilesSource.workload.loading')}</option>
+              )}
+              {choices.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      </div>
+      {workloadHint && <span className="field__hint">{workloadHint}</span>}
+      <label className="field">
+        <span className="field__label">{t('kubernetesFilesSource.path')}</span>
+        <input
+          className="field__input field__input--path"
+          value={value.path}
+          placeholder="/var/log"
+          onChange={(e) => onChange({ ...value, path: e.target.value })}
+          spellCheck={false}
+        />
+        <span className="field__hint">{t('kubernetesFilesSource.path.hint')}</span>
       </label>
     </>
   )
@@ -288,6 +414,16 @@ function KubernetesLogsFields({ value, onChange }: FieldsProps<KubernetesLogsSet
 /** Where a Source path is in its bucket, as an `s3://` URL. */
 function objectUrl({ bucket, prefix }: S3SourceInfo, path: SourcePath) {
   return `s3://${bucket}/${[prefix, path].filter(Boolean).join('/')}`
+}
+
+/**
+ * Where a Kubernetes Files entry is: its pod, then the rest of its path under the Source's folder. (With several
+ * containers, the first segment after the pod is the container's name; the path alone doesn't say which it is.)
+ */
+function containerPath({ context, namespace, workloadName, path: folder }: KubernetesFilesSourceInfo, path: SourcePath) {
+  const [pod, ...rest] = path ? path.split('/') : []
+  if (!pod) return `${context}: ${namespace}/${workloadName} ${folder}`
+  return `${context}: ${namespace}/${pod} ${[folder === '/' ? '' : folder, ...rest].join('/') || '/'}`
 }
 
 export const sourceTypeUi: SourceTypeUis = {
@@ -324,6 +460,23 @@ export const sourceTypeUi: SourceTypeUis = {
     settingsOf: ({ id: _, environmentId: __, secretKeySet: ___, ...settings }) => ({ ...settings, secretAccessKey: '' }),
     fullPath: objectUrl,
     Fields: S3Fields
+  },
+  kubernetesFiles: {
+    label: 'sourceType.kubernetesFiles',
+    hint: 'sourceType.kubernetesFiles.hint',
+    Icon: KubernetesFilesIcon,
+    blank: () => ({ type: 'kubernetesFiles', name: '', context: '', namespace: '', workloadKind: 'Deployment', workloadName: '', path: '' }),
+    settingsOf: ({ name, context, namespace, workloadKind, workloadName, path }) => ({
+      type: 'kubernetesFiles',
+      name,
+      context,
+      namespace,
+      workloadKind,
+      workloadName,
+      path
+    }),
+    fullPath: containerPath,
+    Fields: KubernetesFilesFields
   },
   kubernetesLogs: {
     label: 'sourceType.kubernetesLogs',

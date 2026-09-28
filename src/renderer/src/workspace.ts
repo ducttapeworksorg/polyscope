@@ -41,6 +41,8 @@ export interface OpenTab {
   utc?: boolean
   /** Whether a log tab wraps long lines. */
   wrap?: boolean
+  /** Set, to the pod's name, when a Kubernetes Files tab's pod turned out to be gone: it shows what was last read from it. */
+  podGone?: string
 }
 
 /** A Follow under way in a log tab: new lines are added as they come, unless it's paused. */
@@ -108,8 +110,16 @@ function updateTab(ws: Workspace, key: string, change: Partial<OpenTab>): Worksp
  * Puts a freshly read file in its tab, remembering how it was read (e.g. in an encoding picked for
  * it) so reloads read it the same way. Like any change to a tab, it pins it.
  */
-export const reopenTab = (ws: Workspace, key: string, file: TabContent, openAs: OpenOptions = {}): Workspace =>
-  updateTab(ws, key, { file, openAs, pinned: true })
+export function reopenTab(ws: Workspace, key: string, file: TabContent, openAs: OpenOptions = {}): Workspace {
+  const tab = ws.tabs.find((open) => open.key === key)
+  if (!tab) return ws
+  // Read afresh, so from a pod that's there.
+  const { podGone: _, ...reopened } = tab
+  return { ...ws, tabs: ws.tabs.map((open) => (open === tab ? { ...reopened, file, openAs, pinned: true } : open)) }
+}
+
+/** Marks a tab as showing what was last read from `pod`, which no longer exists; its content stays. */
+export const markPodGone = (ws: Workspace, key: string, pod: string): Workspace => updateTab(ws, key, { podGone: pod })
 
 /** Puts a freshly read log in its tab, with the Follow that goes on from it, if any. Pins the tab. */
 export const reopenLogTab = (ws: Workspace, key: string, file: TabContent): Workspace =>

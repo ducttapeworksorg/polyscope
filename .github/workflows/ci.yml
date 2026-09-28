@@ -89,7 +89,7 @@ jobs:
       # The rest of the suite already runs in the build job; only the S3 tests need the store.
       - run: npx vitest run src/main/core/s3
 
-  # Kubernetes Logs against a kind cluster, seeded with the Workloads the tests expect (tests/kind/seed.yaml).
+  # Kubernetes Logs and Files against a kind cluster, seeded with the Workloads the tests expect (tests/kind/seed.yaml).
   integration-kubernetes:
     name: integration (Kubernetes)
     runs-on: ubuntu-latest
@@ -97,6 +97,7 @@ jobs:
       POLYSCOPE_TEST_KUBE_CONTEXT: kind-polyscope
       POLYSCOPE_TEST_KUBE_RESTRICTED_CONTEXT: kind-polyscope-restricted
       POLYSCOPE_TEST_KUBE_NAMESPACE: polyscope-test
+      POLYSCOPE_TEST_KUBE_FILES_NAMESPACE: polyscope-files
     steps:
       - uses: actions/checkout@v4
 
@@ -122,6 +123,11 @@ jobs:
           kubectl -n polyscope-test rollout status daemonset/agent --timeout=180s
           kubectl -n polyscope-test wait --for=condition=complete job/migrate job/nightly-manual --timeout=180s
           kubectl -n polyscope-test wait --for=condition=Ready pod/counter --timeout=180s
+          kubectl -n polyscope-files rollout status deployment/files-busybox --timeout=180s
+          kubectl -n polyscope-files rollout status statefulset/files-coreutils --timeout=180s
+          kubectl -n polyscope-files rollout status deployment/files-shellless --timeout=180s
+          kubectl -n polyscope-files rollout status deployment/files-pair --timeout=180s
+          kubectl -n polyscope-files rollout status deployment/files-rollout --timeout=180s
           # A context signed in as the seed's restricted ServiceAccount, for the permission errors.
           kubectl config set-credentials polyscope-restricted --token="$(kubectl -n polyscope-test create token restricted --duration=2h)"
           kubectl config set-context "$POLYSCOPE_TEST_KUBE_RESTRICTED_CONTEXT" --cluster=kind-polyscope --user=polyscope-restricted
@@ -132,4 +138,6 @@ jobs:
 
       - name: Show the seeded namespace
         if: failure()
-        run: kubectl -n polyscope-test get all -o wide
+        run: |
+          kubectl -n polyscope-test get all -o wide
+          kubectl -n polyscope-files get all -o wide
