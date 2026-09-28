@@ -460,5 +460,32 @@ test('open a Large File at its end, then scroll to any line once it is cached', 
   await expect(view).toContainText('10000000000 INFO')
   await view.press('Control+End')
   await expect(view).toContainText('0000599999 INFO')
+
+  // Search the whole file, then step through the matches and pick one from the list.
+  await view.press('Control+f')
+  const search = window.getByLabel('Search the file')
+  await expect(search).toBeFocused()
+  await search.fill(String.raw`^000012345\d `)
+  await search.press('Enter')
+  await expect(window.getByText('10 matching lines')).toBeVisible({ timeout: 30_000 })
+  const matches = window.getByRole('listbox', { name: 'Matching lines' }).getByRole('option')
+  await expect(matches).toHaveCount(10)
+  // From the end, the next match wraps around to the first.
+  await search.press('Enter')
+  await expect(window.getByText('1 of 10')).toBeVisible()
+  await expect(view).toContainText('0000123450 INFO')
+  await expect(view.locator('.large-file__match').first()).toHaveText('0000123450 ')
+  await search.press('Shift+Enter')
+  await expect(window.getByText('10 of 10')).toBeVisible()
+  await matches.nth(4).click()
+  await expect(window.getByText('5 of 10')).toBeVisible()
+  await expect(view).toContainText('0000123454 INFO')
+  // Levels are picked out in the lines.
+  await expect(view.locator('.large-file__info').first()).toHaveText('INFO')
+
+  // 60 MB is under the default 200 MB "open anyway" limit.
+  await window.getByRole('button', { name: 'Open anyway in editor' }).click()
+  await expect(window.getByTestId('editor')).toBeVisible({ timeout: 60_000 })
+  await expect(view).toBeHidden()
   expect(consoleErrors).toEqual([])
 })

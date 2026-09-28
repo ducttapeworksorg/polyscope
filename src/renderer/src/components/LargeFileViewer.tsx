@@ -1,8 +1,12 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent } from 'react'
-import type { LargeFile, LargeFileStatus } from '@shared/core-api'
-import { core, describeFailure } from '../core-client'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent } from 'react'
+import type { LargeFile, LargeFileSearchEvent, LargeFileSearchQuery, LargeFileStatus } from '@shared/core-api'
+import { searchRegExp } from '@shared/search'
+import { core, describeError, describeFailure } from '../core-client'
 import { t } from '../i18n'
 import { formatCount, formatSize } from '../i18n/format'
+import { highlightLine } from '../line-highlights'
+import { applySearchUpdate, nextMatch, startedSearch, type SearchResults } from '../search-results'
+import { ChevronIcon, CloseIcon } from './icons'
 
 /** Where a Large File's view was, kept while its tab is in the background. */
 export interface LargeFilePlace {
@@ -11,6 +15,11 @@ export interface LargeFilePlace {
   /** Whether `top` counts lines of the whole file, or of its last lines, as before it was indexed. */
   indexed: boolean
   status: LargeFileStatus
+  /** What's typed in the search box, and whether it matches case. */
+  query: string
+  matchCase: boolean
+  /** The last search, if any; one left unfinished is started again on coming back. */
+  search: SearchResults | null
 }
 
 interface Props {
@@ -19,6 +28,10 @@ interface Props {
   place?: LargeFilePlace
   /** Told where it's left, as it's scrolled. */
   onPlace(place: LargeFilePlace): void
+  /** In bytes: a file whose content is no larger can be opened in the editor anyway. */
+  openAnywayLimit: number
+  /** Opens the file in the editor instead. */
+  onOpenAnyway(): void
 }
 
 /** Matches the editor's line height, so switching views keeps the text where the eye expects it. */
@@ -36,16 +49,19 @@ function newer(prev: LargeFileStatus, next: LargeFileStatus) {
 
 const percent = (loaded: number, total: number) => `${total ? Math.floor((loaded / total) * 100) : 100}%`
 
+const sameQuery = (a: LargeFileSearchQuery, b: LargeFileSearchQuery) => a.pattern === b.pattern && Boolean(a.matchCase) === Boolean(b.matchCase)
+
 /**
  * The Large File Viewer: a virtualised, read-only view of a file of any size. It opens on the file's last
  * lines, then, once the core has cached and indexed it, scrolls through all of it, fetching only the lines
- * in view. Scrolling is scaled when the file is too tall to lay out, with the wheel and keys still moving
- * line by line.
+ * in view, and can be searched. Scrolling is scaled when the file is too tall to lay out, with the wheel and
+ * keys still moving line by line. Log levels, timestamps and search matches are picked out in the lines.
  */
-export function LargeFileViewer({ file, place, onPlace }: Props) {
+export function LargeFileViewer({ file, place, onPlace, openAnywayLimit, onOpenAnyway }: Props) {
   const { largeFileId, lastLines } = file
   const scrollerRef = useRef<HTMLDivElement>(null)
   const goToRef = useRef<HTMLInputElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const goToId = useId()
   const [height, setHeight] = useState(0)
   const [status, setStatus] = useState<LargeFileStatus>(place?.status ?? { state: 'caching', loadedBytes: 0, totalBytes: file.size })
@@ -53,6 +69,16 @@ export function LargeFileViewer({ file, place, onPlace }: Props) {
   const [pages, setPages] = useState<ReadonlyMap<number, string[]>>(new Map())
   const [marked, setMarked] = useState<number | null>(null)
   const [goTo, setGoTo] = useState('')
+  const [query, setQuery] = useState(place?.query ?? '')
+  const [matchCase, setMatchCase] = useState(place?.matchCase ?? false)
+  const [search, setSearch] = useState<SearchResults | null>(place?.search ?? null)
+  const [searchProblem, setSearchProblem] = useState<string | null>(null)
+  const searchRef = useRef(search)
+  searchRef.current = search
+  // Updates that came for a search being started, before its id was known.
+  const earlyEvents = useRef<LargeFileSearchEvent[] | null>(null)
+  // Counts searches started (and the view closing), so a search that finishes starting after another has started is let go.
+  const starts = useRef(0)
   const fetching = useRef(new Set<number>())
   // Bumped to fetch again after a fetch failed.
   const [retries, setRetries] = useState(0)
@@ -83,6 +109,22 @@ export function LargeFileViewer({ file, place, onPlace }: Props) {
     return unsubscribe
   }, [largeFileId])
 
+  useEffect(() => {
+    const unsubscribe = core.onLargeFileSearchEvent((event) => {
+      if (earlyEvents.current) earlyEvents.current.push(event)
+      else {
+        const { searchId, ...update } = event
+        setSearch((prev) => (prev?.searchId === searchId ? applySearchUpdate(prev, update) : prev))
+      }
+    })
+    // A search left going is stopped; coming back starts it again.
+    return () => {
+      unsubscribe()
+      starts.current++
+      cancelRunning()
+    }
+  }, [])
+
   useLayoutEffect(() => {
     const scroller = scrollerRef.current!
     const observer = new ResizeObserver(() => setHeight(scroller.clientHeight))
@@ -96,7 +138,10 @@ export function LargeFileViewer({ file, place, onPlace }: Props) {
     if (ready && !position.indexed) setPosition({ top, indexed: true })
   }, [ready, position.indexed, top])
 
-  useEffect(() => onPlace({ top: position.top, indexed: position.indexed, status }), [position, status, onPlace])
+  useEffect(
+    () => onPlace({ top: position.top, indexed: position.indexed, status, query, matchCase, search }),
+    [position, status, query, matchCase, search, onPlace]
+  )
 
   /** Moves to a first line, Infinity (or anywhere past the last) staying at the end. */
   const moveTo = (next: number) => setPosition((prev) => ({ ...prev, top: next >= metrics.current.maxTop ? Infinity : Math.max(0, next) }))
@@ -156,10 +201,11 @@ export function LargeFileViewer({ file, place, onPlace }: Props) {
 
   const lineAt = (line: number) => (ready ? pages.get(Math.floor(line / pageSize))?.[line % pageSize] : lastLines[line])
 
-  const jumpTo = (line: number) => {
+  /** Shows a line a third of the way down, marked; the lines take the keyboard unless `focus` says not to. */
+  const jumpTo = (line: number, focus = true) => {
     setMarked(line)
     moveTo(line - Math.floor(visible / 3))
-    scrollerRef.current?.focus()
+    if (focus) scrollerRef.current?.focus()
   }
 
   const submitGoTo = (event: FormEvent) => {
@@ -168,13 +214,111 @@ export function LargeFileViewer({ file, place, onPlace }: Props) {
     if (ready && Number.isSafeInteger(line) && line > 0) jumpTo(Math.min(line, lineCount) - 1)
   }
 
-  // Ctrl+G goes to a line, as in the editor.
+  /** Stops the search shown, if it's still going. */
+  function cancelRunning() {
+    const running = searchRef.current
+    if (running && !running.outcome) void core.cancelLargeFileSearch(running.searchId).catch(() => undefined)
+  }
+
+  /** Starts searching for `next`, stopping the search before it, if it's still going. */
+  const startSearch = async (next: LargeFileSearchQuery) => {
+    const pattern = searchRegExp(next)
+    if (!(pattern instanceof RegExp)) return setSearchProblem(t('error.INVALID_PATTERN', { message: pattern.problem }))
+    setSearchProblem(null)
+    cancelRunning()
+    const start = ++starts.current
+    earlyEvents.current ??= []
+    try {
+      const { searchId } = await core.searchLargeFile(largeFileId, next)
+      // Overtaken by a later search, or the view has gone: nobody wants this one.
+      if (start !== starts.current) return void core.cancelLargeFileSearch(searchId).catch(() => undefined)
+      let started = startedSearch(next, searchId)
+      for (const { searchId: id, ...update } of earlyEvents.current ?? []) if (id === searchId) started = applySearchUpdate(started, update)
+      setSearch(started)
+    } catch (error) {
+      if (start === starts.current) setSearchProblem(describeError(error))
+    } finally {
+      if (start === starts.current) earlyEvents.current = null
+    }
+  }
+
+  // A search left unfinished when the tab was last shown is started again once the file is ready.
+  const resumed = useRef(false)
+  useEffect(() => {
+    if (!ready || resumed.current) return
+    resumed.current = true
+    const left = place?.search
+    if (left && !left.outcome) void startSearch(left.query)
+  })
+
+  /** Goes to the next match (1) or the one before (-1). */
+  const step = (direction: 1 | -1) => {
+    if (!search) return
+    const index = nextMatch(search, direction, Math.floor(shownTop))
+    if (index === null) return
+    setSearch({ ...search, current: index })
+    jumpTo(search.matches[index]!.line, false)
+  }
+
+  const pick = (index: number) => {
+    if (!search) return
+    setSearch({ ...search, current: index })
+    jumpTo(search.matches[index]!.line)
+  }
+
+  const closeSearch = () => {
+    starts.current++
+    earlyEvents.current = null
+    cancelRunning()
+    setSearch(null)
+    setSearchProblem(null)
+    scrollerRef.current?.focus()
+  }
+
+  /** Enter searches for what's typed, or, once it's been searched for, goes to the next match (Shift+Enter, the one before). */
+  const searchOrStep = (direction: 1 | -1) => {
+    const next = { pattern: query, matchCase }
+    if (search && sameQuery(search.query, next)) step(direction)
+    else void startSearch(next)
+  }
+
+  const submitSearch = (event: FormEvent) => {
+    event.preventDefault()
+    searchOrStep(1)
+  }
+
+  const onSearchKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Enter' && event.shiftKey) {
+      event.preventDefault()
+      searchOrStep(-1)
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      closeSearch()
+    }
+  }
+
+  const toggleMatchCase = () => {
+    setMatchCase(!matchCase)
+    if (search && query) void startSearch({ pattern: query, matchCase: !matchCase })
+  }
+
+  const stepRef = useRef(step)
+  stepRef.current = step
+
+  // Ctrl+G goes to a line and Ctrl+F searches, as in the editor; F3 and Shift+F3 step through the matches.
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key.toLowerCase() === 'g' && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey) {
+      const plain = !event.altKey && !event.shiftKey
+      const control = (event.ctrlKey || event.metaKey) && plain
+      const key = event.key.toLowerCase()
+      const field = key === 'g' && control ? goToRef.current : key === 'f' && control ? searchInputRef.current : null
+      if (field) {
         event.preventDefault()
-        goToRef.current?.focus()
-        goToRef.current?.select()
+        field.focus()
+        field.select()
+      } else if (event.key === 'F3' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault()
+        stepRef.current(event.shiftKey ? -1 : 1)
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -197,6 +341,17 @@ export function LargeFileViewer({ file, place, onPlace }: Props) {
     moveTo(next)
   }
 
+  // Matches are marked in the lines shown with the same pattern the core searched for.
+  const searchQuery = search?.query
+  const highlight = useMemo(() => {
+    const pattern = searchQuery && searchRegExp(searchQuery, true)
+    return pattern instanceof RegExp ? pattern : null
+  }, [searchQuery])
+
+  // Uncompressed, its content is its size; compressed, it's known once it's been decompressed.
+  const contentLength = file.compression ? (ready ? status.contentLength : undefined) : file.size
+  const canOpenAnyway = contentLength !== undefined && contentLength <= openAnywayLimit
+
   const first = Math.floor(shownTop)
   const rows = Array.from({ length: Math.min(Math.ceil(visible) + 1, lineCount - first) }, (_, i) => first + i)
   const gutter = { '--gutter': `${ready ? String(lineCount).length : 0}ch` } as CSSProperties
@@ -205,7 +360,53 @@ export function LargeFileViewer({ file, place, onPlace }: Props) {
     <div className="large-file">
       <div className="log-toolbar large-file__toolbar">
         <Progress status={status} compressed={Boolean(file.compression)} />
-        <form className="log-toolbar__lines large-file__go-to" onSubmit={submitGoTo}>
+        <form className="large-file__search" role="search" onSubmit={submitSearch}>
+          <input
+            ref={searchInputRef}
+            className="field__input log-toolbar__input large-file__search-input"
+            type="search"
+            aria-label={t('largeFile.search.label')}
+            disabled={!ready}
+            title={t(ready ? 'largeFile.search.tooltip' : 'largeFile.search.notReady')}
+            placeholder={t('largeFile.search.placeholder')}
+            spellCheck={false}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={onSearchKeyDown}
+          />
+          <button
+            type="button"
+            className="log-toolbar__toggle"
+            aria-pressed={matchCase}
+            disabled={!ready}
+            title={t('largeFile.search.matchCase')}
+            onClick={toggleMatchCase}
+          >
+            Aa
+          </button>
+          <button
+            type="button"
+            className="icon-button large-file__previous"
+            disabled={!search?.matches.length}
+            title={t('largeFile.search.previous')}
+            aria-label={t('largeFile.search.previous')}
+            onClick={() => step(-1)}
+          >
+            <ChevronIcon />
+          </button>
+          <button
+            type="button"
+            className="icon-button large-file__next"
+            disabled={!search?.matches.length}
+            title={t('largeFile.search.next')}
+            aria-label={t('largeFile.search.next')}
+            onClick={() => step(1)}
+          >
+            <ChevronIcon />
+          </button>
+          <SearchSummary search={search} problem={searchProblem} />
+        </form>
+        <form className="log-toolbar__lines" onSubmit={submitGoTo}>
           <label className="log-toolbar__label" htmlFor={goToId}>
             {t('largeFile.goToLine')}
           </label>
@@ -221,6 +422,16 @@ export function LargeFileViewer({ file, place, onPlace }: Props) {
             onChange={(event) => setGoTo(event.target.value.replace(/\D/g, ''))}
           />
         </form>
+        {canOpenAnyway && (
+          <button
+            type="button"
+            className="log-toolbar__toggle"
+            title={t('largeFile.openAnyway.tooltip', { size: formatSize(contentLength), limit: formatSize(openAnywayLimit) })}
+            onClick={onOpenAnyway}
+          >
+            {t('largeFile.openAnyway')}
+          </button>
+        )}
       </div>
       <div
         ref={scrollerRef}
@@ -238,7 +449,7 @@ export function LargeFileViewer({ file, place, onPlace }: Props) {
               {rows.map((line) => (
                 <div key={line} className={`large-file__row${line === marked ? ' large-file__row--marked' : ''}`} style={{ height: rowHeight }}>
                   <span className="large-file__number">{ready ? line + 1 : ''}</span>
-                  <span className="large-file__text">{lineAt(line) ?? ''}</span>
+                  <HighlightedLine text={lineAt(line) ?? ''} search={highlight} />
                 </div>
               ))}
             </div>
@@ -250,7 +461,121 @@ export function LargeFileViewer({ file, place, onPlace }: Props) {
           </div>
         )}
       </div>
+      {search && <MatchList search={search} onPick={pick} onClose={closeSearch} />}
     </div>
+  )
+}
+
+/** A line with its log levels and timestamps picked out, and `search`'s matches marked. */
+function HighlightedLine({ text, search }: { text: string; search: RegExp | null }) {
+  return (
+    <span className="large-file__text">
+      {highlightLine(text, search).map((segment, i) => (
+        <span
+          key={i}
+          className={[segment.highlight && `large-file__${segment.highlight}`, segment.match && 'large-file__match'].filter(Boolean).join(' ') || undefined}
+        >
+          {segment.text}
+        </span>
+      ))}
+    </span>
+  )
+}
+
+/** How a search is going, or went, in a few words. */
+function SearchSummary({ search, problem }: { search: SearchResults | null; problem: string | null }) {
+  if (problem) {
+    return (
+      <span className="large-file__search-summary large-file__progress--failed" role="alert">
+        {problem}
+      </span>
+    )
+  }
+  if (!search) return null
+  const { matches, current, outcome } = search
+  const found = formatCount(matches.length)
+  const text =
+    outcome?.kind === 'failed'
+      ? t('largeFile.search.failed', { reason: describeFailure(outcome) })
+      : !outcome
+        ? t('largeFile.search.searching', { percent: percent(search.scannedBytes, search.totalBytes), count: found })
+        : !matches.length
+          ? t('largeFile.search.none')
+          : current === null
+            ? t(outcome.matchedLines === 1 ? 'largeFile.search.oneMatch' : 'largeFile.search.matches', { count: formatCount(outcome.matchedLines) })
+            : t('largeFile.search.position', { n: formatCount(current + 1), count: found })
+  return (
+    <span className={`large-file__search-summary${outcome?.kind === 'failed' ? ' large-file__progress--failed' : ''}`} role="status">
+      {text}
+    </span>
+  )
+}
+
+/** A search's matching lines, a row each, only those in view laid out; picking one goes to it. */
+function MatchList({ search, onPick, onClose }: { search: SearchResults; onPick(index: number): void; onClose(): void }) {
+  const listRef = useRef<HTMLDivElement>(null)
+  const [scrollTop, setScrollTop] = useState(0)
+  const [height, setHeight] = useState(0)
+  const { matches, current, outcome } = search
+
+  useLayoutEffect(() => {
+    const list = listRef.current!
+    const observer = new ResizeObserver(() => setHeight(list.clientHeight))
+    observer.observe(list)
+    setHeight(list.clientHeight)
+    return () => observer.disconnect()
+  }, [])
+
+  // The current match stays in view as the matches are stepped through.
+  useLayoutEffect(() => {
+    const list = listRef.current!
+    if (current === null) return
+    const top = current * rowHeight
+    if (top < list.scrollTop) list.scrollTop = top
+    else if (top + rowHeight > list.scrollTop + list.clientHeight) list.scrollTop = top + rowHeight - list.clientHeight
+  }, [current])
+
+  const first = Math.floor(scrollTop / rowHeight)
+  const shown = Array.from({ length: Math.max(0, Math.min(Math.ceil(height / rowHeight) + 1, matches.length - first)) }, (_, i) => first + i)
+  const digits = String((matches.at(-1)?.line ?? 0) + 1).length
+
+  return (
+    <section className="large-file__matches" aria-label={t('largeFile.search.results')}>
+      <header className="large-file__matches-header">
+        <span>
+          {outcome?.kind === 'done' && outcome.limited
+            ? t('largeFile.search.limited', { shown: formatCount(matches.length), count: formatCount(outcome.matchedLines) })
+            : t('largeFile.search.results')}
+        </span>
+        <button type="button" className="icon-button" title={t('largeFile.search.close')} aria-label={t('largeFile.search.close')} onClick={onClose}>
+          <CloseIcon />
+        </button>
+      </header>
+      <div ref={listRef} className="large-file__match-list" role="listbox" aria-label={t('largeFile.search.results')} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}>
+        <div style={{ height: matches.length * rowHeight, position: 'relative' }}>
+          {shown.map((index) => {
+            const { line, preview, start, end } = matches[index]!
+            return (
+              <div
+                key={index}
+                role="option"
+                aria-selected={index === current}
+                className="large-file__match-row"
+                style={{ top: index * rowHeight, height: rowHeight, '--gutter': `${digits}ch` } as CSSProperties}
+                onClick={() => onPick(index)}
+              >
+                <span className="large-file__number">{line + 1}</span>
+                <span className="large-file__text">
+                  {preview.slice(0, start)}
+                  <mark className="large-file__match">{preview.slice(start, end)}</mark>
+                  {preview.slice(end)}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </section>
   )
 }
 

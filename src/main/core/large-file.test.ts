@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { finished } from 'node:stream/promises'
 import { gzipSync, zstdCompressSync } from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { LargeFile, LargeFileEvent, OpenedFile } from '@shared/core-api'
+import { largeFileSearchLimit, type LargeFile, type LargeFileEvent, type LargeFileMatch, type LargeFileSearchEvent, type LargeFileSearchQuery, type OpenedFile } from '@shared/core-api'
 import { MB } from '@shared/settings'
 import { createCore, type Core } from './core'
 
@@ -14,6 +14,7 @@ let cacheDir: string
 let core: Core
 let sourceId: string
 let events: LargeFileEvent[]
+let searchEvents: LargeFileSearchEvent[]
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'polyscope-large-'))
@@ -22,6 +23,8 @@ beforeEach(async () => {
   sourceId = (await core.addSource({ type: 'local', name: 'Logs', rootPath: dir })).id
   events = []
   core.onLargeFileEvent((event) => events.push(event))
+  searchEvents = []
+  core.onLargeFileSearchEvent((event) => searchEvents.push(event))
 })
 
 afterEach(async () => {
@@ -75,6 +78,17 @@ async function ready(largeFileId: string, timeout = 60_000) {
   return status
 }
 
+/** Starts a search, and waits for it to finish, returning its matches, progress, and how it ended. */
+async function search(largeFileId: string, query: LargeFileSearchQuery, timeout = 30_000) {
+  const { searchId } = await core.searchLargeFile(largeFileId, query)
+  const own = () => searchEvents.filter((event) => event.searchId === searchId)
+  await vi.waitFor(() => expect(own().some((event) => event.kind !== 'progress')).toBe(true), { timeout, interval: 20 })
+  const progress = own().filter((event) => event.kind === 'progress')
+  const matches: LargeFileMatch[] = progress.flatMap((event) => event.matches)
+  const { searchId: _, ...done } = own().at(-1)!
+  return { searchId, matches, progress, done }
+}
+
 const cacheBytes = async () => {
   const names = await readdir(cacheDir)
   const sizes = await Promise.all(names.map(async (name) => (await stat(join(cacheDir, name))).size))
@@ -104,7 +118,7 @@ describe('opening a Large File', () => {
     expect(file.lastLines).toEqual(Array.from({ length: file.lastLines.length }, (_, i) => lineOf(lines - file.lastLines.length + i)))
     expect(await core.largeFileStatus(file.largeFileId)).toMatchObject({ state: 'caching', totalBytes: 300_000_000 })
 
-    expect(await ready(file.largeFileId, 170_000)).toEqual({ state: 'ready', lineCount: lines, fromCache: false })
+    expect(await ready(file.largeFileId, 170_000)).toEqual({ state: 'ready', lineCount: lines, contentLength: 300_000_000, fromCache: false })
     const progress = events.filter((e) => e.largeFileId === file.largeFileId && e.state === 'caching')
     expect(progress.length).toBeGreaterThan(0)
     expect(progress.map((e) => (e.state === 'caching' ? e.loadedBytes : 0))).toEqual(progress.map((e) => (e.state === 'caching' ? e.loadedBytes : 0)).toSorted((a, b) => a - b))
@@ -112,6 +126,10 @@ describe('opening a Large File', () => {
     for (const at of [0, 1, 255, 256, 257, 1_234_567, lines - 3]) {
       expect(await core.readLargeFileLines(file.largeFileId, at, 3)).toEqual({ firstLine: at, lines: [lineOf(at), lineOf(at + 1), lineOf(at + 2)] })
     }
+
+    const { matches, done } = await search(file.largeFileId, { pattern: '^00012345[67]7 ' }, 120_000)
+    expect(matches.map((match) => match.line)).toEqual([1_234_567, 1_234_577])
+    expect(done).toEqual({ kind: 'done', matchedLines: 2, limited: false })
   })
 
   it('jumps to any line, stopping at the end of the file', async () => {
@@ -206,7 +224,7 @@ describe('compressed Large Files', () => {
     for (const name of ['app.log.gz', 'app.log.zst']) {
       const file = await openLarge(name)
       expect(file).toMatchObject({ compression: name.endsWith('gz') ? 'gzip' : 'zstd', encoding: 'utf-8', lastLines: [] })
-      expect(await ready(file.largeFileId)).toEqual({ state: 'ready', lineCount: 20_000, fromCache: false })
+      expect(await ready(file.largeFileId)).toEqual({ state: 'ready', lineCount: 20_000, contentLength: 2_000_000, fromCache: false })
       expect(await core.readLargeFileLines(file.largeFileId, 19_998, 5)).toEqual({ firstLine: 19_998, lines: [lineOf(19_998), lineOf(19_999)] })
     }
   })
@@ -228,7 +246,7 @@ describe('compressed Large Files', () => {
 
     const again = await openLarge('app.log.gz')
 
-    expect(await ready(again.largeFileId)).toEqual({ state: 'ready', lineCount: 20_000, fromCache: true })
+    expect(await ready(again.largeFileId)).toEqual({ state: 'ready', lineCount: 20_000, contentLength: 2_000_000, fromCache: true })
     expect((await core.readLargeFileLines(again.largeFileId, 5, 1)).lines).toEqual([lineOf(5)])
   })
 
@@ -242,7 +260,7 @@ describe('compressed Large Files', () => {
 
     const again = await openLarge('app.log.gz')
 
-    expect(await ready(again.largeFileId)).toEqual({ state: 'ready', lineCount: 21_000, fromCache: false })
+    expect(await ready(again.largeFileId)).toEqual({ state: 'ready', lineCount: 21_000, contentLength: 2_100_000, fromCache: false })
   })
 
   it('evicts the least recently used files to stay within the cache size cap', async () => {
@@ -303,7 +321,181 @@ describe('compressed Large Files', () => {
     await relaunched.connect(source.id)
     const again = asLarge(await relaunched.openFile(source.id, 'app.log.gz'))
 
-    await vi.waitFor(async () => expect(await relaunched.largeFileStatus(again.largeFileId)).toEqual({ state: 'ready', lineCount: 20_000, fromCache: true }))
+    await vi.waitFor(async () => expect(await relaunched.largeFileStatus(again.largeFileId)).toEqual({ state: 'ready', lineCount: 20_000, contentLength: 2_000_000, fromCache: true }))
     await relaunched.disconnect(source.id)
+  })
+})
+
+describe('searching a Large File', () => {
+  /** A generated log with an error on every 1,000th line, from line 7 on. */
+  const withErrors = (lines: number) =>
+    Array.from({ length: lines }, (_, n) => `${n % 1_000 === 7 ? `${String(n).padStart(10, '0')} ERROR disk full on /dev/sda${n}` : lineOf(n)}\n`).join('')
+
+  async function readyFile(content: string | Buffer, name = 'app.log') {
+    await smallLimits()
+    await writeFile(join(dir, name), content)
+    const file = await openLarge(name)
+    await ready(file.largeFileId)
+    return file.largeFileId
+  }
+
+  it('finds every matching line, in order, ignoring case unless asked not to', async () => {
+    const largeFileId = await readyFile(withErrors(20_000))
+
+    const { matches, done } = await search(largeFileId, { pattern: 'error DISK' })
+
+    expect(matches.map((match) => match.line)).toEqual(Array.from({ length: 20 }, (_, i) => i * 1_000 + 7))
+    expect(matches[1]).toEqual({ line: 1_007, preview: '0000001007 ERROR disk full on /dev/sda1007', start: 11, end: 21 })
+    expect(done).toEqual({ kind: 'done', matchedLines: 20, limited: false })
+    expect((await search(largeFileId, { pattern: 'error DISK', matchCase: true })).done).toEqual({ kind: 'done', matchedLines: 0, limited: false })
+  })
+
+  it('takes a regular expression, matched against each line without its line break', async () => {
+    const largeFileId = await readyFile(withErrors(20_000).replaceAll('\n', '\r\n'))
+
+    const { matches } = await search(largeFileId, { pattern: String.raw`sda1\d007$` })
+
+    expect(matches.map((match) => match.line)).toEqual([10_007, 11_007, 12_007, 13_007, 14_007, 15_007, 16_007, 17_007, 18_007, 19_007])
+  })
+
+  it('searches the last line, without a line break, and shows a piece of a long line around its match', async () => {
+    const largeFileId = await readyFile(`${generated(11_000)}${'y'.repeat(5_000)}needle${'z'.repeat(5_000)}\nthe last needle`)
+
+    const { matches } = await search(largeFileId, { pattern: 'needle' })
+
+    expect(matches.map((match) => match.line)).toEqual([11_000, 11_001])
+    const [long, last] = matches as [LargeFileMatch, LargeFileMatch]
+    expect(long.preview.length).toBeLessThan(500)
+    expect(long.preview.slice(long.start, long.end)).toBe('needle')
+    expect(long.preview.slice(0, long.start)).toMatch(/^y+$/)
+    expect(last).toEqual({ line: 11_001, preview: 'the last needle', start: 9, end: 15 })
+  })
+
+  it('searches a Latin-1 file as Latin-1, and a compressed file from the cache', async () => {
+    const latin1 = await readyFile(Buffer.from(`${generated(11_000)}olé ©\n`, 'latin1'))
+    expect((await search(latin1, { pattern: 'olé' })).matches).toEqual([{ line: 11_000, preview: 'olé ©', start: 0, end: 3 }])
+
+    const compressed = await readyFile(gzipSync(withErrors(20_000)), 'app.log.gz')
+    expect((await search(compressed, { pattern: 'ERROR' })).done).toEqual({ kind: 'done', matchedLines: 20, limited: false })
+  })
+
+  it('reports its progress through the file', async () => {
+    const largeFileId = await readyFile(generated(50_000))
+
+    const { progress } = await search(largeFileId, { pattern: 'nothing like it' })
+
+    const scanned = progress.map((event) => (event.kind === 'progress' ? event.scannedBytes : 0))
+    expect(scanned).toEqual(scanned.toSorted((a, b) => a - b))
+    expect(progress.at(-1)).toMatchObject({ scannedBytes: 5_000_000, totalBytes: 5_000_000 })
+  })
+
+  it(`reports at most ${largeFileSearchLimit} matching lines, counting the rest`, async () => {
+    const largeFileId = await readyFile(generated(25_000))
+
+    const { matches, done } = await search(largeFileId, { pattern: 'INFO' })
+
+    expect(matches).toHaveLength(largeFileSearchLimit)
+    expect(matches.at(-1)!.line).toBe(largeFileSearchLimit - 1)
+    expect(done).toEqual({ kind: 'done', matchedLines: 25_000, limited: true })
+  })
+
+  it('refuses a pattern that isn’t a regular expression, and a file not ready or not open', { timeout: 60_000 }, async () => {
+    const largeFileId = await readyFile(generated(20_000))
+    await expect(core.searchLargeFile(largeFileId, { pattern: '(unclosed' })).rejects.toMatchObject({ code: 'INVALID_PATTERN' })
+    await expect(core.searchLargeFile(largeFileId, { pattern: '' })).rejects.toMatchObject({ code: 'INVALID_PATTERN' })
+    await expect(core.searchLargeFile('nope', { pattern: 'x' })).rejects.toMatchObject({ code: 'LARGE_FILE_NOT_OPEN' })
+
+    await writeGenerated('huge.log', 1_000_000)
+    const { largeFileId: caching } = await openLarge('huge.log')
+    await expect(core.searchLargeFile(caching, { pattern: 'x' })).rejects.toMatchObject({ code: 'LARGE_FILE_NOT_READY' })
+  })
+
+  describe('cancelling', () => {
+    // 100 MB: not searched through in the moment it takes to cancel.
+    async function searching() {
+      await smallLimits()
+      await writeGenerated('huge.log', 1_000_000)
+      const { largeFileId } = await openLarge('huge.log')
+      await ready(largeFileId)
+      const { searchId } = await core.searchLargeFile(largeFileId, { pattern: 'INFO' })
+      return { largeFileId, searchId }
+    }
+
+    /** Waits long enough for a search left going to have finished, and returns what came of it. */
+    const afterAWhile = async (searchId: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 3_000))
+      return searchEvents.filter((event) => event.searchId === searchId)
+    }
+
+    it('stops a search, sending nothing more for it', { timeout: 60_000 }, async () => {
+      const { searchId } = await searching()
+
+      await core.cancelLargeFileSearch(searchId)
+      const sent = searchEvents.filter((event) => event.searchId === searchId).length
+
+      const later = await afterAWhile(searchId)
+      expect(later).toHaveLength(sent)
+      expect(later.every((event) => event.kind === 'progress')).toBe(true)
+      await expect(core.cancelLargeFileSearch(searchId)).resolves.toBeUndefined()
+      await expect(core.cancelLargeFileSearch('nope')).resolves.toBeUndefined()
+    })
+
+    it('stops a file’s searches when it’s closed', { timeout: 60_000 }, async () => {
+      const { largeFileId, searchId } = await searching()
+
+      await core.closeLargeFile(largeFileId)
+
+      expect((await afterAWhile(searchId)).every((event) => event.kind === 'progress')).toBe(true)
+    })
+  })
+})
+
+describe('opening a Large File in the editor anyway', () => {
+  /** Large over 1 MB; opened in the editor anyway up to 2 MB. */
+  const openAnywayLimits = () => core.updateSettings({ largeFileThreshold: MB, openAnywayLimit: 2 * MB, cacheSizeCap: 4 * MB })
+
+  it('opens a file over the threshold in the editor, up to the "open anyway" limit', async () => {
+    await openAnywayLimits()
+    await writeFile(join(dir, 'app.log'), generated(20_000)) // 2,000,000 bytes: just under 2 MB
+    await core.connect(sourceId)
+
+    expect(await core.openFile(sourceId, 'app.log', { inEditor: true })).toMatchObject({ view: 'editor', encoding: 'utf-8', content: generated(20_000) })
+    expect(await core.openFile(sourceId, 'app.log', { inEditor: true, encoding: 'latin1' })).toMatchObject({ view: 'editor', encoding: 'latin1' })
+  })
+
+  it('refuses a file over the "open anyway" limit', async () => {
+    await openAnywayLimits()
+    await writeFile(join(dir, 'app.log'), generated(21_000)) // 2,100,000 bytes: just over 2 MB
+    await core.connect(sourceId)
+
+    await expect(core.openFile(sourceId, 'app.log', { inEditor: true })).rejects.toMatchObject({ code: 'OVER_OPEN_ANYWAY_LIMIT' })
+    expect(await core.openFile(sourceId, 'app.log')).toMatchObject({ view: 'large' })
+  })
+
+  it('goes by a compressed file’s content, once decompressed', async () => {
+    await openAnywayLimits()
+    await writeFile(join(dir, 'small.log.gz'), gzipSync(generated(20_000)))
+    await writeFile(join(dir, 'large.log.gz'), gzipSync(generated(21_000)))
+    await core.connect(sourceId)
+
+    expect(await core.openFile(sourceId, 'small.log.gz', { inEditor: true })).toMatchObject({ view: 'editor', compression: 'gzip', content: generated(20_000) })
+    await expect(core.openFile(sourceId, 'large.log.gz', { inEditor: true })).rejects.toMatchObject({ code: 'OVER_OPEN_ANYWAY_LIMIT' })
+  })
+
+  it('follows the "open anyway" limit in Settings as it changes', async () => {
+    await openAnywayLimits()
+    await writeFile(join(dir, 'app.log'), generated(21_000))
+    await core.connect(sourceId)
+    await core.updateSettings({ openAnywayLimit: 3 * MB })
+
+    expect(await core.openFile(sourceId, 'app.log', { inEditor: true })).toMatchObject({ view: 'editor' })
+  })
+
+  it('opens a file under the threshold in the editor as ever', async () => {
+    await openAnywayLimits()
+    await writeFile(join(dir, 'app.log'), generated(100))
+    await core.connect(sourceId)
+
+    expect(await core.openFile(sourceId, 'app.log', { inEditor: true })).toMatchObject({ view: 'editor', content: generated(100) })
   })
 })

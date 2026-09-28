@@ -25,6 +25,7 @@ export function forwardCoreEvents(core: CoreEvents, getWindow: () => BrowserWind
   core.onSettingsChanged((settings) => getWindow()?.webContents.send('core:settingsChanged', settings))
   core.onFollowEvent((event) => getWindow()?.webContents.send('core:followEvent', event))
   core.onLargeFileEvent((event) => getWindow()?.webContents.send('core:largeFileEvent', event))
+  core.onLargeFileSearchEvent((event) => getWindow()?.webContents.send('core:largeFileSearchEvent', event))
 }
 
 const isFileFilter = (value: unknown): value is FileFilter =>

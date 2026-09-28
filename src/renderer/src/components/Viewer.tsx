@@ -16,6 +16,10 @@ interface Props {
   onShowWholeLog(key: string): void
   /** In bytes, for the warning about a log larger than it. */
   largeFileThreshold: number
+  /** In bytes: a Large File no larger can be opened in the editor anyway. */
+  openAnywayLimit: number
+  /** Opens a Large File's tab in the editor instead. */
+  onOpenAnyway(key: string): void
   /** Where followed logs' new lines come from. */
   followFeed: FollowFeed
   /** Told how many lines a followed log's view holds after new ones are added, by Follow. */
@@ -62,7 +66,7 @@ function appendLines(model: monaco.editor.ITextModel, lines: string[], cap: Last
  * One read-only Monaco editor; each tab keeps its own model and scroll/cursor state. Binary files, and logs
  * too large to show whole, get a placeholder.
  */
-export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileThreshold, followFeed, onLineCount, minimap }: Props) {
+export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileThreshold, openAnywayLimit, onOpenAnyway, followFeed, onLineCount, minimap }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const modelsRef = useRef(new Map<string, TabModel>())
@@ -201,6 +205,8 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
           file={large}
           place={largeFilePlaces.current.get(large.largeFileId)}
           onPlace={(place) => keepPlace(large.largeFileId, place)}
+          openAnywayLimit={openAnywayLimit}
+          onOpenAnyway={() => activeTab && onOpenAnyway(activeTab.key)}
         />
       )}
       {activeTab && tooLarge && (

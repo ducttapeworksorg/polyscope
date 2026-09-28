@@ -525,6 +525,8 @@ export function App() {
             onShowHex={(key) => void reopenTabAs(key, { hex: true })}
             onShowWholeLog={(key) => void reopenLog(key, { lastNLines: 'all', allowLarge: true })}
             largeFileThreshold={settings.largeFileThreshold}
+            openAnywayLimit={settings.openAnywayLimit}
+            onOpenAnyway={(key) => void reopenTabAs(key, { inEditor: true })}
             followFeed={followFeed}
             onLineCount={noteLineCount}
             minimap={settings.showMinimap}
@@ -541,7 +543,10 @@ export function App() {
       <StatusBar
         activeTab={activeTab}
         environment={activeEnvironment}
-        onPickEncoding={(encoding) => activeTab && void reopenTabAs(activeTab.key, encoding ? { encoding } : {})}
+        onPickEncoding={(encoding) =>
+          // A Large File opened in the editor anyway stays in the editor in its new encoding.
+          activeTab && void reopenTabAs(activeTab.key, { ...(activeTab.openAs?.inEditor && { inEditor: true }), ...(encoding && { encoding }) })
+        }
         onPickLanguage={(language) => activeTab && setWorkspace((ws) => setLanguage(ws, activeTab.key, language))}
         logLineCount={activeTab?.follow ? followedLineCounts.get(activeTab.follow.followId) : undefined}
       />

@@ -1,4 +1,4 @@
-import type { CoreMethod, CoreResult, FollowEvent, LargeFileEvent } from '@shared/core-api'
+import type { CoreMethod, CoreResult, FollowEvent, LargeFileEvent, LargeFileSearchEvent } from '@shared/core-api'
 import type { Settings } from '@shared/settings'
 
 /** What the preload script exposes to the renderer as `window.polyscope`. */
@@ -13,4 +13,6 @@ export interface PolyscopeBridge {
   onFollowEvent(listener: (event: FollowEvent) => void): () => void
   /** Subscribes to every Large File's status changes; returns a function that unsubscribes. */
   onLargeFileEvent(listener: (event: LargeFileEvent) => void): () => void
+  /** Subscribes to every Large File search's updates; returns a function that unsubscribes. */
+  onLargeFileSearchEvent(listener: (event: LargeFileSearchEvent) => void): () => void
 }

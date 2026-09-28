@@ -346,6 +346,11 @@ export interface OpenOptions {
   encoding?: TextEncoding
   /** Show the (decompressed) bytes as a hex dump. Ignored when `encoding` is given. */
   hex?: boolean
+  /**
+   * Opens a file over the Large File threshold in the editor anyway, as long as its content (once decompressed)
+   * is no larger than the "open anyway" limit: OVER_OPEN_ANYWAY_LIMIT otherwise.
+   */
+  inEditor?: boolean
 }
 
 interface OpenedFileFacts {
@@ -413,8 +418,11 @@ export interface LargeFile extends OpenedFileFacts {
 export type LargeFileStatus =
   /** Reading the file into the cache (or, once cached, through the cache), `loadedBytes` of `totalBytes` so far. */
   | { state: 'caching'; loadedBytes: number; totalBytes: number }
-  /** Cached and indexed: any of its lines can be read. `fromCache` when it was cached already when opened. */
-  | { state: 'ready'; lineCount: number; fromCache: boolean }
+  /**
+   * Cached and indexed: any of its lines can be read, and it can be searched. `contentLength` is in bytes, once
+   * decompressed. `fromCache` when it was cached already when opened.
+   */
+  | { state: 'ready'; lineCount: number; contentLength: number; fromCache: boolean }
   /** Caching stopped; only the last lines it opened with is shown. */
   | { state: 'failed'; code: CoreErrorCode; message: string }
 
@@ -426,6 +434,41 @@ export interface LargeFileLines {
   /** Without their line breaks; a line too long to show is cut short, ending in '…'. */
   lines: string[]
 }
+
+/** What to search a Large File for: a JavaScript regular expression, matched against each line in turn. */
+export interface LargeFileSearchQuery {
+  pattern: string
+  /** Tells upper and lower case apart; off unless asked for. */
+  matchCase?: boolean
+}
+
+/** A line of a Large File that matches a search, with a piece of it around its first match. */
+export interface LargeFileMatch {
+  /** From 0. */
+  line: number
+  /** Part of the line, starting a little before its first match; the whole line when it's short. */
+  preview: string
+  /** Where the first match is in `preview`: from `start` up to (not including) `end`. */
+  start: number
+  end: number
+}
+
+/** What a search of a Large File reports as it reads through the file, in order. */
+export type LargeFileSearchUpdate =
+  /** How far it has read, `scannedBytes` of `totalBytes`, and the matching lines found since the last update, in order. */
+  | { kind: 'progress'; scannedBytes: number; totalBytes: number; matches: LargeFileMatch[] }
+  /**
+   * The whole file has been searched: `matchedLines` lines match. When `limited`, there were more than the
+   * matches reported, which stop at largeFileSearchLimit.
+   */
+  | { kind: 'done'; matchedLines: number; limited: boolean }
+  /** It stopped, say because the file couldn't be read. */
+  | { kind: 'failed'; code: CoreErrorCode; message: string }
+
+export type LargeFileSearchEvent = LargeFileSearchUpdate & { searchId: string }
+
+/** The most matching lines a search reports; it counts the rest without sending them. */
+export const largeFileSearchLimit = 10_000
 
 /** An opened file, in whichever view suits its content (or was asked for). */
 export type OpenedFile = TextFile | BinaryFile | HexFile | LargeFile
@@ -583,6 +626,10 @@ export type CoreErrorCode =
   | 'CACHE_TOO_SMALL'
   /** The local cache couldn't be written, say for a full disk. */
   | 'CACHE_UNWRITABLE'
+  /** A file to be opened in the editor anyway whose content is over the "open anyway" limit. */
+  | 'OVER_OPEN_ANYWAY_LIMIT'
+  /** A search pattern that isn't a regular expression, or is empty. */
+  | 'INVALID_PATTERN'
   | 'UNKNOWN'
 
 export interface CoreApi {
@@ -633,7 +680,16 @@ export interface CoreApi {
    * past it. Before then, LARGE_FILE_NOT_READY.
    */
   readLargeFileLines(largeFileId: string, firstLine: number, count: number): Promise<LargeFileLines>
-  /** Stops caching a Large File and lets it go; the cache keeps what was cached. Nothing happens to one already closed. */
+  /**
+   * Starts searching a ready Large File, line by line from its start; its matches and progress arrive as
+   * LargeFileSearchEvents with the returned `searchId`, ending with `done` or `failed`. Before it's ready,
+   * LARGE_FILE_NOT_READY; a pattern that isn't a regular expression, INVALID_PATTERN. Lines too long to show
+   * are searched as far as they're shown.
+   */
+  searchLargeFile(largeFileId: string, query: LargeFileSearchQuery): Promise<{ searchId: string }>
+  /** Stops a search; nothing more is sent for it. Nothing happens to one already finished. */
+  cancelLargeFileSearch(searchId: string): Promise<void>
+  /** Stops caching a Large File, and any searches of it, and lets it go; the cache keeps what was cached. Nothing happens to one already closed. */
   closeLargeFile(largeFileId: string): Promise<void>
   /**
    * Fetches the last lines of a container's log in a Log Source. Asking for all of a log larger than the
@@ -693,6 +749,8 @@ export interface CoreEvents {
   onFollowEvent(listener: (event: FollowEvent) => void): () => void
   /** Calls `listener` whenever a Large File's status changes; returns a function that unsubscribes. */
   onLargeFileEvent(listener: (event: LargeFileEvent) => void): () => void
+  /** Calls `listener` with every Large File search's updates; returns a function that unsubscribes. */
+  onLargeFileSearchEvent(listener: (event: LargeFileSearchEvent) => void): () => void
 }
 
 export type CoreMethod = keyof CoreApi
@@ -717,6 +775,8 @@ export const coreMethods: readonly CoreMethod[] = [
   'openFile',
   'largeFileStatus',
   'readLargeFileLines',
+  'searchLargeFile',
+  'cancelLargeFileSearch',
   'closeLargeFile',
   'openLog',
   'followLog',

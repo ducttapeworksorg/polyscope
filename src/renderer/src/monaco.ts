@@ -5,6 +5,7 @@ import HtmlWorker from 'monaco-editor/languages/features/html/html.worker?worker
 import JsonWorker from 'monaco-editor/languages/features/json/json.worker?worker'
 import TsWorker from 'monaco-editor/languages/features/typescript/ts.worker?worker'
 import { t } from './i18n'
+import { logRules } from './line-highlights'
 import { markerPattern } from './log-lines'
 
 self.MonacoEnvironment = {
@@ -98,12 +99,7 @@ monaco.languages.setMonarchTokensProvider('log', {
   tokenizer: {
     root: [
       [markerPattern, 'log.marker'],
-      [/\b(?:FATAL|CRITICAL|CRIT|SEVERE|PANIC|ERROR|ERR|EXCEPTION)\b/, 'log.error'],
-      [/\b(?:WARNING|WARN)\b/, 'log.warning'],
-      [/\b(?:INFO|NOTICE)\b/, 'log.info'],
-      [/\b(?:DEBUG|TRACE|VERBOSE)\b/, 'log.debug'],
-      [/\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?/, 'log.date'],
-      [/\b\d{2}:\d{2}:\d{2}(?:[.,]\d+)?\b/, 'log.date'],
+      ...logRules.map(([rule, highlight]): [RegExp, string] => [rule, `log.${highlight}`]),
       [/"(?:[^"\\]|\\.)*"/, 'string'],
       [/\b\d+(?:\.\d+)?\b/, 'number']
     ]

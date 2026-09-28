@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import type { FollowEvent, LargeFileEvent } from '@shared/core-api'
+import type { FollowEvent, LargeFileEvent, LargeFileSearchEvent } from '@shared/core-api'
 import type { Settings } from '@shared/settings'
 import type { PolyscopeBridge } from './bridge'
 
@@ -21,6 +21,11 @@ const bridge: PolyscopeBridge = {
     const forward = (_event: IpcRendererEvent, event: LargeFileEvent) => listener(event)
     ipcRenderer.on('core:largeFileEvent', forward)
     return () => ipcRenderer.off('core:largeFileEvent', forward)
+  },
+  onLargeFileSearchEvent: (listener) => {
+    const forward = (_event: IpcRendererEvent, event: LargeFileSearchEvent) => listener(event)
+    ipcRenderer.on('core:largeFileSearchEvent', forward)
+    return () => ipcRenderer.off('core:largeFileSearchEvent', forward)
   }
 }
 

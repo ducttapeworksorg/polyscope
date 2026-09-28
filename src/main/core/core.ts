@@ -15,6 +15,7 @@ import type {
   KubernetesFilesSourceInfo,
   KubernetesLogsSourceInfo,
   LargeFileEvent,
+  LargeFileSearchEvent,
   LastNLines,
   LocalSourceInfo,
   LogNode,
@@ -35,6 +36,7 @@ import type {
   TreeNode
 } from '@shared/core-api'
 import { filesWorkloadKinds, followableSourceTypes, workloadKinds } from '@shared/core-api'
+import { searchRegExp } from '@shared/search'
 import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings } from '@shared/settings'
 import { listAwsProfiles } from './aws-profiles'
 import { CoreError } from './core-error'
@@ -60,6 +62,7 @@ import { createKubernetesLogSource } from './kubernetes-log-source'
 import { languageFor } from './languages'
 import { chunksOf, openLargeFile, readLastLinesBytes, lastLinesOf, type OpenLargeFile } from './large-file'
 import { createLargeFileCache } from './large-file-cache'
+import { searchLargeFile, type LargeFileSearch } from './large-file-search'
 import { createLocalFileSource } from './local-file-source'
 import { startFollow, type Follow } from './log-follow'
 import type { LogReadOptions, LogSource } from './log-source'
@@ -469,6 +472,10 @@ export function createCore(options: CoreOptions = {}): Core {
   const largeFiles = new Map<string, { sourceId: string; large: OpenLargeFile }>()
   const largeFileListeners = new Set<(event: LargeFileEvent) => void>()
 
+  // Searches of Large Files under way, by id, each with the Large File it's of.
+  const searches = new Map<string, { largeFileId: string; search: LargeFileSearch }>()
+  const searchListeners = new Set<(event: LargeFileSearchEvent) => void>()
+
   const largeFileFor = (largeFileId: string) => {
     const open = largeFiles.get(largeFileId)
     if (!open) throw new CoreError('LARGE_FILE_NOT_OPEN', `No Large File open with id ${largeFileId}`)
@@ -855,7 +862,13 @@ export function createCore(options: CoreOptions = {}): Core {
       const { innerName, compression } = compressionOf(name)
       const common = { path, name, size: info.size, modifiedTime: info.modifiedTime, ...(compression && { compression }) }
       const head = options.hex ? hexDumpLimit : binarySniffLength
-      const { bytes, whole } = await readUpTo(fileSource, common, settings.largeFileThreshold, head)
+      const inEditor = Boolean(options.inEditor) && !options.hex
+      // Settings keep the "open anyway" limit no lower than the threshold.
+      const limit = inEditor ? settings.openAnywayLimit : settings.largeFileThreshold
+      const { bytes, whole } = await readUpTo(fileSource, common, limit, head)
+      if (!whole && inEditor) {
+        throw new CoreError('OVER_OPEN_ANYWAY_LIMIT', `The file's content is over the "open anyway" limit of ${limit} bytes`)
+      }
       if (!whole) return openLarge(sourceFor(sourceId), fileSource, info, common, bytes, options, askedEncoding)
       const encoding = askedEncoding ?? (options.hex ? null : detectEncoding(bytes))
       if (encoding) return { view: 'editor', ...common, content: decode(bytes, encoding), encoding, language: languageFor(innerName) }
@@ -872,9 +885,33 @@ export function createCore(options: CoreOptions = {}): Core {
       return largeFileFor(largeFileId).readLines(firstLine, count)
     },
 
+    async searchLargeFile(largeFileId, query) {
+      const large = largeFileFor(largeFileId)
+      const regex = isRecord(query) && typeof query.pattern === 'string' ? searchRegExp({ pattern: query.pattern, matchCase: query.matchCase === true }) : { problem: 'Not a search' }
+      if (!(regex instanceof RegExp)) throw new CoreError('INVALID_PATTERN', regex.problem)
+      const searchId = randomUUID()
+      const search = searchLargeFile(large.content(), regex, (update) => {
+        if (update.kind !== 'progress') searches.delete(searchId)
+        const event = { ...update, searchId }
+        for (const listener of searchListeners) listener(event)
+      })
+      searches.set(searchId, { largeFileId, search })
+      return { searchId }
+    },
+
+    async cancelLargeFileSearch(searchId) {
+      searches.get(searchId)?.search.cancel()
+      searches.delete(searchId)
+    },
+
     async closeLargeFile(largeFileId) {
       largeFiles.get(largeFileId)?.large.close()
       largeFiles.delete(largeFileId)
+      for (const [searchId, entry] of searches) {
+        if (entry.largeFileId !== largeFileId) continue
+        entry.search.cancel()
+        searches.delete(searchId)
+      }
     },
 
     async openLog(sourceId, path, options = {}) {
@@ -1004,6 +1041,12 @@ export function createCore(options: CoreOptions = {}): Core {
       const subscription = (event: LargeFileEvent) => listener(event)
       largeFileListeners.add(subscription)
       return () => largeFileListeners.delete(subscription)
+    },
+
+    onLargeFileSearchEvent(listener) {
+      const subscription = (event: LargeFileSearchEvent) => listener(event)
+      searchListeners.add(subscription)
+      return () => searchListeners.delete(subscription)
     }
   }
 }

@@ -33,8 +33,12 @@ const decoders: Record<LargeFileEncoding, TextDecoder> = { 'utf-8': new TextDeco
 const decodeLine = (bytes: Uint8Array, encoding: LargeFileEncoding) =>
   encoding === 'latin1' ? Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('latin1') : decoders[encoding].decode(bytes)
 
+/** A whole line's bytes, no longer than is shown, decoded without a Windows line end's carriage return. */
+export const decodeShortLine = (bytes: Uint8Array, encoding: LargeFileEncoding) =>
+  decodeLine(bytes.at(-1) === carriageReturn ? bytes.subarray(0, -1) : bytes, encoding)
+
 /** Collects a line's bytes as they come, keeping only as many as are shown. */
-function lineBuilder(encoding: LargeFileEncoding) {
+export function lineBuilder(encoding: LargeFileEncoding) {
   let pieces: Uint8Array[] = []
   let length = 0
   let cut = false
@@ -53,9 +57,8 @@ function lineBuilder(encoding: LargeFileEncoding) {
     },
     /** The line so far, decoded without a Windows line end's carriage return; then starts the next. */
     take() {
-      let bytes = Buffer.concat(pieces)
-      if (!cut && bytes.at(-1) === carriageReturn) bytes = bytes.subarray(0, -1)
-      const line = decodeLine(bytes, encoding) + (cut ? '…' : '')
+      const bytes = Buffer.concat(pieces)
+      const line = cut ? `${decodeLine(bytes, encoding)}…` : decodeShortLine(bytes, encoding)
       pieces = []
       length = 0
       cut = false
@@ -136,10 +139,19 @@ export interface LargeFileOptions {
   onStatus(status: LargeFileStatus): void
 }
 
+/** A ready Large File's content: `length` bytes (once decompressed), decoded as `encoding`. */
+export interface LargeFileContent {
+  read(range: ByteRange): Promise<Uint8Array>
+  length: number
+  encoding: LargeFileEncoding
+}
+
 /** A Large File open in a viewer, being cached and indexed, or ready to read. */
 export interface OpenLargeFile {
   status(): LargeFileStatus
   readLines(firstLine: number, count: number): Promise<LargeFileLines>
+  /** Its content, to read through, once it's ready: LARGE_FILE_NOT_READY before then. */
+  content(): LargeFileContent
   /** Stops caching it, if it's still being cached, as failed with `code`. */
   abort(code: CoreError['code'], message: string): void
   /** Stops caching it, and lets its cached copy go. */
@@ -209,7 +221,7 @@ export function openLargeFile(options: LargeFileOptions): OpenLargeFile {
         if (stopped) return entry.release()
       }
       read = from
-      settle({ state: 'ready', lineCount: index.lineCount, fromCache: Boolean(hit) })
+      settle({ state: 'ready', lineCount: index.lineCount, contentLength: index.length, fromCache: Boolean(hit) })
     } catch (error) {
       await writer?.abort()
       if (stopped) return
@@ -221,14 +233,21 @@ export function openLargeFile(options: LargeFileOptions): OpenLargeFile {
 
   void run()
 
+  const readReady = () => {
+    if (status.state !== 'ready' || !read) throw new CoreError('LARGE_FILE_NOT_READY', `${path} is still being cached`)
+    return read
+  }
+
   return {
     status: () => status,
+
+    content: () => ({ read: readReady(), length: index.length, encoding }),
 
     async readLines(firstLine, count) {
       if (!Number.isSafeInteger(firstLine) || firstLine < 0 || !Number.isSafeInteger(count) || count < 1) {
         throw new CoreError('INVALID_RANGE', `Not a line and a number of lines: ${firstLine}, ${count}`)
       }
-      if (status.state !== 'ready' || !read) throw new CoreError('LARGE_FILE_NOT_READY', `${path} is still being cached`)
+      const read = readReady()
       const { lineCount } = index
       if (firstLine >= lineCount) return { firstLine: lineCount, lines: [] }
       const wanted = Math.min(count, largeFileReading.maxLinesPerRead, lineCount - firstLine)
