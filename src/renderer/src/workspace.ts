@@ -28,7 +28,7 @@ export const followsFiles = (source: SourceInfo) => followableSourceTypes.includ
 
 /** Whether a tab offers to Follow its file: text of a Source whose files grow, not followed already. */
 export const canFollowFile = ({ source, file, follow }: Pick<OpenTab, 'source' | 'file' | 'follow'>) =>
-  followsFiles(source) && !follow && (isLog(file) ? file.of === 'file' : file.view === 'editor')
+  followsFiles(source) && !follow && (isLog(file) ? file.of === 'file' : file.view === 'editor' || file.view === 'large')
 
 /** What a tab is called: its file's or container's name, marked for a Previous Log. */
 export const tabName = (content: { name: string; previous?: boolean }) =>
@@ -147,6 +147,9 @@ export function endFollow(ws: Workspace, followId: string): Workspace {
   const tab = ws.tabs.find((open) => open.follow?.followId === followId)
   return tab ? updateTab(ws, tab.key, { follow: undefined }) : ws
 }
+
+/** The Large Files open in the tabs, which the core keeps (and caches) until they're closed. */
+export const largeFileIdsOf = (ws: Workspace) => new Set(ws.tabs.flatMap((tab) => (tab.file.view === 'large' ? [tab.file.largeFileId] : [])))
 
 /** The Follows going on in the tabs. */
 export const followIdsOf = (ws: Workspace) => new Set(ws.tabs.flatMap((tab) => (tab.follow ? [tab.follow.followId] : [])))

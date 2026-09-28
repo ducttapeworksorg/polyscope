@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { CoreV1Api } from '@kubernetes/client-node'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EntryNode, FollowEvent, NewKubernetesFilesSource, TreeNode } from '@shared/core-api'
+import { MB } from '@shared/settings'
 import { createCore, type Core } from './core'
 import { kubeConfigFor } from './kubeconfig'
 import { execInPod } from './kubernetes-exec'
@@ -127,7 +128,7 @@ describe.skipIf(!hasTestCluster)('Kubernetes Files against the test cluster', ()
   let core: Core
 
   beforeEach(() => {
-    core = createCore()
+    core = createCore({ cacheDir: join(dir, 'cache') })
   })
 
   const connected = async (changes: Partial<NewKubernetesFilesSource> = {}) => {
@@ -245,6 +246,33 @@ describe.skipIf(!hasTestCluster)('Kubernetes Files against the test cluster', ()
       // Its replacement is there to browse instead.
       await vi.waitFor(async () => expect((await podFolders(core, id)).map((pod) => pod.name)).not.toContain(before), { timeout: 60_000, interval: 1_000 })
     }, 150_000)
+    it('opens a Large File at its end, then caches it through range reads', async () => {
+      const [pod] = await podsNamed('files-busybox')
+      const seeded = await seedContainerFolder(pod!, {})
+      try {
+        await core.updateSettings({ largeFileThreshold: MB, openAnywayLimit: MB, cacheSizeCap: 4 * MB })
+        const config = kubeConfigFor(testKubernetesFilesSource().context)
+        const target = { namespace: testFilesNamespace, pod: pod!, container: 'app' }
+        // 300,000 numbered lines: about 2 MB.
+        const written = await execInPod(config, target, ['sh', '-c', 'seq 1 300000 > "$1/big.log"', 'sh', seeded.path])
+        expect(written.exitCode).toBe(0)
+        const { id } = await connected({ workloadName: 'files-busybox', path: seeded.path })
+
+        const file = await core.openFile(id, `${pod}/big.log`)
+
+        expect(file).toMatchObject({ view: 'large', encoding: 'utf-8' })
+        if (file.view !== 'large') return
+        expect(file.lastLines.at(-1)).toBe('300000')
+        await vi.waitFor(async () => expect(await core.largeFileStatus(file.largeFileId)).toMatchObject({ state: 'ready', lineCount: 300_000 }), {
+          timeout: 60_000,
+          interval: 200
+        })
+        expect(await core.readLargeFileLines(file.largeFileId, 149_999, 2)).toEqual({ firstLine: 149_999, lines: ['150000', '150001'] })
+        await core.closeLargeFile(file.largeFileId)
+      } finally {
+        await seeded.remove()
+      }
+    }, 90_000)
   })
 
   describe('following a file', () => {

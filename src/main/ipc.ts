@@ -24,6 +24,7 @@ export function registerCoreIpc(core: CoreApi): void {
 export function forwardCoreEvents(core: CoreEvents, getWindow: () => BrowserWindow | null): void {
   core.onSettingsChanged((settings) => getWindow()?.webContents.send('core:settingsChanged', settings))
   core.onFollowEvent((event) => getWindow()?.webContents.send('core:followEvent', event))
+  core.onLargeFileEvent((event) => getWindow()?.webContents.send('core:largeFileEvent', event))
 }
 
 const isFileFilter = (value: unknown): value is FileFilter =>

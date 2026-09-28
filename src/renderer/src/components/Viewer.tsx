@@ -1,11 +1,12 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import type { LastNLines } from '@shared/core-api'
 import type { FollowFeed } from '../follow-feed'
 import { t } from '../i18n'
 import { formatCount, formatSize } from '../i18n/format'
 import { followLines, shownContent } from '../log-lines'
 import { editorFontFamily, monaco } from '../monaco'
-import type { OpenTab } from '../workspace'
+import { largeFileIdsOf, type OpenTab } from '../workspace'
+import { LargeFileViewer, type LargeFilePlace } from './LargeFileViewer'
 
 interface Props {
   tabs: OpenTab[]
@@ -23,9 +24,9 @@ interface Props {
   minimap: boolean
 }
 
-/** What the editor shows for a tab, or null when it shows a placeholder instead: a binary file, a log too large to show. */
+/** What the editor shows for a tab, or null when it shows something else: a binary file, a log too large to show, a Large File. */
 function editorContent({ file, language, utc }: OpenTab) {
-  if (file.view === 'binary' || file.view === 'logTooLarge') return null
+  if (file.view === 'binary' || file.view === 'logTooLarge' || file.view === 'large') return null
   if (file.view === 'log') return { text: shownContent(file, utc ?? false), language: 'log' }
   return { text: file.content, language: file.view === 'hex' ? 'plaintext' : (language ?? file.language) }
 }
@@ -66,6 +67,9 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const modelsRef = useRef(new Map<string, TabModel>())
   const shownKeyRef = useRef<string | null>(null)
+  // Where each Large File's view was left, by Large File, so switching tabs comes back to it.
+  const largeFilePlaces = useRef(new Map<string, LargeFilePlace>())
+  const keepPlace = useCallback((largeFileId: string, place: LargeFilePlace) => void largeFilePlaces.current.set(largeFileId, place), [])
 
   useEffect(() => {
     const editor = monaco.editor.create(hostRef.current!, {
@@ -109,6 +113,8 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
     if (shown) shown.viewState = editor.saveViewState()
 
     const open = new Set(tabs.map((tab) => tab.key))
+    const openLarge = largeFileIdsOf({ tabs, activeKey: null })
+    for (const largeFileId of largeFilePlaces.current.keys()) if (!openLarge.has(largeFileId)) largeFilePlaces.current.delete(largeFileId)
     for (const [key, entry] of models) {
       if (open.has(key)) continue
       entry.detach?.()
@@ -185,9 +191,18 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
 
   const binary = activeTab?.file.view === 'binary' ? activeTab.file : null
   const tooLarge = activeTab?.file.view === 'logTooLarge'
+  const large = activeTab?.file.view === 'large' ? activeTab.file : null
   return (
     <>
-      <div ref={hostRef} className="viewer__editor" hidden={!activeTab || !!binary || tooLarge} data-testid="editor" />
+      <div ref={hostRef} className="viewer__editor" hidden={!activeTab || !!binary || tooLarge || !!large} data-testid="editor" />
+      {large && (
+        <LargeFileViewer
+          key={large.largeFileId}
+          file={large}
+          place={largeFilePlaces.current.get(large.largeFileId)}
+          onPlace={(place) => keepPlace(large.largeFileId, place)}
+        />
+      )}
       {activeTab && tooLarge && (
         <div className="viewer__empty viewer__binary" role="alert">
           <p>{t('logView.tooLarge', { size: formatSize(largeFileThreshold) })}</p>
@@ -198,7 +213,11 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
       )}
       {activeTab && binary && (
         <div className="viewer__empty viewer__binary">
-          <p>{t('viewer.binary', { bytes: formatCount(binary.contentLength) })}</p>
+          <p>
+            {binary.contentLength === undefined
+              ? t('viewer.binaryCompressed', { size: formatSize(binary.size) })
+              : t('viewer.binary', { bytes: formatCount(binary.contentLength) })}
+          </p>
           <button type="button" className="button button--quiet" onClick={() => onShowHex(activeTab.key)}>
             {t('viewer.showAsHex')}
           </button>

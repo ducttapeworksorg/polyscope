@@ -1,5 +1,8 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type {
+  Compression,
   ConnectionState,
   CoreApi,
   CoreEvents,
@@ -11,6 +14,7 @@ import type {
   FollowUpdate,
   KubernetesFilesSourceInfo,
   KubernetesLogsSourceInfo,
+  LargeFileEvent,
   LastNLines,
   LocalSourceInfo,
   LogNode,
@@ -18,11 +22,15 @@ import type {
   NewEnvironment,
   NewS3Source,
   NewSource,
+  LargeFile,
   OpenLogOptions,
+  OpenOptions,
+  OpenedFile,
   S3SourceInfo,
   SourceInfo,
   SourcePath,
   SourceTypeId,
+  TextEncoding,
   FileLogOptions,
   TreeNode
 } from '@shared/core-api'
@@ -31,15 +39,27 @@ import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings
 import { listAwsProfiles } from './aws-profiles'
 import { CoreError } from './core-error'
 import { createEnvironmentStore, defaultEnvironments, isColor } from './environment-store'
-import { checkEncoding, decode, decompress, detectEncoding, hexDump, hexDumpLimit } from './file-content'
+import {
+  binarySniffLength,
+  checkEncoding,
+  compressionOf,
+  decode,
+  detectEncoding,
+  detectLargeFileEncoding,
+  hexDump,
+  hexDumpLimit,
+  inflate
+} from './file-content'
 import { readLastLines, startFileFollow } from './file-follow'
 import { fileIcon, folderIcon } from './file-icons'
-import type { FileSource } from './file-source'
+import type { FileSource, FileStat } from './file-source'
 import { kubeConfigFor, listKubeContexts } from './kubeconfig'
 import { listNamespaces } from './kubernetes-api'
 import { createKubernetesFileSource, listWorkloads } from './kubernetes-file-source'
 import { createKubernetesLogSource } from './kubernetes-log-source'
 import { languageFor } from './languages'
+import { chunksOf, openLargeFile, readLastLinesBytes, lastLinesOf, type OpenLargeFile } from './large-file'
+import { createLargeFileCache } from './large-file-cache'
 import { createLocalFileSource } from './local-file-source'
 import { startFollow, type Follow } from './log-follow'
 import type { LogReadOptions, LogSource } from './log-source'
@@ -204,6 +224,32 @@ export interface CoreOptions {
   dataDir?: string
   /** Where Sources' secrets are kept; defaults to memory only. */
   secrets?: SecretStore
+  /** Where Large Files are cached; defaults to a folder in `dataDir`, or else in the OS temp folder. */
+  cacheDir?: string
+}
+
+/**
+ * A file's content, decompressed if it's compressed, if that's no more than `limit` bytes; otherwise at least its
+ * first `head` bytes (if it has them), reading and decompressing no more of it than that takes.
+ */
+async function readUpTo(
+  fileSource: FileSource,
+  { path, name, size, compression }: { path: SourcePath; name: string; size: number; compression?: Compression },
+  limit: number,
+  head: number
+) {
+  if (!compression) {
+    const whole = size <= limit
+    return { bytes: await fileSource.read(path, { offset: 0, length: whole ? size : Math.min(size, head) }), whole }
+  }
+  const parts: Uint8Array[] = []
+  let length = 0
+  for await (const chunk of inflate(chunksOf((range) => fileSource.read(path, range), size), compression, name)) {
+    parts.push(chunk)
+    length += chunk.length
+    if (length > limit) return { bytes: new Uint8Array(Buffer.concat(parts)), whole: false }
+  }
+  return { bytes: new Uint8Array(Buffer.concat(parts)), whole: true }
 }
 
 const inMemory = { encrypt: (plain: string) => Buffer.from(plain), decrypt: (encrypted: Buffer) => encrypted.toString() }
@@ -415,10 +461,83 @@ export function createCore(options: CoreOptions = {}): Core {
     }
   }
 
-  /** Forgets a Source's connection, stopping its Follows. */
-  const dropConnection = (sourceId: string) => {
+  const cache = createLargeFileCache(
+    options.cacheDir ?? (options.dataDir ? join(options.dataDir, 'large-file-cache') : join(tmpdir(), 'polyscope-large-file-cache')),
+    () => settings.cacheSizeCap
+  )
+  // Large Files open in viewers, by id, each with the Source it's from.
+  const largeFiles = new Map<string, { sourceId: string; large: OpenLargeFile }>()
+  const largeFileListeners = new Set<(event: LargeFileEvent) => void>()
+
+  const largeFileFor = (largeFileId: string) => {
+    const open = largeFiles.get(largeFileId)
+    if (!open) throw new CoreError('LARGE_FILE_NOT_OPEN', `No Large File open with id ${largeFileId}`)
+    return open.large
+  }
+
+  /** Stops what's going on against a Source's connection, as it's gone or being replaced: its Follows, and Large Files still caching. */
+  const stopActivity = (sourceId: string) => {
     stopFollows(sourceId)
+    for (const open of largeFiles.values()) {
+      if (open.sourceId === sourceId) open.large.abort('SOURCE_DISCONNECTED', 'The Source was disconnected while the file was being cached')
+    }
+  }
+
+  /** Forgets a Source's connection, stopping its Follows and caching. */
+  const dropConnection = (sourceId: string) => {
+    stopActivity(sourceId)
     connections.delete(sourceId)
+  }
+
+  /** Where a file's content, as it is now, is cached: the same file of a Source pointing the same place, unchanged since. */
+  const cacheKeyOf = (source: SavedSource, path: SourcePath, info: Extract<FileStat, { kind: 'file' }>) =>
+    createHash('sha256')
+      .update(JSON.stringify([target({ ...source, id: '' }), path, info.size, info.modifiedTime, info.identity ?? null]))
+      .digest('hex')
+
+  /**
+   * Opens a file whose content is over the Large File threshold, of which `head` is the start: in the Large File
+   * Viewer, straight away at its end (unless it's compressed), caching it in the background. One that looks
+   * binary is shown as binary, and as hex only its start.
+   */
+  const openLarge = async (
+    source: SavedSource,
+    fileSource: FileSource,
+    info: Extract<FileStat, { kind: 'file' }>,
+    common: Omit<LargeFile, 'view' | 'largeFileId' | 'encoding' | 'lastLines'>,
+    head: Uint8Array,
+    options: OpenOptions,
+    askedEncoding?: TextEncoding
+  ): Promise<OpenedFile> => {
+    const { path, compression } = common
+    const contentLength = compression ? {} : { contentLength: info.size }
+    if (options.hex && !askedEncoding) {
+      const shown = head.subarray(0, hexDumpLimit)
+      return { view: 'hex', ...common, content: hexDump(shown), ...contentLength, shownLength: shown.length }
+    }
+    if (askedEncoding && askedEncoding !== 'utf-8' && askedEncoding !== 'latin1') {
+      throw new CoreError('INVALID_ENCODING', `A Large File can only be shown as UTF-8 or Latin-1, not ${askedEncoding}`)
+    }
+    const last = compression ? new Uint8Array(0) : await readLastLinesBytes(fileSource, path, info.size)
+    const encoding = askedEncoding ?? detectLargeFileEncoding(head.subarray(0, binarySniffLength), last)
+    if (!encoding) return { view: 'binary', ...common, ...contentLength }
+    const largeFileId = randomUUID()
+    const large = openLargeFile({
+      fileSource,
+      path,
+      size: info.size,
+      ...(compression && { compression }),
+      encoding,
+      inPlace: source.type === 'local' && !compression,
+      cache,
+      cacheKey: cacheKeyOf(source, path, info),
+      onStatus: (status) => {
+        const event = { ...status, largeFileId }
+        for (const listener of largeFileListeners) listener(event)
+      }
+    })
+    largeFiles.set(largeFileId, { sourceId: source.id, large })
+    return { view: 'large', ...common, largeFileId, encoding, lastLines: lastLinesOf(last, encoding) }
   }
 
   /** A page of a folder's children, folders first, then files, each by name; a more node ends it if there are more. */
@@ -682,8 +801,8 @@ export function createCore(options: CoreOptions = {}): Core {
       await loaded
       const source = sourceFor(sourceId)
       const attempt: Connection = { state: 'connecting' }
-      // Connecting again replaces the connection the Source's Follows were using.
-      stopFollows(sourceId)
+      // Connecting again replaces the connection the Source's Follows and caching were using.
+      stopActivity(sourceId)
       connections.set(sourceId, attempt)
       const settle = (outcome: Connection) => {
         if (connections.get(sourceId) !== attempt) {
@@ -732,15 +851,30 @@ export function createCore(options: CoreOptions = {}): Core {
       const info = await fileSource.stat(path)
       if (info.kind !== 'file') throw new CoreError('NOT_A_FILE', `Not a file: ${path}`)
       const name = path.slice(path.lastIndexOf('/') + 1)
-      const stored = await fileSource.read(path, { offset: 0, length: info.size })
       await settingsLoaded
-      const { innerName, bytes, compression } = await decompress(name, stored, settings.openAnywayLimit)
+      const { innerName, compression } = compressionOf(name)
       const common = { path, name, size: info.size, modifiedTime: info.modifiedTime, ...(compression && { compression }) }
+      const head = options.hex ? hexDumpLimit : binarySniffLength
+      const { bytes, whole } = await readUpTo(fileSource, common, settings.largeFileThreshold, head)
+      if (!whole) return openLarge(sourceFor(sourceId), fileSource, info, common, bytes, options, askedEncoding)
       const encoding = askedEncoding ?? (options.hex ? null : detectEncoding(bytes))
       if (encoding) return { view: 'editor', ...common, content: decode(bytes, encoding), encoding, language: languageFor(innerName) }
       if (!options.hex) return { view: 'binary', ...common, contentLength: bytes.length }
       const shown = bytes.subarray(0, hexDumpLimit)
       return { view: 'hex', ...common, content: hexDump(shown), contentLength: bytes.length, shownLength: shown.length }
+    },
+
+    async largeFileStatus(largeFileId) {
+      return { ...largeFileFor(largeFileId).status() }
+    },
+
+    async readLargeFileLines(largeFileId, firstLine, count) {
+      return largeFileFor(largeFileId).readLines(firstLine, count)
+    },
+
+    async closeLargeFile(largeFileId) {
+      largeFiles.get(largeFileId)?.large.close()
+      largeFiles.delete(largeFileId)
     },
 
     async openLog(sourceId, path, options = {}) {
@@ -864,6 +998,12 @@ export function createCore(options: CoreOptions = {}): Core {
       const subscription = (event: FollowEvent) => listener(event)
       followListeners.add(subscription)
       return () => followListeners.delete(subscription)
+    },
+
+    onLargeFileEvent(listener) {
+      const subscription = (event: LargeFileEvent) => listener(event)
+      largeFileListeners.add(subscription)
+      return () => largeFileListeners.delete(subscription)
     }
   }
 }

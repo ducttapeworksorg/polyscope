@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import type { FollowEvent } from '@shared/core-api'
+import type { FollowEvent, LargeFileEvent } from '@shared/core-api'
 import type { Settings } from '@shared/settings'
 import type { PolyscopeBridge } from './bridge'
 
@@ -16,6 +16,11 @@ const bridge: PolyscopeBridge = {
     const forward = (_event: IpcRendererEvent, event: FollowEvent) => listener(event)
     ipcRenderer.on('core:followEvent', forward)
     return () => ipcRenderer.off('core:followEvent', forward)
+  },
+  onLargeFileEvent: (listener) => {
+    const forward = (_event: IpcRendererEvent, event: LargeFileEvent) => listener(event)
+    ipcRenderer.on('core:largeFileEvent', forward)
+    return () => ipcRenderer.off('core:largeFileEvent', forward)
   }
 }
 

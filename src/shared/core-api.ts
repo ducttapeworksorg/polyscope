@@ -371,8 +371,8 @@ export interface TextFile extends OpenedFileFacts {
 /** A file whose bytes don't look like text; nothing of it is shown until asked. */
 export interface BinaryFile extends OpenedFileFacts {
   view: 'binary'
-  /** In bytes, after any decompression. */
-  contentLength: number
+  /** In bytes, after any decompression; left out for a Large compressed file, which isn't decompressed whole just to tell. */
+  contentLength?: number
 }
 
 /** A file shown as a hex dump: offset, bytes and printable characters, 16 bytes per line. */
@@ -380,13 +380,55 @@ export interface HexFile extends OpenedFileFacts {
   view: 'hex'
   /** The dump of the first `shownLength` bytes; a large file's is cut short. */
   content: string
-  /** In bytes, after any decompression. */
-  contentLength: number
+  /** In bytes, after any decompression; left out for a Large compressed file, which isn't decompressed whole just to tell. */
+  contentLength?: number
   shownLength: number
 }
 
+/**
+ * The encodings a Large File can be shown in: its lines are found by their line feed bytes, so only
+ * encodings whose line feed is a byte of its own.
+ */
+export type LargeFileEncoding = Extract<TextEncoding, 'utf-8' | 'latin1'>
+
+/**
+ * A Large File, opened in the Large File Viewer: its last lines straight away, while the core caches the
+ * whole file and indexes its lines in the background (see largeFileStatus), after which any of its lines
+ * can be read (see readLargeFileLines).
+ */
+export interface LargeFile extends OpenedFileFacts {
+  view: 'large'
+  /** Names this opening of the file in the Large File calls and events, until closeLargeFile. */
+  largeFileId: string
+  /** How its lines are decoded. */
+  encoding: LargeFileEncoding
+  /**
+   * Its last lines, read from its end, and exactly its last ones, so the first of them is line `lineCount -
+   * lastLines.length` once that's known. Empty for a compressed file, whose end is only reached by decompressing all of it.
+   */
+  lastLines: string[]
+}
+
+/** How far caching and indexing a Large File has got. */
+export type LargeFileStatus =
+  /** Reading the file into the cache (or, once cached, through the cache), `loadedBytes` of `totalBytes` so far. */
+  | { state: 'caching'; loadedBytes: number; totalBytes: number }
+  /** Cached and indexed: any of its lines can be read. `fromCache` when it was cached already when opened. */
+  | { state: 'ready'; lineCount: number; fromCache: boolean }
+  /** Caching stopped; only the last lines it opened with is shown. */
+  | { state: 'failed'; code: CoreErrorCode; message: string }
+
+export type LargeFileEvent = LargeFileStatus & { largeFileId: string }
+
+/** Lines of a Large File, from `firstLine` (from 0) on. */
+export interface LargeFileLines {
+  firstLine: number
+  /** Without their line breaks; a line too long to show is cut short, ending in '…'. */
+  lines: string[]
+}
+
 /** An opened file, in whichever view suits its content (or was asked for). */
-export type OpenedFile = TextFile | BinaryFile | HexFile
+export type OpenedFile = TextFile | BinaryFile | HexFile | LargeFile
 
 /** The last lines of a container's log, as a snapshot. */
 export interface LogSnapshot {
@@ -533,6 +575,14 @@ export type CoreErrorCode =
   | 'NO_SHELL'
   /** A container whose shell lacks a tool listing or reading needs; the message names it. */
   | 'TOOLS_MISSING'
+  /** A Large File closed, or never opened: its id names nothing. */
+  | 'LARGE_FILE_NOT_OPEN'
+  /** A Large File's lines were asked for before it was cached and indexed. */
+  | 'LARGE_FILE_NOT_READY'
+  /** A Large File bigger than the whole local cache, so it can't be cached. */
+  | 'CACHE_TOO_SMALL'
+  /** The local cache couldn't be written, say for a full disk. */
+  | 'CACHE_UNWRITABLE'
   | 'UNKNOWN'
 
 export interface CoreApi {
@@ -570,8 +620,21 @@ export interface CoreApi {
    * whose `cursor` lists the next page. If they can't be listed, a single error node instead.
    */
   expand(sourceId: string, path: SourcePath, cursor?: string): Promise<TreeNode[]>
-  /** Reads a file and decides how to show it; `options` reopens it another way, e.g. in another encoding. */
+  /**
+   * Reads a file and decides how to show it; `options` reopens it another way, e.g. in another encoding. A file
+   * over the Large File threshold (once decompressed, if it's compressed) opens as a LargeFile, which stays
+   * open, caching, until closeLargeFile.
+   */
   openFile(sourceId: string, path: SourcePath, options?: OpenOptions): Promise<OpenedFile>
+  /** How far caching a Large File has got; its changes come as LargeFileEvents too. */
+  largeFileStatus(largeFileId: string): Promise<LargeFileStatus>
+  /**
+   * Up to `count` of a Large File's lines from `firstLine` (from 0) on, once it's ready: fewer at its end, none
+   * past it. Before then, LARGE_FILE_NOT_READY.
+   */
+  readLargeFileLines(largeFileId: string, firstLine: number, count: number): Promise<LargeFileLines>
+  /** Stops caching a Large File and lets it go; the cache keeps what was cached. Nothing happens to one already closed. */
+  closeLargeFile(largeFileId: string): Promise<void>
   /**
    * Fetches the last lines of a container's log in a Log Source. Asking for all of a log larger than the
    * Large File threshold fails with LOG_TOO_LARGE, unless `allowLarge` says to go ahead.
@@ -628,6 +691,8 @@ export interface CoreEvents {
   onSettingsChanged(listener: (settings: Settings) => void): () => void
   /** Calls `listener` with every Follow's updates; returns a function that unsubscribes. */
   onFollowEvent(listener: (event: FollowEvent) => void): () => void
+  /** Calls `listener` whenever a Large File's status changes; returns a function that unsubscribes. */
+  onLargeFileEvent(listener: (event: LargeFileEvent) => void): () => void
 }
 
 export type CoreMethod = keyof CoreApi
@@ -650,6 +715,9 @@ export const coreMethods: readonly CoreMethod[] = [
   'disconnect',
   'expand',
   'openFile',
+  'largeFileStatus',
+  'readLargeFileLines',
+  'closeLargeFile',
   'openLog',
   'followLog',
   'openFileLog',

@@ -1446,3 +1446,113 @@ body.is-resizing {
   gap: 14px;
   font-size: var(--text-md);
 }
+
+/* ---------- Large File Viewer ---------- */
+
+/* Its own toolbar (progress, go to line) above a virtualised list of lines, in the editor's font and spacing. */
+.large-file {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--slate-850);
+}
+
+.large-file__progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.large-file__progress--failed {
+  color: var(--caution);
+}
+
+.large-file__bar {
+  width: 120px;
+  height: 4px;
+  appearance: none;
+  border: none;
+  border-radius: 2px;
+  background: var(--slate-700);
+  overflow: hidden;
+}
+
+.large-file__bar::-webkit-progress-bar {
+  background: var(--slate-700);
+}
+
+.large-file__bar::-webkit-progress-value {
+  background: var(--text-dim);
+}
+
+.large-file__go-to {
+  margin-left: auto;
+}
+
+.large-file__scroller {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+
+.large-file__scroller:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--glint);
+}
+
+/* As wide as the longest line in view, so long lines scroll sideways. */
+.large-file__spacer {
+  min-width: 100%;
+  width: max-content;
+}
+
+/* Stays in view while the spacer scrolls past; the lines in it are swapped as the first line shown changes. */
+.large-file__lines {
+  position: sticky;
+  top: 0;
+  /* Clips the row below the last in view without becoming a scroll container, so line numbers still stick. */
+  overflow: clip;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 21px;
+  color: var(--text);
+}
+
+.large-file__row {
+  display: flex;
+  white-space: pre;
+}
+
+.large-file__row--marked {
+  background: var(--slate-700);
+}
+
+/* Line numbers stay put while long lines scroll sideways. */
+.large-file__number {
+  position: sticky;
+  left: 0;
+  flex: none;
+  box-sizing: content-box;
+  width: var(--gutter);
+  padding: 0 16px 0 12px;
+  background-color: var(--slate-850);
+  color: var(--text-faint);
+  text-align: right;
+  user-select: none;
+}
+
+.large-file__row--marked .large-file__number {
+  background-color: var(--slate-700);
+}
+
+.large-file__text {
+  padding-right: 24px;
+}
+
+.large-file__waiting {
+  font-size: var(--text-md);
+}

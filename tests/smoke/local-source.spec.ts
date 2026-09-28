@@ -423,3 +423,42 @@ test('start maximized, and resize the sidebar by dragging its edge, remembered a
   const relaunched = await app.firstWindow()
   await expect(relaunched.getByRole('separator', { name: 'Resize Sources' })).toHaveAttribute('aria-valuenow', '624')
 })
+
+test('open a Large File at its end, then scroll to any line once it is cached', async () => {
+  // Writing, then caching, 60 MB takes a while on a slow runner.
+  test.setTimeout(180_000)
+  // 600,000 lines of 100 bytes: 60 MB, over the default 50 MB threshold.
+  const line = (n: number) => `${String(n).padStart(10, '0')} INFO ${'x'.repeat(83)}\n`
+  const block = (from: number) => Array.from({ length: 10_000 }, (_, i) => line(from + i)).join('')
+  for (let from = 0; from < 600_000; from += 10_000) await appendFile(join(dir, 'root', 'logs', 'huge.log'), block(from))
+  const window = await app.firstWindow()
+  const consoleErrors: string[] = []
+  window.on('console', (message) => message.type() === 'error' && consoleErrors.push(message.text()))
+  window.on('pageerror', (error) => consoleErrors.push(error.message))
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+
+  await window.getByRole('treeitem', { name: /^huge\.log/ }).click()
+
+  const view = window.getByTestId('large-file')
+  await expect(view).toContainText('0000599999 INFO')
+  await expect(window.getByTestId('editor')).toBeHidden()
+  await expect(window.locator('.statusbar')).toContainText('Large File')
+  const goTo = window.getByLabel('Go to line')
+  await expect(goTo).toBeEnabled({ timeout: 30_000 })
+  await expect(window.getByText('600,000 lines')).toBeVisible()
+  // Once cached, the end is still in view, now with its line number.
+  await expect(view).toContainText('6000000000599999 INFO')
+
+  await goTo.fill('300001')
+  await goTo.press('Enter')
+  await expect(view).toContainText('0000300000 INFO')
+  await expect(view).not.toContainText('0000599999 INFO')
+
+  await view.press('Control+Home')
+  await expect(view).toContainText('10000000000 INFO')
+  await view.press('Control+End')
+  await expect(view).toContainText('0000599999 INFO')
+  expect(consoleErrors).toEqual([])
+})

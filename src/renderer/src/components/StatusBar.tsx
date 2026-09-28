@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { textEncodings, type Environment, type LanguageId, type TextEncoding } from '@shared/core-api'
+import { textEncodings, type Environment, type LanguageId, type LargeFileEncoding, type TextEncoding } from '@shared/core-api'
 import { environmentStyle } from '../environments'
 import { t } from '../i18n'
 import { formatCount, formatDateTime, formatSize } from '../i18n/format'
@@ -23,6 +23,8 @@ interface Props {
 const autoDetect = 'auto'
 
 const encodingLabel = (encoding: TextEncoding) => t(`encoding.${encoding}`)
+
+const largeFileEncodings: readonly LargeFileEncoding[] = ['utf-8', 'latin1']
 
 interface OpenPicker {
   kind: 'encoding' | 'language'
@@ -55,12 +57,14 @@ export function StatusBar({ activeTab, environment, onPickEncoding, onPickLangua
   const language = file.view === 'editor' ? (activeTab.language ?? file.language) : null
   const shownPicker = picker?.tabKey === activeTab.key ? picker : null
 
+  // A Large File's lines are found by their line feed bytes, which UTF-16 doesn't have.
+  const encodings = file.view === 'large' ? largeFileEncodings : textEncodings
   const encodingOptions: PickOption[] = [
     { value: autoDetect, label: t('encoding.auto') },
-    ...textEncodings.map((encoding) => ({
+    ...encodings.map((encoding) => ({
       value: encoding,
       label: encodingLabel(encoding),
-      ...(file.view === 'editor' && file.encoding === encoding && { detail: t('encoding.current') })
+      ...((file.view === 'editor' || file.view === 'large') && file.encoding === encoding && { detail: t('encoding.current') })
     }))
   ]
   const languageOptions = (): PickOption[] =>
@@ -96,6 +100,11 @@ export function StatusBar({ activeTab, environment, onPickEncoding, onPickLangua
           <span className="statusbar__item" title={t('status.modified')}>
             {formatDateTime(file.modifiedTime)}
           </span>
+          {file.view === 'large' && (
+            <span className="statusbar__item" title={t('status.largeFile.tooltip')}>
+              {t('status.largeFile')}
+            </span>
+          )}
           <button
             type="button"
             className="statusbar__item statusbar__button"
@@ -156,8 +165,8 @@ function lineCountLabel(count: number) {
 /** What the encoding item says: the encoding text was decoded with, or how undecoded bytes are shown. */
 function statusEncoding({ file }: OpenTab) {
   if (isLog(file)) return ''
-  if (file.view === 'editor') return encodingLabel(file.encoding)
+  if (file.view === 'editor' || file.view === 'large') return encodingLabel(file.encoding)
   if (file.view === 'binary') return t('encoding.binary')
-  // A large file's dump stops short of its end, and says so.
-  return file.shownLength < file.contentLength ? t('encoding.hexPartial', { size: formatSize(file.shownLength) }) : t('encoding.hex')
+  // A large file's dump stops short of its end, and says so; a Large compressed file's length isn't known, so it may.
+  return file.contentLength === undefined || file.shownLength < file.contentLength ?t('encoding.hexPartial', { size: formatSize(file.shownLength) }) : t('encoding.hex')
 }

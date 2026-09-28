@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NewS3Source, TreeNode } from '@shared/core-api'
+import { MB } from '@shared/settings'
 import { createCore } from './core'
 import { createSecretStore } from './secret-store'
 import { startProxy, startTlsFront } from './test-network'
@@ -282,6 +283,27 @@ describe.skipIf(!hasTestStore)('an S3 Source against the test store', () => {
     const file = await core.openFile(source.id, 'app/server.log')
 
     expect(file).toMatchObject({ view: 'editor', name: 'server.log', content: text, encoding: 'utf-8', size: 37 })
+  })
+
+  it('opens a Large File at its end, then caches it through range reads', async () => {
+    const lines = Array.from({ length: 300_000 }, (_, i) => `line ${i + 1}`)
+    const prefix = await seeded({ 'big.log': lines.map((line) => `${line}\n`).join('') })
+    const core = createCore({ cacheDir: join(dir, 'cache') })
+    await core.updateSettings({ largeFileThreshold: MB, openAnywayLimit: MB, cacheSizeCap: 8 * MB })
+    const source = await core.addSource(testS3Source('Bucket', prefix))
+    await core.connect(source.id)
+
+    const file = await core.openFile(source.id, 'big.log')
+
+    expect(file).toMatchObject({ view: 'large', encoding: 'utf-8' })
+    if (file.view !== 'large') return
+    expect(file.lastLines.at(-1)).toBe('line 300000')
+    await vi.waitFor(async () => expect(await core.largeFileStatus(file.largeFileId)).toEqual({ state: 'ready', lineCount: 300_000, fromCache: false }), {
+      timeout: 30_000,
+      interval: 100
+    })
+    expect(await core.readLargeFileLines(file.largeFileId, 123_455, 2)).toEqual({ firstLine: 123_455, lines: ['line 123456', 'line 123457'] })
+    await core.closeLargeFile(file.largeFileId)
   })
 
   it('reports a key that’s gone as an error node when expanding', async () => {

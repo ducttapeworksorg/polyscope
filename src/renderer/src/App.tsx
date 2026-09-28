@@ -38,6 +38,7 @@ import {
   endFollow,
   followIdsOf,
   isLog,
+  largeFileIdsOf,
   markPodGone,
   openTab,
   pinTab,
@@ -83,6 +84,8 @@ export function App() {
   const pendingLineCounts = useRef(new Map<string, number>())
   // The Follows the tabs had when last rendered, to stop those they no longer have.
   const shownFollows = useRef(new Set<string>())
+  // Likewise the Large Files, to close those they no longer have.
+  const shownLargeFiles = useRef(new Set<string>())
 
   useEffect(() => {
     const unsubscribe = core.onSettingsChanged(setSettings)
@@ -186,6 +189,15 @@ export function App() {
     }
     shownFollows.current = current
   }, [workspace, followFeed])
+
+  // A Large File no tab has any more (its tab closed, or reopened as another) is let go, stopping its caching.
+  useEffect(() => {
+    const current = largeFileIdsOf(workspace)
+    for (const largeFileId of shownLargeFiles.current) {
+      if (!current.has(largeFileId)) void core.closeLargeFile(largeFileId).catch(() => undefined)
+    }
+    shownLargeFiles.current = current
+  }, [workspace])
 
   /** Notes how many lines a followed log's view holds, at most once a frame. */
   const noteLineCount = (followId: string, count: number) => {

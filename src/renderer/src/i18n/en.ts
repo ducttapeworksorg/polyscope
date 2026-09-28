@@ -196,6 +196,17 @@ export const en = {
   'viewer.reconnecting': 'Reconnecting…',
   'viewer.binary': 'Binary file, {bytes} bytes',
   'viewer.showAsHex': 'Show as hex',
+  'viewer.binaryCompressed': 'Binary file, {size} compressed',
+
+  'largeFile.caching': 'Caching {percent} ({loaded} of {total})',
+  'largeFile.caching.label': 'Caching progress',
+  'largeFile.decompressing': 'Decompressing… the file shows once it’s cached.',
+  'largeFile.decompressing.progress': 'Decompressing and caching {percent} ({loaded} of {total})',
+  'largeFile.failed': 'Only the end of the file is shown: it couldn’t be cached. {reason}',
+  'largeFile.goToLine': 'Go to line',
+  'largeFile.goToLine.placeholder': '1–{count}',
+  'largeFile.goToLine.tooltip': 'Go to a line (Ctrl+G), then press Enter',
+  'largeFile.goToLine.notReady': 'Every line can be reached once the file is cached',
 
   'logView.lastNLines': 'Last N lines',
   'logView.choice.all': 'All',
@@ -228,6 +239,8 @@ export const en = {
   'status.oneLine': '1 line',
 
   'status.readOnly': 'Read-only',
+  'status.largeFile': 'Large File',
+  'status.largeFile.tooltip': 'Over the Large File threshold, so shown in the Large File Viewer',
   'status.size': 'Size',
   'status.modified': 'Modified',
   'status.reopenWithEncoding': 'Reopen with encoding',
@@ -301,6 +314,10 @@ export const en = {
   'error.CONTAINER_NOT_RUNNING': 'This container isn’t running, so its files can’t be read.',
   'error.NO_SHELL': 'This container has no shell (sh), so its files can’t be listed or read.',
   'error.TOOLS_MISSING': 'This container lacks a tool needed to read its files: {message}',
+  'error.LARGE_FILE_NOT_OPEN': 'This file was closed; reopen it to read it again.',
+  'error.LARGE_FILE_NOT_READY': 'This file is still being cached.',
+  'error.CACHE_TOO_SMALL': 'The file is larger than the Large File cache has room for; raise the cache size in Settings. ({message})',
+  'error.CACHE_UNWRITABLE': 'The Large File cache couldn’t be written. ({message})',
   'error.UNKNOWN': 'Couldn’t complete that: {message}'
 } satisfies Record<string, string> &
   Record<`error.${CoreErrorCode}`, string> &

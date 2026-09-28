@@ -1,30 +1,41 @@
-import { promisify } from 'node:util'
-import { gunzip, zstdDecompress } from 'node:zlib'
-import { textEncodings, type Compression, type TextEncoding } from '@shared/core-api'
+import { Readable } from 'node:stream'
+import { createGunzip, createZstdDecompress } from 'node:zlib'
+import { textEncodings, type Compression, type LargeFileEncoding, type TextEncoding } from '@shared/core-api'
 import { MB } from '@shared/settings'
 import { CoreError } from './core-error'
 
-const decompressors: Record<Compression, (bytes: Uint8Array, options: { maxOutputLength: number }) => Promise<Buffer>> = {
-  gzip: promisify(gunzip),
-  zstd: promisify(zstdDecompress)
+const decompressors: Record<Compression, () => NodeJS.ReadWriteStream> = {
+  gzip: createGunzip,
+  zstd: createZstdDecompress
 }
 const compressionByExtension: Record<string, Compression> = { '.gz': 'gzip', '.zst': 'zstd' }
 
-/**
- * Undoes a file's compression, going by its extension. Returns the name of what's inside (the
- * name without that extension) and its bytes; a file that isn't compressed comes back as it was.
- */
-export async function decompress(name: string, bytes: Uint8Array, maxLength: number) {
+/** How a file is compressed, going by its extension, and the name of what's inside (the name without that extension). */
+export function compressionOf(name: string): { innerName: string; compression?: Compression } {
   const extension = name.slice(name.lastIndexOf('.')).toLowerCase()
   const compression = compressionByExtension[extension]
-  if (!compression || name.length === extension.length) return { innerName: name, bytes }
+  if (!compression || name.length === extension.length) return { innerName: name }
+  return { innerName: name.slice(0, -extension.length), compression }
+}
+
+/**
+ * Decompresses `chunks` as they come, so a file is never all in memory at once. Stopping early stops reading
+ * `chunks`; data that isn't valid `compression` fails DECOMPRESSION_FAILED, naming the file `name`.
+ */
+export async function* inflate(chunks: AsyncIterable<Uint8Array>, compression: Compression, name: string): AsyncGenerator<Uint8Array> {
+  const input = Readable.from(chunks, { objectMode: false })
+  const output = decompressors[compression]()
+  // A failed read ends decompression with the read's own error.
+  input.once('error', (error) => (output as unknown as Readable).destroy(error))
+  input.pipe(output)
   try {
-    const inner = await decompressors[compression](bytes, { maxOutputLength: maxLength })
-    return { innerName: name.slice(0, -extension.length), bytes: new Uint8Array(inner), compression }
+    for await (const chunk of output as AsyncIterable<Buffer>) yield new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)
   } catch (error) {
-    const tooLarge = error instanceof RangeError
-    const message = tooLarge ? `${name} decompresses to more than ${Math.floor(maxLength / MB)} MB` : `${name} isn’t valid ${compression} data`
-    throw new CoreError('DECOMPRESSION_FAILED', message)
+    if (error instanceof CoreError) throw error
+    throw new CoreError('DECOMPRESSION_FAILED', `${name} isn’t valid ${compression} data`)
+  } finally {
+    input.destroy()
+    ;(output as unknown as Readable).destroy()
   }
 }
 
@@ -41,7 +52,7 @@ const bomOf = (bytes: Uint8Array) => {
 }
 
 /** How far into a file to look for a NUL byte, the sign of a binary file (as git does). */
-const binarySniffLength = 8000
+export const binarySniffLength = 8000
 
 /** Text encoding by BOM, then UTF-8 if the bytes are valid UTF-8, then Latin-1; null for binary. */
 export function detectEncoding(bytes: Uint8Array): TextEncoding | null {
@@ -54,6 +65,28 @@ export function detectEncoding(bytes: Uint8Array): TextEncoding | null {
   } catch {
     return 'latin1'
   }
+}
+
+/** Whether bytes could be UTF-8, a character cut short at their end aside. */
+const couldBeUtf8 = (bytes: Uint8Array) => {
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(bytes, { stream: true })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A Large File's encoding, judged from its first bytes and its last lines, as it's never read whole to
+ * open it: UTF-8 if both could be, else Latin-1. Null if it looks binary, or starts with a UTF-16 BOM,
+ * as its line feeds can't then be found byte by byte.
+ */
+export function detectLargeFileEncoding(head: Uint8Array, lastLines: Uint8Array): LargeFileEncoding | null {
+  const bom = bomOf(head)?.[0]
+  if (bom === 'utf-8') return 'utf-8'
+  if (bom || head.subarray(0, binarySniffLength).includes(0)) return null
+  return couldBeUtf8(head) && couldBeUtf8(lastLines) ? 'utf-8' : 'latin1'
 }
 
 export function checkEncoding(encoding: unknown): TextEncoding {
