@@ -11,6 +11,7 @@ import {
   type SourcePath,
   type SourceTypeId
 } from '@shared/core-api'
+import { ComboBox } from './components/ComboBox'
 import { BucketIcon, HardDriveIcon, KubernetesFilesIcon, KubernetesLogsIcon } from './components/icons'
 import { core, describeError } from './core-client'
 import { t, type MessageKey } from './i18n'
@@ -257,7 +258,7 @@ function ClusterFields<S extends KubernetesLogsSettings | KubernetesFilesSetting
   const [problem, setProblem] = useState<string | null>(null)
   // Only suggestions: a user who may not list namespaces types one in.
   const namespaces = useListing(() => (value.context ? core.listKubeNamespaces(value.context) : null), [value.context])
-  const namespaceList = useId()
+  const namespaceId = useId()
 
   /** Picks a context, filling in its namespace (or `default`) unless one was typed already. */
   const pick = (context: string, listed = contexts ?? []) => {
@@ -307,106 +308,126 @@ function ClusterFields<S extends KubernetesLogsSettings | KubernetesFilesSetting
           {problem ?? t(contexts?.length === 0 ? 'kubernetesSource.context.none' : 'kubernetesSource.context.hint')}
         </span>
       </div>
-      <label className="field">
-        <span className="field__label">{t('kubernetesSource.namespace')}</span>
-        <input
-          className="field__input field__input--path"
+      <div className="field">
+        <label className="field__label" htmlFor={namespaceId}>
+          {t('kubernetesSource.namespace')}
+        </label>
+        <ComboBox
+          id={namespaceId}
+          className="field__input--path"
           value={value.namespace}
-          onChange={(e) => onChange({ ...value, namespace: e.target.value })}
-          list={namespaceList}
-          spellCheck={false}
+          options={namespaces.items ?? []}
+          onChange={(namespace) => onChange({ ...value, namespace })}
         />
-        <datalist id={namespaceList}>
-          {(namespaces.items ?? []).map((name) => (
-            <option key={name} value={name} />
-          ))}
-        </datalist>
         <span className="field__hint">
           {t(value.type === 'kubernetesFiles' ? 'kubernetesFilesSource.namespace.hint' : 'kubernetesSource.namespace.hint')}
         </span>
-      </label>
+      </div>
     </>
   )
 }
 
 const KubernetesLogsFields = (props: FieldsProps<KubernetesLogsSettings>) => <ClusterFields {...props} />
 
+/** A Workload's value in the Workload dropdown, which lists every kind: its kind and name. */
+const workloadKey = ({ kind, name }: { kind: FilesWorkloadKind; name: string }) => `${kind}/${name}`
+
 function KubernetesFilesFields({ value, onChange }: FieldsProps<KubernetesFilesSettings>) {
-  const { context, namespace, workloadKind } = value
-  const workloads = useListing(
-    () => (context && namespace.trim() ? core.listKubeWorkloads(context, namespace.trim(), workloadKind) : null),
-    [context, namespace, workloadKind]
-  )
-  const choices = choicesOf(workloads.items ?? [], value.workloadName)
-  const kind = t(`workloadKind.${workloadKind}`)
-  const workloadHint =
-    workloads.problem ?? (workloads.items?.length === 0 ? t('kubernetesFilesSource.workload.none', { kind, namespace }) : null)
+  const { context, namespace, workloadKind, workloadName } = value
+  const workloads = useListing(() => (context && namespace.trim() ? core.listKubeWorkloads(context, namespace.trim()) : null), [context, namespace])
+  const listed = workloads.items ?? []
+  const selected = listed.find((workload) => workload.kind === workloadKind && workload.name === workloadName)
+  // The chosen Workload stays a choice even when it isn't listed, so opening the dialog doesn't quietly change it.
+  const choices = workloadName && !selected ? [{ kind: workloadKind, name: workloadName, mountPaths: [] }, ...listed] : listed
+  const workloadHint = workloads.problem ?? (workloads.items?.length === 0 ? t('kubernetesFilesSource.workload.none', { namespace }) : null)
+  const pathId = useId()
 
   return (
     <>
       <ClusterFields value={value} onChange={onChange} />
-      <div className="field-pair">
-        <div className="field">
-          <label className="field__label" htmlFor="kubernetes-workload-kind">
-            {t('kubernetesFilesSource.workloadKind')}
-          </label>
-          <select
-            id="kubernetes-workload-kind"
-            className="field__input field__select"
-            value={workloadKind}
-            onChange={(e) => onChange({ ...value, workloadKind: e.target.value as FilesWorkloadKind, workloadName: '' })}
-          >
-            {filesWorkloadKinds.map((option) => (
-              <option key={option} value={option}>
-                {t(`workloadKind.${option}`)}
-              </option>
-            ))}
-          </select>
+      {workloads.problem ? (
+        // Can't be listed, say for lack of permission: its kind picked and its name typed in instead.
+        <div className="field-pair">
+          <div className="field">
+            <label className="field__label" htmlFor="kubernetes-workload-kind">
+              {t('kubernetesFilesSource.workloadKind')}
+            </label>
+            <select
+              id="kubernetes-workload-kind"
+              className="field__input field__select"
+              value={workloadKind}
+              onChange={(e) => onChange({ ...value, workloadKind: e.target.value as FilesWorkloadKind })}
+            >
+              {filesWorkloadKinds.map((option) => (
+                <option key={option} value={option}>
+                  {t(`workloadKind.${option}`)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label className="field__label" htmlFor="kubernetes-workload">
+              {t('kubernetesFilesSource.workload')}
+            </label>
+            <input
+              id="kubernetes-workload"
+              className="field__input field__input--path"
+              value={workloadName}
+              onChange={(e) => onChange({ ...value, workloadName: e.target.value })}
+              spellCheck={false}
+            />
+          </div>
         </div>
+      ) : (
         <div className="field">
           <label className="field__label" htmlFor="kubernetes-workload">
             {t('kubernetesFilesSource.workload')}
           </label>
-          {workloads.problem ? (
-            // Can't be listed, say for lack of permission: typed in instead.
-            <input
-              id="kubernetes-workload"
-              className="field__input field__input--path"
-              value={value.workloadName}
-              onChange={(e) => onChange({ ...value, workloadName: e.target.value })}
-              spellCheck={false}
-            />
-          ) : (
-            <select
-              id="kubernetes-workload"
-              className="field__input field__select"
-              value={value.workloadName}
-              onChange={(e) => onChange({ ...value, workloadName: e.target.value })}
-            >
-              {!value.workloadName && (
-                <option value="">{t(workloads.items ? 'kubernetesFilesSource.workload.choose' : 'kubernetesFilesSource.workload.loading')}</option>
-              )}
-              {choices.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
-          )}
+          <select
+            id="kubernetes-workload"
+            className="field__input field__select"
+            value={workloadName ? workloadKey({ kind: workloadKind, name: workloadName }) : ''}
+            onChange={(e) => {
+              const workload = choices.find((choice) => workloadKey(choice) === e.target.value)
+              if (workload) onChange({ ...value, workloadKind: workload.kind, workloadName: workload.name })
+            }}
+          >
+            {!workloadName && (
+              <option value="">{t(workloads.items ? 'kubernetesFilesSource.workload.choose' : 'kubernetesFilesSource.workload.loading')}</option>
+            )}
+            {filesWorkloadKinds.map((kind) => {
+              const ofKind = choices.filter((choice) => choice.kind === kind)
+              return (
+                ofKind.length > 0 && (
+                  <optgroup key={kind} label={t(`workloadGroup.${kind}`)}>
+                    {ofKind.map((workload) => (
+                      <option key={workloadKey(workload)} value={workloadKey(workload)}>
+                        {workload.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )
+              )
+            })}
+          </select>
         </div>
-      </div>
+      )}
       {workloadHint && <span className="field__hint">{workloadHint}</span>}
-      <label className="field">
-        <span className="field__label">{t('kubernetesFilesSource.path')}</span>
-        <input
-          className="field__input field__input--path"
+      <div className="field">
+        <label className="field__label" htmlFor={pathId}>
+          {t('kubernetesFilesSource.path')}
+        </label>
+        {/* Only suggestions: where the Workload's volumes are mounted. Any folder can be typed in. */}
+        <ComboBox
+          id={pathId}
+          className="field__input--path"
           value={value.path}
           placeholder="/var/log"
-          onChange={(e) => onChange({ ...value, path: e.target.value })}
-          spellCheck={false}
+          options={selected?.mountPaths ?? []}
+          onChange={(path) => onChange({ ...value, path })}
         />
         <span className="field__hint">{t('kubernetesFilesSource.path.hint')}</span>
-      </label>
+      </div>
     </>
   )
 }
@@ -447,7 +468,7 @@ export const sourceTypeUi: SourceTypeUis = {
       bucket: '',
       prefix: '',
       region: '',
-      pathStyle: false,
+      pathStyle: true,
       auth: 'keys',
       accessKeyId: '',
       secretAccessKey: '',

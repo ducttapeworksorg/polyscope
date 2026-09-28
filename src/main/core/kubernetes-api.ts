@@ -94,7 +94,7 @@ export const apisFor = (config: KubeConfig): KubernetesApis => ({
   batch: config.makeApiClient(BatchV1Api)
 })
 
-const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
+export const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 
 /** The names of listed objects, sorted. */
 export const sortedNames = (items: { metadata?: { name?: string } }[]) =>

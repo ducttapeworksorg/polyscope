@@ -22,7 +22,7 @@ interface ToggleProps {
   children: ReactNode
 }
 
-function Toggle({ pressed, disabled, tooltip, onToggle, children }: ToggleProps) {
+export function Toggle({ pressed, disabled, tooltip, onToggle, children }: ToggleProps) {
   return (
     <button type="button" className="log-toolbar__toggle" aria-pressed={pressed} disabled={disabled} title={tooltip} onClick={onToggle}>
       {children}

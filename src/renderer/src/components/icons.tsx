@@ -102,6 +102,14 @@ export const DetailsIcon = () => (
   </svg>
 )
 
+/** A page of lines with a narrow overview strip down its side, for showing or hiding the minimap. */
+export const MinimapIcon = () => (
+  <svg {...base}>
+    <rect x="2" y="2.5" width="12" height="11" rx="1.5" />
+    <path d="M4.5 5.5h3.5M4.5 8h4M4.5 10.5h2.5M10.75 2.5v11" />
+  </svg>
+)
+
 export const PlusIcon = () => (
   <svg {...base}>
     <path d="M8 3v10M3 8h10" />
@@ -149,6 +157,14 @@ export const UnlinkIcon = () => (
     <path d="M7 4.5l1.6-1.6a2.5 2.5 0 0 1 3.5 3.5L10.5 8" />
     <path d="M9 11.5l-1.6 1.6a2.5 2.5 0 0 1-3.5-3.5L5.5 8" />
     <path d="M2.25 5.5h1.5M5.5 2.25v1.5M13.75 10.5h-1.5M10.5 13.75v-1.5" />
+  </svg>
+)
+
+/** Half dark, half light: switches between the themes. */
+export const ThemeIcon = () => (
+  <svg {...base}>
+    <circle cx="8" cy="8" r="5.75" />
+    <path d="M8 2.25a5.75 5.75 0 0 0 0 11.5z" fill="currentColor" />
   </svg>
 )
 

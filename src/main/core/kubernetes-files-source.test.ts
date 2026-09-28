@@ -143,12 +143,16 @@ describe.skipIf(!hasTestCluster)('Kubernetes Files against the test cluster', ()
       expect(await core.listKubeNamespaces(context)).toEqual(expect.arrayContaining([testFilesNamespace, 'default']))
     })
 
-    it('lists a namespace’s Workloads of each kind, by name', async () => {
+    it('lists a namespace’s Workloads of every kind, by kind then name, with where their volumes are mounted', async () => {
       const { context, namespace } = testKubernetesFilesSource()
 
-      expect(await core.listKubeWorkloads(context, namespace, 'Deployment')).toEqual(['files-busybox', 'files-pair', 'files-rollout', 'files-shellless'])
-      expect(await core.listKubeWorkloads(context, namespace, 'StatefulSet')).toEqual(['files-coreutils'])
-      expect(await core.listKubeWorkloads(context, namespace, 'DaemonSet')).toEqual([])
+      expect(await core.listKubeWorkloads(context, namespace)).toEqual([
+        { kind: 'Deployment', name: 'files-busybox', mountPaths: [] },
+        { kind: 'Deployment', name: 'files-pair', mountPaths: [] },
+        { kind: 'Deployment', name: 'files-rollout', mountPaths: [] },
+        { kind: 'Deployment', name: 'files-shellless', mountPaths: ['/data'] },
+        { kind: 'StatefulSet', name: 'files-coreutils', mountPaths: [] }
+      ])
     })
   })
 
@@ -285,6 +289,14 @@ describe.skipIf(!hasTestCluster)('Kubernetes Files against the test cluster', ()
 })
 
 describe.skipIf(!hasRestrictedContext)('Kubernetes Files permission errors against the test cluster', () => {
+  it('says what’s missing when no kind of Workload may be listed', async () => {
+    const core = createCore()
+    // The restricted ServiceAccount has no permissions at all in the Files namespace.
+    const { context } = restrictedKubernetesFilesSource()
+
+    await expect(core.listKubeWorkloads(context, testFilesNamespace)).rejects.toMatchObject({ code: 'MISSING_PERMISSION' })
+  })
+
   it('says exec is the permission missing', async () => {
     const core = createCore()
     // The restricted ServiceAccount may list the Logs namespace's Deployments and pods, but not exec into them.

@@ -17,9 +17,11 @@ export interface Settings {
   theme: Theme
   /** Whether tree rows show their size and modified time; toggled from the sidebar. */
   showTreeDetails: boolean
+  /** Whether the viewer shows a minimap of the whole file or log beside it; toggled from the viewer's toolbar. */
+  showMinimap: boolean
 }
 
-export type NumberSetting = Exclude<keyof Settings, 'theme' | 'showTreeDetails'>
+export type NumberSetting = Exclude<keyof Settings, 'theme' | 'showTreeDetails' | 'showMinimap'>
 
 /** The limits measured in bytes, which have to agree with one another. */
 export const sizeSettings = ['largeFileThreshold', 'openAnywayLimit', 'cacheSizeCap'] as const satisfies NumberSetting[]
@@ -34,7 +36,8 @@ export const defaultSettings: Readonly<Settings> = {
   cacheSizeCap: 2048 * MB,
   defaultLastNLines: 10_000,
   theme: 'dark',
-  showTreeDetails: true
+  showTreeDetails: true,
+  showMinimap: true
 }
 
 export type SettingProblem =
@@ -66,6 +69,7 @@ export function settingProblems(settings: Settings): SettingProblems {
   }
   if (!themes.includes(settings.theme)) problems.theme = 'notATheme'
   if (typeof settings.showTreeDetails !== 'boolean') problems.showTreeDetails = 'notTrueOrFalse'
+  if (typeof settings.showMinimap !== 'boolean') problems.showMinimap = 'notTrueOrFalse'
   // Limits are only compared once each is a number at all.
   if (!problems.openAnywayLimit && !problems.largeFileThreshold && settings.openAnywayLimit < settings.largeFileThreshold) {
     problems.openAnywayLimit = 'belowLargeFileThreshold'

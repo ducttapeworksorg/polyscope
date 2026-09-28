@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { sourceTypeIds, type Environment, type NewSource, type SourceInfo } from '@shared/core-api'
+import { sourceTypeIds, type Environment, type NewSource, type SourceInfo, type SourceTypeId } from '@shared/core-api'
 import { core, describeError } from '../core-client'
 import { environmentOf } from '../environments'
 import { t } from '../i18n'
@@ -75,30 +75,24 @@ export function SourceDialog({ editing, environments, onManageEnvironments, onSa
         <h2 className="dialog__title">{title}</h2>
 
         {!editing && (
-          <fieldset className="type-picker">
-            <legend className="field__label">{t('sourceDialog.type')}</legend>
-            {sourceTypeIds.map((type) => {
-              const { Icon, label, hint } = uiFor(type)
-              return (
-                <label key={type} className="type-picker__option">
-                  <input
-                    type="radio"
-                    name="source-type"
-                    value={type}
-                    checked={settings.type === type}
-                    onChange={() => change(labelled({ ...uiFor(type).blank(), name: settings.name }, settings.environmentId))}
-                  />
-                  <span className="type-picker__icon">
-                    <Icon />
-                  </span>
-                  <span className="type-picker__text">
-                    <span className="type-picker__label">{t(label)}</span>
-                    <span className="type-picker__hint">{t(hint)}</span>
-                  </span>
-                </label>
-              )
-            })}
-          </fieldset>
+          <label className="field">
+            <span className="field__label">{t('sourceDialog.type')}</span>
+            <select
+              className="field__input field__select"
+              value={settings.type}
+              onChange={(e) => {
+                const type = e.target.value as SourceTypeId
+                change(labelled({ ...uiFor(type).blank(), name: settings.name }, settings.environmentId))
+              }}
+            >
+              {sourceTypeIds.map((type) => (
+                <option key={type} value={type}>
+                  {t(uiFor(type).label)}
+                </option>
+              ))}
+            </select>
+            <span className="field__hint">{t(ui.hint)}</span>
+          </label>
         )}
 
         <label className="field">

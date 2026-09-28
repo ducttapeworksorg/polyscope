@@ -7,7 +7,7 @@ import { t } from '../i18n'
 import { targetOf, uiFor } from '../source-types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
-import { DetailsIcon, DuplicateIcon, GearIcon, PencilIcon, PlusIcon, TrashIcon, UnlinkIcon } from './icons'
+import { DetailsIcon, DuplicateIcon, GearIcon, PencilIcon, PlusIcon, ThemeIcon, TrashIcon, UnlinkIcon } from './icons'
 import { SourceDialog } from './SourceDialog'
 import { SourceTree, type SourceAction } from './SourceTree'
 
@@ -35,6 +35,8 @@ interface Props {
   showDetails: boolean
   onToggleDetails(): void
   theme: Theme
+  /** Switches between the dark and light themes. */
+  onToggleTheme(): void
 }
 
 interface Group {
@@ -74,7 +76,7 @@ const settingsShortcut = navigator.userAgent.includes('Mac') ? '⌘,' : 'Ctrl+,'
 
 export function Sidebar(props: Props) {
   const { sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile, onOpenLog, onFollowFile, onOpenSettings } = props
-  const { showDetails, onToggleDetails, theme, environments, onManageEnvironments } = props
+  const { showDetails, onToggleDetails, theme, onToggleTheme, environments, onManageEnvironments } = props
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const { menu, open: openContextMenu, close: closeMenu } = useContextMenu<{ label: string; items: MenuItem[] }>()
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
@@ -194,6 +196,15 @@ export function Sidebar(props: Props) {
               <PlusIcon />
             </button>
           )}
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={t(theme === 'dark' ? 'sidebar.lightTheme' : 'sidebar.darkTheme')}
+            title={t(theme === 'dark' ? 'sidebar.lightTheme' : 'sidebar.darkTheme')}
+            onClick={onToggleTheme}
+          >
+            <ThemeIcon />
+          </button>
           <button
             type="button"
             className="icon-button"

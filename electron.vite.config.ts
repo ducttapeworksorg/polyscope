@@ -7,7 +7,14 @@ const shared = { '@shared': resolve(__dirname, 'src/shared') }
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
-    resolve: { alias: shared }
+    resolve: { alias: shared },
+    build: {
+      rollupOptions: {
+        // Optional native add-ons of `ws` (used by @kubernetes/client-node). `ws` requires them
+        // inside try/catch and falls back when they're absent; bundling turns that into a throw.
+        external: ['bufferutil', 'utf-8-validate']
+      }
+    }
   },
   preload: {
     plugins: [externalizeDepsPlugin()],

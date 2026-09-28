@@ -824,9 +824,9 @@ export function createCore(options: CoreOptions = {}): Core {
       return listNamespaces(kubeConfigFor(contextOf(context)))
     },
 
-    async listKubeWorkloads(context, namespace, kind) {
+    async listKubeWorkloads(context, namespace) {
       const cluster = clusterOf({ context, namespace })
-      return listWorkloads(kubeConfigFor(cluster.context), cluster.namespace, workloadKindOf(kind))
+      return listWorkloads(kubeConfigFor(cluster.context), cluster.namespace)
     },
 
     async getSettings() {

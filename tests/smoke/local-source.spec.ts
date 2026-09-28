@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
@@ -14,7 +14,7 @@ const launch = () =>
 async function addSource(window: Page, name: string, rootPath: string, environment?: string) {
   await window.getByRole('navigation').getByRole('button', { name: 'Add Source' }).first().click()
   const dialog = window.getByRole('dialog', { name: 'Add Source' })
-  await expect(dialog.getByRole('radio', { name: /Local Filesystem/ })).toBeChecked()
+  await expect(dialog.getByLabel('Source Type')).toHaveValue('local')
   await dialog.getByLabel('Name', { exact: true }).fill(name)
   await dialog.getByLabel('Root path').fill(rootPath)
   if (environment) await dialog.getByLabel('Environment').selectOption({ label: environment })
@@ -312,6 +312,84 @@ test('label a Source with an Environment, shown on its sidebar row, tabs and the
   await expect(badge).toHaveCount(0)
   await expect(segment).toHaveCount(0)
   await expect(tab).toBeVisible()
+})
+
+test('follow a file that isn’t open yet, with Follow shown on, and stop following it', async () => {
+  const window = await app.firstWindow()
+  const logFile = join(dir, 'root', 'logs', 'app.log')
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  await window.getByRole('treeitem', { name: 'app.log' }).click({ button: 'right' })
+  await window.getByRole('menuitem', { name: 'Follow' }).click()
+
+  const follow = window.getByRole('button', { name: 'Follow', exact: true })
+  const editor = window.getByTestId('editor')
+  await expect(follow).toHaveAttribute('aria-pressed', 'true')
+  await expect(editor).toContainText('INFO hello from polyscope')
+  await appendFile(logFile, 'INFO written while followed\n')
+  await expect(editor).toContainText('INFO written while followed')
+
+  await follow.click()
+  await expect(follow).toHaveAttribute('aria-pressed', 'false')
+  await appendFile(logFile, 'INFO written after\n')
+  await window.waitForTimeout(3000)
+  await expect(editor).not.toContainText('INFO written after')
+})
+
+test('wrap a file’s long lines, and hide the minimap for good', async () => {
+  // One long line and one short one, with no newline after it, so there are two lines until wrapped.
+  await writeFile(join(dir, 'root', 'logs', 'long.txt'), `${'word '.repeat(400)}\nshort`)
+  const window = await app.firstWindow()
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  await window.getByRole('treeitem', { name: 'long.txt' }).click()
+
+  const editor = window.getByTestId('editor')
+  const lines = editor.locator('.view-line')
+  const minimap = editor.locator('.minimap')
+  const wrap = window.getByRole('button', { name: 'Wrap', exact: true })
+  const minimapToggle = window.getByRole('button', { name: 'Minimap', exact: true })
+  await expect(lines).toHaveCount(2)
+  await expect(wrap).toHaveAttribute('aria-pressed', 'false')
+  await expect(minimapToggle).toHaveAttribute('aria-pressed', 'true')
+  await expect(minimap).toBeVisible()
+
+  // The long line takes several rows once wrapped.
+  await wrap.click()
+  await expect(wrap).toHaveAttribute('aria-pressed', 'true')
+  await expect.poll(() => lines.count()).toBeGreaterThan(2)
+  await wrap.click()
+  await expect(lines).toHaveCount(2)
+
+  await minimapToggle.click()
+  await expect(minimapToggle).toHaveAttribute('aria-pressed', 'false')
+  await expect(minimap).toBeHidden()
+
+  // Every viewer opened since goes without it too, a file or a followed log.
+  await window.getByRole('treeitem', { name: 'long.txt' }).dblclick()
+  await window.getByRole('treeitem', { name: 'app.log' }).dblclick()
+  await expect(editor).toContainText('INFO hello from polyscope')
+  await expect(minimap).toBeHidden()
+  await window.getByRole('treeitem', { name: 'app.log' }).click({ button: 'right' })
+  await window.getByRole('menuitem', { name: 'Follow' }).click()
+  await expect(window.getByRole('button', { name: 'Follow', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(minimap).toBeHidden()
+  // …and so do the tabs open already.
+  await window.getByRole('tab', { name: 'long.txt' }).click()
+  await expect(editor).toContainText('word word')
+  await expect(minimap).toBeHidden()
+
+  await app.close()
+  app = await launch()
+  const relaunched = await app.firstWindow()
+  await relaunched.getByRole('treeitem', { name: 'Fixture' }).click()
+  await relaunched.getByRole('treeitem', { name: 'logs' }).click()
+  await relaunched.getByRole('treeitem', { name: 'long.txt' }).click()
+  await expect(relaunched.getByRole('button', { name: 'Minimap', exact: true })).toHaveAttribute('aria-pressed', 'false')
+  await expect(relaunched.getByTestId('editor').locator('.view-line').first()).toBeVisible()
+  await expect(relaunched.getByTestId('editor').locator('.minimap')).toBeHidden()
 })
 
 test('start maximized, and resize the sidebar by dragging its edge, remembered after a relaunch', async () => {

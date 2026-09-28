@@ -63,3 +63,19 @@ test('change settings and the theme, and find them again after a relaunch', asyn
   await expect(reopened.getByLabel('Default “Last N lines”')).toHaveValue('5000')
   await expect(reopened.getByRole('radio', { name: 'Light' })).toBeChecked()
 })
+
+test('switch the theme from the sidebar, and find it again after a relaunch', async () => {
+  const window = await app.firstWindow()
+  const html = window.locator('html')
+  await expect(html).toHaveAttribute('data-theme', 'dark')
+
+  await window.getByRole('button', { name: 'Switch to the light theme' }).click()
+  await expect(html).toHaveAttribute('data-theme', 'light')
+
+  await app.close()
+  app = await launch()
+  const relaunched = await app.firstWindow()
+  await expect(relaunched.locator('html')).toHaveAttribute('data-theme', 'light')
+  await relaunched.getByRole('button', { name: 'Switch to the dark theme' }).click()
+  await expect(relaunched.locator('html')).toHaveAttribute('data-theme', 'dark')
+})

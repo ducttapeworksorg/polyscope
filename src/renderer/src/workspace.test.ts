@@ -182,6 +182,22 @@ describe('a tab whose pod is gone', () => {
   })
 })
 
+describe('opening a followed log', () => {
+  const log = { view: 'log', of: 'file', path: 'a', name: 'a', previous: false, lastNLines: 10, timestamps: false, content: '' } as const
+
+  it('shows its Follow on, in a new tab or in place of the preview', () => {
+    const fresh = openTab(emptyWorkspace, { key: 'a', source, file: { ...log, followId: 'f' } })
+    expect(fresh.tabs[0]?.follow).toEqual({ followId: 'f', paused: false })
+
+    const previewed = openTab(openTab(emptyWorkspace, tab('b')), { key: 'a', source, file: { ...log, followId: 'g' } })
+    expect(previewed.tabs.map((open) => [open.key, open.follow])).toEqual([['a', { followId: 'g', paused: false }]])
+  })
+
+  it('leaves a log that isn’t followed without one', () => {
+    expect(openTab(emptyWorkspace, { key: 'a', source, file: log }).tabs[0]?.follow).toBeUndefined()
+  })
+})
+
 describe('offering to Follow a tab’s file', () => {
   const s3: SourceInfo = {
     id: 'b',

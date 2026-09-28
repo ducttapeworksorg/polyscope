@@ -3,7 +3,7 @@ import { environmentOf, environmentStyle } from '../environments'
 import { canFollowFile, isLog, tabName, type OpenTab } from '../workspace'
 import { t } from '../i18n'
 import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
-import { CloseIcon, FileIcon, LogIcon, ReloadIcon } from './icons'
+import { CloseIcon, FileIcon, LogIcon, MinimapIcon, ReloadIcon } from './icons'
 
 interface Props {
   tabs: OpenTab[]
@@ -18,9 +18,13 @@ interface Props {
   onClose(key: string): void
   onCloseOthers(key: string): void
   onCloseAll(): void
+  /** Whether viewers show a minimap; a setting, the same for every tab, open now or later. */
+  minimap: boolean
+  onToggleMinimap(): void
 }
 
-export function Tabs({ tabs, activeKey, environments, onActivate, onPin, onReload, onFollow, onClose, onCloseOthers, onCloseAll }: Props) {
+export function Tabs(props: Props) {
+  const { tabs, activeKey, environments, onActivate, onPin, onReload, onFollow, onClose, onCloseOthers, onCloseAll, minimap, onToggleMinimap } = props
   const { menu, open: openMenu, close: closeMenu } = useContextMenu<{ tab: OpenTab }>()
 
   if (tabs.length === 0) return null
@@ -77,6 +81,16 @@ export function Tabs({ tabs, activeKey, environments, onActivate, onPin, onReloa
       </div>
       {activeKey && (
         <div className="tabs__actions">
+          <button
+            type="button"
+            className="icon-button icon-button--toggle"
+            aria-label={t('tabs.minimap')}
+            aria-pressed={minimap}
+            title={t('tabs.minimap')}
+            onClick={onToggleMinimap}
+          >
+            <MinimapIcon />
+          </button>
           <button
             type="button"
             className="icon-button"

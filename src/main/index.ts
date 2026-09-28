@@ -42,10 +42,17 @@ function createWindow(theme: Theme): void {
     }
   })
 
-  mainWindow.once('ready-to-show', () => {
-    mainWindow?.maximize()
-    mainWindow?.show()
-  })
+  // Shown once it has painted; ready-to-show sometimes never comes, leaving the window hidden for good, so
+  // the page finishing loading shows it too. The background colour matches the theme, so there's no flash.
+  let shown = false
+  const show = () => {
+    if (shown || !mainWindow) return
+    shown = true
+    mainWindow.show()
+    mainWindow.maximize()
+  }
+  mainWindow.once('ready-to-show', show)
+  mainWindow.webContents.once('did-finish-load', show)
   mainWindow.on('closed', () => (mainWindow = null))
 
   // The renderer never navigates; anything that tries to is sent to the OS browser.

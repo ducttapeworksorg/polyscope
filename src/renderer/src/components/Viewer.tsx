@@ -19,6 +19,8 @@ interface Props {
   followFeed: FollowFeed
   /** Told how many lines a followed log's view holds after new ones are added, by Follow. */
   onLineCount(followId: string, count: number): void
+  /** Whether the editor shows a minimap beside the text. */
+  minimap: boolean
 }
 
 /** What the editor shows for a tab, or null when it shows a placeholder instead: a binary file, a log too large to show. */
@@ -59,7 +61,7 @@ function appendLines(model: monaco.editor.ITextModel, lines: string[], cap: Last
  * One read-only Monaco editor; each tab keeps its own model and scroll/cursor state. Binary files, and logs
  * too large to show whole, get a placeholder.
  */
-export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileThreshold, followFeed, onLineCount }: Props) {
+export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileThreshold, followFeed, onLineCount, minimap }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const modelsRef = useRef(new Map<string, TabModel>())
@@ -76,7 +78,7 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
       padding: { top: 10 },
       scrollBeyondLastLine: false,
       renderLineHighlight: 'all',
-      minimap: { enabled: true, renderCharacters: false },
+      minimap: { enabled: minimap, renderCharacters: false },
       stickyScroll: { enabled: false },
       model: null
     })
@@ -94,6 +96,10 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
       editorRef.current = null
     }
   }, [])
+
+  useEffect(() => {
+    editorRef.current!.updateOptions({ minimap: { enabled: minimap } })
+  }, [minimap])
 
   useEffect(() => {
     const editor = editorRef.current!
@@ -146,7 +152,9 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
       entry.model.setValue(shownContent({ content: entry.timestamped.lines.join('\n'), timestamps: true }, utc))
     }
     if (fresh || !entry.detach) followInto(entry, activeTab)
-    editor.updateOptions({ wordWrap: activeTab.file.view === 'log' && activeTab.wrap ? 'on' : 'off' })
+    // Hex dumps never wrap: their columns would break.
+    const wraps = (activeTab.file.view === 'log' || activeTab.file.view === 'editor') && activeTab.wrap
+    editor.updateOptions({ wordWrap: wraps ? 'on' : 'off' })
     if (entry.model.getLanguageId() !== content.language) monaco.editor.setModelLanguage(entry.model, content.language)
     // A log's latest lines are at its end, so that's where it opens, and where new lines take the reader.
     if (activeTab.file.view === 'log' && (fresh || !entry.viewState)) editor.revealLine(entry.model.getLineCount())

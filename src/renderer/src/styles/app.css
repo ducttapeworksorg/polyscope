@@ -197,6 +197,14 @@ body.is-resizing {
   color: var(--text);
 }
 
+.icon-button--toggle[aria-pressed='false']:not(:hover) {
+  color: var(--text-faint);
+}
+
+.icon-button--toggle[aria-pressed='true'] {
+  color: var(--text);
+}
+
 .icon-button--danger:hover {
   color: var(--danger);
 }
@@ -382,63 +390,6 @@ body.is-resizing {
   margin-top: 4px;
 }
 
-.type-picker {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.type-picker > legend {
-  margin-bottom: 4px;
-  padding: 0;
-}
-
-.type-picker__option {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--slate-600);
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.type-picker__option:has(:checked) {
-  border-color: var(--glint);
-  background: var(--slate-800);
-}
-
-.type-picker__option:has(:focus-visible) {
-  outline: 1px solid var(--glint);
-}
-
-/* The whole card is the control; the radio itself only carries state and focus. */
-.type-picker__option input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.type-picker__icon {
-  display: inline-grid;
-  color: var(--text-dim);
-}
-
-.type-picker__text {
-  display: grid;
-}
-
-.type-picker__label {
-  font-weight: 600;
-}
-
-.type-picker__hint {
-  color: var(--text-dim);
-  font-size: var(--text-sm);
-}
-
 .field {
   display: grid;
   gap: 4px;
@@ -490,6 +441,76 @@ body.is-resizing {
   width: 14ch;
   font-family: var(--font-mono);
   font-size: var(--text-sm);
+}
+
+/* A text field with suggestions: the chevron opens them all, whatever is typed. */
+.combo-box {
+  position: relative;
+}
+
+.combo-box__input {
+  padding-right: 26px;
+}
+
+.combo-box__toggle {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 0 3px 3px 0;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.combo-box__toggle:disabled {
+  visibility: hidden;
+}
+
+.combo-box__toggle svg {
+  transform: rotate(90deg);
+}
+
+/* Fixed, as the dialog around it clips what overflows; placed under the field by the component. */
+.combo-box__list {
+  position: fixed;
+  z-index: 10;
+  max-height: 220px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--slate-600);
+  border-radius: 6px;
+  background: var(--slate-800);
+  box-shadow: 0 8px 24px var(--shadow);
+  list-style: none;
+}
+
+.combo-box__option {
+  display: flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.combo-box__option.is-current {
+  color: var(--glint);
+}
+
+.combo-box__option[aria-selected='true'] {
+  background: var(--slate-700);
 }
 
 /* Two short fields side by side, like an S3 Source's bucket and region. */

@@ -14,6 +14,7 @@ import type {
 import type { Settings, Theme } from '@shared/settings'
 import { EnvironmentsDialog } from './components/EnvironmentsDialog'
 import { ApertureMark } from './components/icons'
+import { FileToolbar } from './components/FileToolbar'
 import { LogToolbar } from './components/LogToolbar'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Sidebar } from './components/Sidebar'
@@ -230,10 +231,11 @@ export function App() {
   const openFile = (source: SourceInfo, node: EntryNode, options?: { pinned: boolean }) =>
     openInTab(source, node, options, () => core.openFile(source.id, node.path))
 
+  /** Opens a container's log Following it, as it's live; a Previous Log has ended, so there's nothing to follow. */
   const openLog = (source: SourceInfo, node: ContainerNode | PreviousLogNode, options?: { pinned: boolean }) => {
     const log =
       node.kind === 'previousLog' ? { path: node.path, name: node.container, previous: true } : { path: node.path, name: node.name, previous: false }
-    return openInTab(source, { path: log.path, name: tabName(log) }, options, () => readLog(source.id, { of: 'logStream', ...log }))
+    return openInTab(source, { path: log.path, name: tabName(log) }, options, () => readLog(source.id, { of: 'logStream', ...log }, {}, !log.previous))
   }
 
   /**
@@ -370,7 +372,7 @@ export function App() {
     if (tab) setWorkspace((ws) => setLogView(ws, key, { utc: !tab.utc }))
   }
 
-  /** Wraps a log tab's long lines, or stops wrapping them. */
+  /** Wraps a log tab's (or an open file's) long lines, or stops wrapping them. */
   const toggleWrap = (key: string) => {
     const tab = tabs.find((open) => open.key === key)
     if (tab) setWorkspace((ws) => setLogView(ws, key, { wrap: !tab.wrap }))
@@ -379,6 +381,16 @@ export function App() {
   // The new value arrives through onSettingsChanged; if it can't be saved, the toggle stays as it was.
   const toggleTreeDetails = async () => {
     if (settings) await core.updateSettings({ showTreeDetails: !settings.showTreeDetails }).catch(() => undefined)
+  }
+
+  // Like the tree details: the new value arrives through onSettingsChanged.
+  const toggleMinimap = async () => {
+    if (settings) await core.updateSettings({ showMinimap: !settings.showMinimap }).catch(() => undefined)
+  }
+
+  // Saved like any setting, so it lasts; the new theme arrives through onSettingsChanged.
+  const toggleTheme = async () => {
+    if (settings) await core.updateSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' }).catch(() => undefined)
   }
 
   if (!settings) return null
@@ -406,6 +418,7 @@ export function App() {
         showDetails={settings.showTreeDetails}
         onToggleDetails={() => void toggleTreeDetails()}
         theme={previewTheme ?? settings.theme}
+        onToggleTheme={() => void toggleTheme()}
       />
       <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />
 
@@ -448,6 +461,8 @@ export function App() {
           onClose={(key) => setWorkspace((ws) => closeTab(ws, key))}
           onCloseOthers={(key) => setWorkspace((ws) => closeOtherTabs(ws, key))}
           onCloseAll={() => setWorkspace(closeAllTabs)}
+          minimap={settings.showMinimap}
+          onToggleMinimap={() => void toggleMinimap()}
         />
         {openError && (
           <p className="workbench__error" role="alert">
@@ -488,6 +503,9 @@ export function App() {
             onToggleWrap={() => toggleWrap(activeTab.key)}
           />
         )}
+        {activeTab && (activeTab.file.view === 'editor' || activeTab.file.view === 'hex') && (
+          <FileToolbar tab={activeTab} onToggleWrap={() => toggleWrap(activeTab.key)} />
+        )}
         <div className="viewer">
           <Viewer
             tabs={tabs}
@@ -497,6 +515,7 @@ export function App() {
             largeFileThreshold={settings.largeFileThreshold}
             followFeed={followFeed}
             onLineCount={noteLineCount}
+            minimap={settings.showMinimap}
           />
           {!activeTab && (
             <div className="viewer__empty">

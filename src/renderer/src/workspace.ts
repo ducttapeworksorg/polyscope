@@ -49,7 +49,7 @@ export interface OpenTab {
   follow?: FollowState
   /** Whether a log tab shows its timestamps in UTC rather than local time. */
   utc?: boolean
-  /** Whether a log tab wraps long lines. */
+  /** Whether a log tab, or a file open in the editor, wraps long lines. */
   wrap?: boolean
   /** Set, to the pod's name, when a Kubernetes Files tab's pod turned out to be gone: it shows what was last read from it. */
   podGone?: string
@@ -69,6 +69,9 @@ export interface Workspace {
 
 export const emptyWorkspace: Workspace = { tabs: [], activeKey: null }
 
+/** The Follow a log was read with, if any, running: its tab shows it and stops it when done with it. */
+const followOf = (file: TabContent): FollowState | undefined => ('followId' in file ? { followId: file.followId, paused: false } : undefined)
+
 /**
  * Shows a file: activating its tab if it's open already, otherwise putting it in place of the
  * preview tab or, with none, right after the active tab. Opening as pinned pins it for good.
@@ -79,7 +82,7 @@ export function openTab(ws: Workspace, tab: Pick<OpenTab, 'key' | 'source' | 'fi
     const shown = activateTab(ws, key)
     return pinned ? pinTab(shown, key) : shown
   }
-  const added = { ...tab, pinned }
+  const added = { ...tab, follow: followOf(tab.file), pinned }
   const preview = pinned ? -1 : ws.tabs.findIndex((open) => !open.pinned)
   if (preview >= 0) return { tabs: ws.tabs.with(preview, added), activeKey: key }
   const active = ws.tabs.findIndex((open) => open.key === ws.activeKey)
@@ -133,7 +136,7 @@ export const markPodGone = (ws: Workspace, key: string, pod: string): Workspace 
 
 /** Puts a freshly read log in its tab, with the Follow that goes on from it, if any. Pins the tab. */
 export const reopenLogTab = (ws: Workspace, key: string, file: TabContent): Workspace =>
-  updateTab(ws, key, { file, follow: 'followId' in file ? { followId: file.followId, paused: false } : undefined, pinned: true })
+  updateTab(ws, key, { file, follow: followOf(file), pinned: true })
 
 /** Changes how a log tab is shown or followed, leaving its content as it is. */
 export const setLogView = (ws: Workspace, key: string, change: Partial<Pick<OpenTab, 'follow' | 'utc' | 'wrap'>>): Workspace =>

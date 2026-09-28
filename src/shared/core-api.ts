@@ -67,6 +67,14 @@ export type FilesWorkloadKind = Extract<WorkloadKind, 'Deployment' | 'StatefulSe
 
 export const filesWorkloadKinds: readonly FilesWorkloadKind[] = ['Deployment', 'StatefulSet', 'DaemonSet']
 
+/** A Workload a Kubernetes Files Source can browse, with where volumes are mounted in its browsable containers. */
+export interface KubeWorkload {
+  kind: FilesWorkloadKind
+  name: string
+  /** Absolute, sorted, each once. */
+  mountPaths: string[]
+}
+
 export interface NewKubernetesFilesSource {
   type: 'kubernetesFiles'
   name: string
@@ -604,8 +612,11 @@ export interface CoreApi {
   listKubeContexts(): Promise<KubeContext[]>
   /** The namespaces in a context's cluster, by name. */
   listKubeNamespaces(context: string): Promise<string[]>
-  /** The Workloads of a kind in a namespace of a context's cluster, by name. */
-  listKubeWorkloads(context: string, namespace: string, kind: FilesWorkloadKind): Promise<string[]>
+  /**
+   * The Workloads a Kubernetes Files Source can browse in a namespace of a context's cluster, by kind then name.
+   * Kinds that can't be listed, say for lack of permission, are left out; fails only if none can be.
+   */
+  listKubeWorkloads(context: string, namespace: string): Promise<KubeWorkload[]>
   getSettings(): Promise<Settings>
   /** Changes the given settings, keeping the rest; all of them together must still be valid. */
   updateSettings(changes: Partial<Settings>): Promise<Settings>

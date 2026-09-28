@@ -1,8 +1,8 @@
-import type { KubeConfig, V1Container, V1Pod } from '@kubernetes/client-node'
-import type { FilesWorkloadKind, SourcePath } from '@shared/core-api'
+import type { KubeConfig, V1Container, V1Pod, V1PodSpec } from '@kubernetes/client-node'
+import { filesWorkloadKinds, type FilesWorkloadKind, type KubeWorkload, type SourcePath } from '@shared/core-api'
 import { CoreError } from './core-error'
 import type { FileEntry, FileSource } from './file-source'
-import { apisFor, call, checkNamespace, podsOfWorkload, readWorkload, sortedNames } from './kubernetes-api'
+import { apisFor, byName, call, checkNamespace, podsOfWorkload, readWorkload } from './kubernetes-api'
 import { podShell } from './kubernetes-exec'
 import { isSidecar, podStatusOf } from './pod-status'
 import { createShellFileSource } from './shell-file-source'
@@ -16,8 +16,11 @@ export interface KubernetesFilesTarget {
   path: string
 }
 
-/** The containers of a pod that can be browsed, as they keep running: its sidecars, then its main containers. */
-const browsableContainers = (pod: V1Pod): V1Container[] => [
+/**
+ * The containers of a pod (or a Workload's pod template) that can be browsed, as they keep running: its sidecars,
+ * then its main containers.
+ */
+const browsableContainers = (pod: { spec?: V1PodSpec }): V1Container[] => [
   ...(pod.spec?.initContainers ?? []).filter(isSidecar),
   ...(pod.spec?.containers ?? [])
 ]
@@ -121,13 +124,29 @@ export function createKubernetesFileSource(config: KubeConfig, target: Kubernete
   }
 }
 
-/** The Workloads of a kind in a namespace, by name. */
-export async function listWorkloads(config: KubeConfig, namespace: string, kind: FilesWorkloadKind): Promise<string[]> {
+/** Where volumes are mounted in the browsable containers of a pod (or a Workload's pod template), sorted, each once. */
+export function mountPathsOf(pod: { spec?: V1PodSpec }): string[] {
+  const paths = browsableContainers(pod).flatMap((container) => (container.volumeMounts ?? []).map((mount) => mount.mountPath))
+  return [...new Set(paths)].sort(byName.compare)
+}
+
+/** The Workloads a Kubernetes Files Source can browse in a namespace, by kind then name; see CoreApi.listKubeWorkloads. */
+export async function listWorkloads(config: KubeConfig, namespace: string): Promise<KubeWorkload[]> {
   const { apps } = apisFor(config)
-  const list = {
+  const lists = {
     Deployment: () => apps.listNamespacedDeployment({ namespace }),
     StatefulSet: () => apps.listNamespacedStatefulSet({ namespace }),
     DaemonSet: () => apps.listNamespacedDaemonSet({ namespace })
-  }[kind]
-  return sortedNames((await call(list)).items)
+  }
+  const listed = await Promise.allSettled(
+    filesWorkloadKinds.map(async (kind) => {
+      const { items } = await call<{ items: { metadata?: { name?: string }; spec?: { template: { spec?: V1PodSpec } } }[] }>(lists[kind])
+      return items
+        .flatMap((item) => (item.metadata?.name ? [{ kind, name: item.metadata.name, mountPaths: mountPathsOf(item.spec?.template ?? {}) }] : []))
+        .sort((a, b) => byName.compare(a.name, b.name))
+    })
+  )
+  const failed = listed.find((result) => result.status === 'rejected')
+  if (failed && listed.every((result) => result.status === 'rejected')) throw failed.reason
+  return listed.flatMap((result) => (result.status === 'fulfilled' ? result.value : []))
 }
