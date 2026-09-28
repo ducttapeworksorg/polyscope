@@ -141,3 +141,44 @@ spec:
     - name: counter
       image: busybox:1.36
       command: ['sh', '-c', 'for i in $(seq 1 100); do echo "line $i"; done; sleep 3600000']
+---
+# For permission errors: the context CI makes for this ServiceAccount may list the namespace's Workloads and
+# pods, but not read a StatefulSet by name, nor read any log.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: restricted
+  namespace: polyscope-test
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: restricted
+  namespace: polyscope-test
+rules:
+  - apiGroups: ['']
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [deployments, daemonsets, replicasets]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [statefulsets]
+    verbs: [list]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: restricted
+  namespace: polyscope-test
+subjects:
+  - kind: ServiceAccount
+    name: restricted
+    namespace: polyscope-test
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: restricted

@@ -234,6 +234,7 @@ export const en = {
   'error.NOT_A_FOLDER': 'This is a file, not a folder.',
   'error.NOT_A_FILE': 'This is a folder, not a file.',
   'error.PERMISSION_DENIED': 'You don’t have permission to read this.',
+  'error.MISSING_PERMISSION': 'Missing permission: {message}',
   'error.SYMLINK_LOOP': 'This link leads back to a folder that contains it, so it isn’t expanded.',
   'error.INVALID_RANGE': 'That part of the file can’t be read: {message}',
   'error.INVALID_ORDER': 'That can’t be moved there.',

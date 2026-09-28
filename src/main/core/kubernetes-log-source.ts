@@ -14,6 +14,7 @@ import { CoreError } from './core-error'
 import type { LogConnection, LogFollowOptions, LogReadOptions, LogSource, LogStreamInfo } from './log-source'
 import { certificateCodes, networkCodes } from './network-errors'
 import { containerInstanceOf, isSidecar, podStatusOf, readyCountOf, restartsOf } from './pod-status'
+import { missingPermission } from './rbac'
 
 /** Each group's path segment, which is also its name. */
 const groups = {
@@ -64,7 +65,10 @@ function asCoreError(error: unknown): CoreError {
   if (error instanceof ApiException) {
     const message = serverMessage(error)
     if (error.code === 401) return new CoreError('AUTH_FAILED', message)
-    if (error.code === 403) return new CoreError('PERMISSION_DENIED', message)
+    if (error.code === 403) {
+      const missing = missingPermission(message)
+      return missing ? new CoreError('MISSING_PERMISSION', missing) : new CoreError('PERMISSION_DENIED', message)
+    }
     if (error.code === 404) return new CoreError('NOT_FOUND', message)
     return new CoreError('UNKNOWN', message)
   }
@@ -359,7 +363,7 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
       } catch (error) {
         const { code } = error as CoreError
         if (code === 'NOT_FOUND') throw new CoreError('NAMESPACE_NOT_FOUND', `No namespace named ${namespace}`)
-        if (code !== 'PERMISSION_DENIED') throw error
+        if (code !== 'MISSING_PERMISSION' && code !== 'PERMISSION_DENIED') throw error
       }
     }
   }

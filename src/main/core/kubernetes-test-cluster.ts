@@ -1,5 +1,6 @@
 // Test support: a real cluster (kind in CI) seeded from tests/kind/seed.yaml, named by POLYSCOPE_TEST_KUBE_CONTEXT
 // (a context in the kubeconfig) and POLYSCOPE_TEST_KUBE_NAMESPACE. Tests that need it are skipped without it.
+// POLYSCOPE_TEST_KUBE_RESTRICTED_CONTEXT names a context signed in as the seed's `restricted` ServiceAccount.
 
 import { CoreV1Api } from '@kubernetes/client-node'
 import type { NewKubernetesLogsSource } from '@shared/core-api'
@@ -18,6 +19,17 @@ export const testKubernetesLogsSource = (name = 'Cluster', namespace = testNames
   name,
   context: context ?? '',
   namespace
+})
+
+const restrictedContext = process.env['POLYSCOPE_TEST_KUBE_RESTRICTED_CONTEXT']
+
+/** Whether the test cluster has a restricted context; the permission tests are skipped without one. */
+export const hasRestrictedContext = Boolean(restrictedContext)
+
+/** Settings of a Kubernetes Logs Source signed in as the restricted ServiceAccount. */
+export const restrictedKubernetesLogsSource = (name = 'Restricted', namespace = testNamespace): NewKubernetesLogsSource => ({
+  ...testKubernetesLogsSource(name, namespace),
+  context: restrictedContext ?? ''
 })
 
 /** What the seed's `counter` pod prints, one line each, before it sleeps: `line 1` to `line 100`. */

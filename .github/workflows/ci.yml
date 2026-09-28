@@ -95,6 +95,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       POLYSCOPE_TEST_KUBE_CONTEXT: kind-polyscope
+      POLYSCOPE_TEST_KUBE_RESTRICTED_CONTEXT: kind-polyscope-restricted
       POLYSCOPE_TEST_KUBE_NAMESPACE: polyscope-test
     steps:
       - uses: actions/checkout@v4
@@ -121,6 +122,9 @@ jobs:
           kubectl -n polyscope-test rollout status daemonset/agent --timeout=180s
           kubectl -n polyscope-test wait --for=condition=complete job/migrate job/nightly-manual --timeout=180s
           kubectl -n polyscope-test wait --for=condition=Ready pod/counter --timeout=180s
+          # A context signed in as the seed's restricted ServiceAccount, for the permission errors.
+          kubectl config set-credentials polyscope-restricted --token="$(kubectl -n polyscope-test create token restricted --duration=2h)"
+          kubectl config set-context "$POLYSCOPE_TEST_KUBE_RESTRICTED_CONTEXT" --cluster=kind-polyscope --user=polyscope-restricted
 
       - run: npm ci
 

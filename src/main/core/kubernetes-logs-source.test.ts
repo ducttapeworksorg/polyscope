@@ -5,7 +5,18 @@ import { delimiter, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FollowEvent, LogNode, NewKubernetesLogsSource, TreeNode } from '@shared/core-api'
 import { createCore, type Core } from './core'
-import { counterLines, hasTestCluster, testKubernetesLogsSource, tickerNamespace } from './kubernetes-test-cluster'
+import { kubeConfigFor } from './kubeconfig'
+import { createKubernetesLogSource } from './kubernetes-log-source'
+import { startTestApiServer } from './kubernetes-test-api-server'
+import {
+  counterLines,
+  hasRestrictedContext,
+  hasTestCluster,
+  restrictedKubernetesLogsSource,
+  testKubernetesLogsSource,
+  tickerNamespace
+} from './kubernetes-test-cluster'
+import { startProxy } from './test-network'
 
 let dir: string
 
@@ -246,6 +257,113 @@ describe('opening across Source kinds', () => {
     const source = await core.addSource(offline())
 
     await expect(core.openLog(source.id, 'pods/counter/counter')).rejects.toMatchObject({ code: 'SOURCE_DISCONNECTED' })
+  })
+})
+
+describe('a cluster behind a proxy', () => {
+  // Only the proxy knows this name, so whatever reaches the cluster went through it.
+  const host = 'kube.polyscope.test'
+  let apiServer: Awaited<ReturnType<typeof startTestApiServer>>
+  let proxy: Awaited<ReturnType<typeof startProxy>>
+  let server: string
+
+  beforeEach(async () => {
+    apiServer = await startTestApiServer()
+    proxy = await startProxy({ hosts: { [host]: '127.0.0.1' } })
+    server = `https://${host}:${new URL(apiServer.url).port}`
+    // Left alone by the proxy settings of wherever the tests run.
+    for (const name of ['HTTPS_PROXY', 'https_proxy', 'NO_PROXY', 'no_proxy']) vi.stubEnv(name, '')
+  })
+
+  afterEach(async () => {
+    await proxy.close()
+    await apiServer.close()
+  })
+
+  /** A kubeconfig whose context `fake` points at the stand-in API server by its made-up name, through `proxyUrl` if given. */
+  const fakeCluster = (proxyUrl?: string) =>
+    [
+      'apiVersion: v1',
+      'kind: Config',
+      'current-context: fake',
+      'clusters:',
+      '- name: fake',
+      '  cluster:',
+      `    server: ${server}`,
+      `    certificate-authority: ${JSON.stringify(apiServer.caPath)}`,
+      // The stand-in's certificate is for localhost.
+      '    tls-server-name: localhost',
+      ...(proxyUrl ? [`    proxy-url: ${proxyUrl}`] : []),
+      'users:',
+      '- name: fake',
+      '  user:',
+      '    token: not-a-real-token',
+      'contexts:',
+      '- name: fake',
+      '  context:',
+      '    cluster: fake',
+      '    user: fake'
+    ].join('\n')
+
+  const shop = offline({ context: 'fake', namespace: 'shop' })
+
+  /** Connects to `shop`, opens counter's log and follows it until a new line comes, all of which has to get to the cluster. */
+  async function reachesTheCluster() {
+    const core = createCore()
+    const source = await core.addSource(shop)
+    const updates = followUpdates(core)
+    try {
+      expect(await core.connect(source.id)).toEqual([{ kind: 'group', workloadKind: 'Pod', name: 'pods', path: 'pods' }])
+      expect((await core.openLog(source.id, 'pods/counter/counter')).content).toBe('line 1\nline 2\nline 3')
+      const followed = await core.followLog(source.id, 'pods/counter/counter', { lastNLines: 1 })
+      expect(followed.content).toBe('line 3')
+      await vi.waitFor(() => expect(updates.of(followed.followId)).toEqual(['line 4']))
+    } finally {
+      await core.disconnect(source.id)
+      updates.unsubscribe()
+    }
+    expect(proxy.tunnels).toContain(`${host}:${new URL(server).port}`)
+  }
+
+  it('is reached through the kubeconfig’s proxy-url', async () => {
+    await kubeconfigFiles(fakeCluster(proxy.url))
+
+    await reachesTheCluster()
+  })
+
+  it('is reached through the proxy-url over HTTPS_PROXY', async () => {
+    await kubeconfigFiles(fakeCluster(proxy.url))
+    vi.stubEnv('HTTPS_PROXY', `http://127.0.0.1:${await closedPort()}`)
+
+    await reachesTheCluster()
+  })
+
+  it('is reached through HTTPS_PROXY when the kubeconfig names no proxy', async () => {
+    await kubeconfigFiles(fakeCluster())
+    vi.stubEnv('HTTPS_PROXY', proxy.url)
+
+    await reachesTheCluster()
+  })
+
+  it('is not reached through HTTPS_PROXY when NO_PROXY covers it', async () => {
+    await kubeconfigFiles(fakeCluster())
+    vi.stubEnv('HTTPS_PROXY', proxy.url)
+    vi.stubEnv('NO_PROXY', 'localhost,.polyscope.test')
+    const core = createCore()
+    const source = await core.addSource(shop)
+
+    await expect(core.connect(source.id)).rejects.toMatchObject({ code: 'UNREACHABLE' })
+    expect(proxy.tunnels).toEqual([])
+  })
+
+  it('says which permission the user is missing when the cluster denies a request', async () => {
+    await kubeconfigFiles(fakeCluster(proxy.url))
+    const core = createCore()
+    const source = await core.addSource(offline({ context: 'fake', namespace: 'locked' }))
+    const missing = { code: 'MISSING_PERMISSION', message: 'list pods in namespace locked' }
+
+    await expect(core.connect(source.id)).rejects.toMatchObject(missing)
+    expect(await core.connectionState(source.id)).toMatchObject({ state: 'error', ...missing })
   })
 })
 
@@ -657,5 +775,53 @@ describe.skipIf(!hasTestCluster)('Following a Log Stream against the test cluste
       expect(held).toHaveLength(2)
       expect(held.map((line) => Number(line.slice('tick '.length)))).toEqual([expect.any(Number), expect.any(Number)])
     }, 30_000)
+  })
+})
+
+describe.skipIf(!hasRestrictedContext)('permission errors against the test cluster', () => {
+  let core: Core
+  let sourceId: string
+
+  beforeEach(async () => {
+    core = createCore()
+    sourceId = (await core.addSource(restrictedKubernetesLogsSource())).id
+  })
+
+  afterEach(() => core.disconnect(sourceId))
+
+  const missing = (permission: string | RegExp) => ({ code: 'MISSING_PERMISSION', message: permission })
+
+  it('puts a Source in its Error state with the permission it is missing', async () => {
+    const elsewhere = await core.addSource(restrictedKubernetesLogsSource('Elsewhere', 'default'))
+    // Every group is listed at once; whichever is refused first is the one named.
+    const denied = missing(/^list \S+ in namespace default$/)
+
+    await expect(core.connect(elsewhere.id)).rejects.toMatchObject(denied)
+    expect(await core.connectionState(elsewhere.id)).toMatchObject({ state: 'error', ...denied })
+  })
+
+  it('shows an error node with the permission it is missing', async () => {
+    await core.connect(sourceId)
+
+    expect(await core.expand(sourceId, 'statefulsets/db')).toEqual([
+      { kind: 'error', path: 'statefulsets/db', ...missing('get statefulsets.apps in namespace polyscope-test') }
+    ])
+  })
+
+  it('refuses to open or follow a log with the permission it is missing', async () => {
+    await core.connect(sourceId)
+    const denied = missing('get pods/log in namespace polyscope-test')
+
+    await expect(core.openLog(sourceId, 'pods/counter/counter')).rejects.toMatchObject(denied)
+    await expect(core.followLog(sourceId, 'pods/counter/counter')).rejects.toMatchObject(denied)
+  })
+
+  it('refuses a Follow’s connection with the permission it is missing', async () => {
+    const { context, namespace } = restrictedKubernetesLogsSource()
+    const logSource = createKubernetesLogSource(kubeConfigFor(context), namespace)
+
+    await expect(logSource.followLog('pods/counter/counter', {}, () => undefined)).rejects.toMatchObject(
+      missing('get pods/log in namespace polyscope-test')
+    )
   })
 })

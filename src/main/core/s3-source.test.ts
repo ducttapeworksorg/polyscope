@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NewS3Source, TreeNode } from '@shared/core-api'
 import { createCore } from './core'
 import { createSecretStore } from './secret-store'
-import { startProxy, startTlsFront } from './s3-test-network'
+import { startProxy, startTlsFront } from './test-network'
 import { hasTestStore, seedPrefix, testS3Source } from './s3-test-store'
 
 let dir: string

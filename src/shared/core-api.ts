@@ -400,6 +400,8 @@ export type CoreErrorCode =
   | 'NOT_A_FOLDER'
   | 'NOT_A_FILE'
   | 'PERMISSION_DENIED'
+  /** A Kubernetes RBAC denial; the message says what's missing, e.g. `get pods/log in namespace shop`. */
+  | 'MISSING_PERMISSION'
   | 'SYMLINK_LOOP'
   | 'INVALID_RANGE'
   | 'INVALID_ORDER'

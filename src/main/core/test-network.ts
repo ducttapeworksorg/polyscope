@@ -1,4 +1,4 @@
-// Test support: stand-ins for what lies between Polyscope and an S3 store in a corporate network — a TLS front
+// Test support: stand-ins for what lies between Polyscope and a backend (an S3 store, a cluster) in a corporate network — a TLS front
 // whose certificate comes from a private CA, and a proxy. The CA and certificate are made afresh for each test run
 // and only ever held in memory, bar the CA's certificate (no key) in a temp file for Sources to trust.
 
@@ -121,15 +121,18 @@ export async function startTlsFront(endpoint: string) {
   }
 }
 
-/** An HTTP proxy that tunnels with CONNECT; `tunnels` holds the `host:port` of each tunnel asked for. */
-export async function startProxy() {
+/**
+ * An HTTP proxy that tunnels with CONNECT; `tunnels` holds the `host:port` of each tunnel asked for. It
+ * looks names up in `hosts` first, so it can reach servers by names that only it knows.
+ */
+export async function startProxy({ hosts = {} }: { hosts?: Record<string, string> } = {}) {
   const tunnels: string[] = []
   const server = createHttpServer((_request, response) => response.writeHead(405).end())
   server.on('connect', (request, client: Socket, head: Buffer) => {
     const target = request.url ?? ''
     tunnels.push(target)
     const [host = '', port = '443'] = target.split(/:(?=\d+$)/)
-    const upstream = connect(Number(port), host, () => {
+    const upstream = connect(Number(port), hosts[host] ?? host, () => {
       client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
       upstream.write(head)
       splice(client, upstream)

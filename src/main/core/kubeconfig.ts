@@ -4,6 +4,7 @@ import { delimiter, join } from 'node:path'
 import { KubeConfig } from '@kubernetes/client-node'
 import type { KubeContext } from '@shared/core-api'
 import { CoreError } from './core-error'
+import { proxyFromEnv } from './proxy-env'
 
 const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 
@@ -44,10 +45,19 @@ export async function listKubeContexts(): Promise<KubeContext[]> {
     .sort((a, b) => byName.compare(a.name, b.name))
 }
 
-/** The user's kubeconfig set to `context`; fails if it has no such context. */
+/**
+ * The user's kubeconfig set to `context`; fails if it has no such context. Its cluster goes through its own
+ * `proxy-url`, or else the proxy HTTPS_PROXY / NO_PROXY give it, as they are now.
+ */
 export function kubeConfigFor(context: string): KubeConfig {
   const config = loadKubeConfig()
-  if (!config.getContextObject(context)) throw new CoreError('CONTEXT_NOT_FOUND', `No context named ${context} in the kubeconfig`)
+  const found = config.getContextObject(context)
+  if (!found) throw new CoreError('CONTEXT_NOT_FOUND', `No context named ${context} in the kubeconfig`)
   config.setCurrentContext(context)
+  config.clusters = config.clusters.map((cluster) => {
+    if (cluster.name !== found.cluster || cluster.proxyUrl) return cluster
+    const proxyUrl = proxyFromEnv(cluster.server)
+    return proxyUrl ? { ...cluster, proxyUrl } : cluster
+  })
   return config
 }
