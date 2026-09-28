@@ -3,14 +3,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CoreV1Api } from '@kubernetes/client-node'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { EntryNode, NewKubernetesFilesSource, TreeNode } from '@shared/core-api'
+import type { EntryNode, FollowEvent, NewKubernetesFilesSource, TreeNode } from '@shared/core-api'
 import { createCore, type Core } from './core'
 import { kubeConfigFor } from './kubeconfig'
+import { execInPod } from './kubernetes-exec'
 import {
   hasRestrictedContext,
   hasTestCluster,
   podsNamed,
   restrictedKubernetesFilesSource,
+  seedContainerFolder,
   testFilesNamespace,
   testKubernetesFilesSource,
   testNamespace
@@ -239,6 +241,46 @@ describe.skipIf(!hasTestCluster)('Kubernetes Files against the test cluster', ()
       // Its replacement is there to browse instead.
       await vi.waitFor(async () => expect((await podFolders(core, id)).map((pod) => pod.name)).not.toContain(before), { timeout: 60_000, interval: 1_000 })
     }, 150_000)
+  })
+
+  describe('following a file', () => {
+    /** Runs a script in a pod's app container, `file` being its $1. */
+    const runIn = async (pod: string, script: string, file: string) => {
+      const config = kubeConfigFor(testKubernetesFilesSource().context)
+      const result = await execInPod(config, { namespace: testFilesNamespace, pod, container: 'app' }, ['sh', '-c', script, 'sh', file])
+      if (result.exitCode !== 0) throw new Error(`${script} failed in ${pod}: ${result.stderr}`)
+    }
+
+    it.each([
+      ['busybox', { workloadName: 'files-busybox' }],
+      ['coreutils', { workloadKind: 'StatefulSet', workloadName: 'files-coreutils' }]
+    ] as const)('adds what is written to a file in a %s pod, marking it cut short or rotated', async (_image, changes) => {
+      const [pod] = await podsNamed(changes.workloadName)
+      const seeded = await seedContainerFolder(pod!, { 'app.log': 'one\ntwo\nthree\n' })
+      const events: FollowEvent[] = []
+      const unsubscribe = core.onFollowEvent((event) => events.push(event))
+      try {
+        const { id } = await connected({ ...changes, path: seeded.path })
+        const followed = await core.followFile(id, `${pod}/app.log`, { lastNLines: 2 })
+        const updates = () =>
+          events.filter((e) => e.followId === followed.followId).flatMap((e) => (e.kind === 'lines' ? e.lines : [`<${e.kind}>`]))
+        const eventually = (expected: string[]) => vi.waitFor(() => expect(updates()).toEqual(expected), { timeout: 20_000, interval: 500 })
+        const file = `${seeded.path}/app.log`
+
+        expect(followed.content).toBe('two\nthree')
+        await runIn(pod!, 'printf "four\\nfive\\n" >> "$1"', file)
+        await eventually(['four', 'five'])
+        await runIn(pod!, 'printf "anew\\n" > "$1"', file)
+        await eventually(['four', 'five', '<truncated>', 'anew'])
+        // Longer than what it replaces, so only its identity tells it's another file.
+        await runIn(pod!, 'mv "$1" "$1.1" && printf "rotated in and longer\\n" > "$1"', file)
+        await eventually(['four', 'five', '<truncated>', 'anew', '<rotated>', 'rotated in and longer'])
+        await core.stopFollow(followed.followId)
+      } finally {
+        unsubscribe()
+        await seeded.remove()
+      }
+    }, 90_000)
   })
 })
 

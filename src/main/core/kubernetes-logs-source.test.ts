@@ -553,6 +553,7 @@ describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () 
 
       expect(await core.openLog(sourceId, 'pods/counter/counter', { lastNLines: 10 })).toEqual({
         view: 'log',
+        of: 'logStream',
         path: 'pods/counter/counter',
         name: 'counter',
         pod: 'counter',

@@ -29,6 +29,7 @@ import { core, describeError, describeFailure } from '../core-client'
 import { t } from '../i18n'
 import { formatDateTime, formatRelativeTime, formatSize } from '../i18n/format'
 import { uiFor } from '../source-types'
+import { followsFiles } from '../workspace'
 import type { MenuItem } from './ContextMenu'
 import { EnvironmentBadge } from './EnvironmentBadge'
 import { ChevronIcon, ReloadIcon, WarningIcon } from './icons'
@@ -51,6 +52,8 @@ interface Props {
   onOpenFile(source: SourceInfo, node: EntryNode, options?: { pinned: boolean }): void
   /** Opens a container's Log Stream (or its Previous Log) in the preview tab, or in a tab of its own when pinned. */
   onOpenLog(source: SourceInfo, node: ContainerNode | PreviousLogNode, options?: { pinned: boolean }): void
+  /** Follows a file of a Local or Kubernetes Files Source in a log view. */
+  onFollowFile(source: SourceInfo, node: EntryNode): void
   /** Extra attributes for the Source's own row, e.g. for dragging it. */
   sourceRowProps?: HTMLAttributes<HTMLDivElement>
   /** Extra attributes for the whole tree, e.g. to make it a drop target. */
@@ -133,7 +136,7 @@ function useNow(ticking: boolean) {
 }
 
 export function SourceTree(props: Props) {
-  const { source, connection, onConnect, sourceActions, onContextMenu, selectedKey, onSelect, onOpenFile, onOpenLog } = props
+  const { source, connection, onConnect, sourceActions, onContextMenu, selectedKey, onSelect, onOpenFile, onOpenLog, onFollowFile } = props
   const { sourceRowProps, treeProps, showDetails, theme, environment } = props
   const now = useNow(showDetails)
   const id = useId()
@@ -443,7 +446,10 @@ export function SourceTree(props: Props) {
         status: kubernetes?.kind === 'pod' ? podIndicators(kubernetes) : undefined,
         onActivate: () => (isFolder ? toggle(node.path) : onOpenFile(source, node)),
         onDoubleActivate: isFolder ? undefined : () => onOpenFile(source, node, { pinned: true }),
-        menuItems: isFolder ? [{ label: t('sourceActions.refresh'), onSelect: () => refreshNode(node.path) }] : undefined,
+        menuItems:
+          isFolder ? [{ label: t('sourceActions.refresh'), onSelect: () => refreshNode(node.path) }]
+          : followsFiles(source) ? [{ label: t('tree.follow'), onSelect: () => onFollowFile(source, node) }]
+          : undefined,
         details: showDetails ? details(node) : undefined,
         extra: { title: tooltip(node) }
       })

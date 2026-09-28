@@ -39,6 +39,8 @@ export const core: CoreApi & CoreEvents = {
   openFile: call('openFile'),
   openLog: call('openLog'),
   followLog: call('followLog'),
+  openFileLog: call('openFileLog'),
+  followFile: call('followFile'),
   pauseFollow: call('pauseFollow'),
   resumeFollow: call('resumeFollow'),
   stopFollow: call('stopFollow'),

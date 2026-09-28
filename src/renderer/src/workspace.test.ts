@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { SourceInfo, TextFile } from '@shared/core-api'
 import {
   activateTab,
+  canFollowFile,
   closeAllTabs,
   closeOtherTabs,
   closeTab,
@@ -178,5 +179,50 @@ describe('a tab whose pod is gone', () => {
     const ws = open('a')
 
     expect(markPodGone(ws, 'x', 'web-1')).toBe(ws)
+  })
+})
+
+describe('offering to Follow a tab’s file', () => {
+  const s3: SourceInfo = {
+    id: 'b',
+    type: 's3',
+    name: 'Bucket',
+    host: '',
+    bucket: 'logs',
+    prefix: '',
+    region: 'us-east-1',
+    pathStyle: false,
+    auth: 'keys',
+    accessKeyId: 'key',
+    secretKeySet: true,
+    profile: '',
+    verifyTls: true,
+    caBundlePath: '',
+    proxyUrl: ''
+  }
+  const fileLog = { view: 'log', of: 'file', path: 'a', name: 'a', previous: false, lastNLines: 10, timestamps: false, content: '' } as const
+  const followed = { followId: 'f', paused: false }
+
+  it('offers it for a file open in the editor or in a log view, on a Source whose files grow', () => {
+    expect(canFollowFile({ source, file: file('a') })).toBe(true)
+    expect(canFollowFile({ source, file: fileLog })).toBe(true)
+  })
+
+  it('doesn’t while the file is followed already', () => {
+    expect(canFollowFile({ source, file: { ...fileLog, followId: 'f' }, follow: followed })).toBe(false)
+  })
+
+  it('doesn’t for a file shown as binary or hex, which has no lines', () => {
+    const binary = { ...file('a'), view: 'binary', contentLength: 0 } as const
+    expect(canFollowFile({ source, file: binary })).toBe(false)
+  })
+
+  it('doesn’t for S3 objects, which don’t grow', () => {
+    expect(canFollowFile({ source: s3, file: file('a') })).toBe(false)
+  })
+
+  it('doesn’t for a Log Stream, which has its own Follow', () => {
+    const log = { view: 'log', of: 'logStream', path: 'p', name: 'c', pod: 'p', previous: false, lastNLines: 10, timestamps: false, content: '' } as const
+    expect(canFollowFile({ source, file: log })).toBe(false)
   })
 })

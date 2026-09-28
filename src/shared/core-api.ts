@@ -383,6 +383,8 @@ export type OpenedFile = TextFile | BinaryFile | HexFile
 /** The last lines of a container's log, as a snapshot. */
 export interface LogSnapshot {
   view: 'log'
+  /** What the lines are of: a container's Log Stream. */
+  of: 'logStream'
   /** The container's path in its Source's tree, or its Previous Log's. */
   path: SourcePath
   /** The container's name. */
@@ -422,6 +424,10 @@ export type FollowUpdate =
   | { kind: 'lines'; lines: string[] }
   /** The container restarted; the lines after this are its new run's. */
   | { kind: 'restarted' }
+  /** A followed file was cut short; the lines after this are from its start. */
+  | { kind: 'truncated' }
+  /** Another file took a followed file's place, as log rotation does; the lines after this are the new one's. */
+  | { kind: 'rotated' }
   /** The stream failed, say the network dropped; it's tried again in `retryIn` milliseconds. */
   | { kind: 'failed'; code: CoreErrorCode; message: string; retryIn: number }
   /** Following again after failing. */
@@ -430,6 +436,38 @@ export type FollowUpdate =
   | { kind: 'ended'; reason: FollowEndReason }
 
 export type FollowEvent = FollowUpdate & { followId: string }
+
+/** The last lines of a file, shown in a log view. */
+export interface FileLog {
+  view: 'log'
+  /** What the lines are of: a file. */
+  of: 'file'
+  path: SourcePath
+  /** The file's name. */
+  name: string
+  /** A file has no Previous Log. */
+  previous: false
+  /** The lines asked for; the log view holds at most that many. */
+  lastNLines: LastNLines
+  /** A file's lines come as they are, with no timestamps added. */
+  timestamps: false
+  /** The lines, joined by '\n', without a final line break; decoded as UTF-8. */
+  content: string
+}
+
+/** What a log view's lines are of: a container's Log Stream, or a file. */
+export type LogOf = LogSnapshot['of'] | FileLog['of']
+
+/** The Source Types whose files grow, so can be Followed: S3 objects don't. */
+export const followableSourceTypes: readonly SourceTypeId[] = ['local', 'kubernetesFiles']
+
+/** How many of a file's last lines to show; see OpenLogOptions. */
+export type FileLogOptions = Pick<OpenLogOptions, 'lastNLines' | 'allowLarge'>
+
+/** A file's last lines, and the Follow that goes on from them; see followFile. */
+export interface FollowedFile extends FileLog {
+  followId: string
+}
 
 export type CoreErrorCode =
   | 'NAME_REQUIRED'
@@ -538,6 +576,20 @@ export interface CoreApi {
    * can't be followed: NOT_FOLLOWABLE.
    */
   followLog(sourceId: string, path: SourcePath, options?: OpenLogOptions): Promise<FollowedLog>
+  /**
+   * Reads a file's last lines to show in a log view, reading back from its end only as far as they go, so a
+   * huge file's are as quick to read as a small one's. Asking for all of a file larger than the Large File
+   * threshold fails with LOG_TOO_LARGE, unless `allowLarge` says to go ahead.
+   */
+  openFileLog(sourceId: string, path: SourcePath, options?: FileLogOptions): Promise<FileLog>
+  /**
+   * Opens a file's last lines like openFileLog, holding back a last line not yet ended, and Follows the file
+   * from there: its new lines arrive as FollowEvents with the returned `followId`, with a mark when the
+   * file is cut short (`truncated`) or replaced by another (`rotated`), each then followed from its start.
+   * The Follow ends when the file's pod is gone, or its Source is disconnected. Only Local and Kubernetes
+   * Files Sources' files grow: an S3 object can't be followed, NOT_FOLLOWABLE.
+   */
+  followFile(sourceId: string, path: SourcePath, options?: FileLogOptions): Promise<FollowedFile>
   /** Holds a Follow's updates back until it's resumed, keeping at most its "Last N lines" of them. Does nothing to a Follow that has ended. */
   pauseFollow(followId: string): Promise<void>
   /** Sends a paused Follow's held updates, then goes on as before. */
@@ -589,6 +641,8 @@ export const coreMethods: readonly CoreMethod[] = [
   'openFile',
   'openLog',
   'followLog',
+  'openFileLog',
+  'followFile',
   'pauseFollow',
   'resumeFollow',
   'stopFollow',

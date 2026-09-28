@@ -5,8 +5,10 @@ import type {
   CoreEvents,
   EntryNode,
   Environment,
+  FileLog,
   FilesWorkloadKind,
   FollowEvent,
+  FollowUpdate,
   KubernetesFilesSourceInfo,
   KubernetesLogsSourceInfo,
   LastNLines,
@@ -21,14 +23,16 @@ import type {
   SourceInfo,
   SourcePath,
   SourceTypeId,
+  FileLogOptions,
   TreeNode
 } from '@shared/core-api'
-import { filesWorkloadKinds, workloadKinds } from '@shared/core-api'
+import { filesWorkloadKinds, followableSourceTypes, workloadKinds } from '@shared/core-api'
 import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings } from '@shared/settings'
 import { listAwsProfiles } from './aws-profiles'
 import { CoreError } from './core-error'
 import { createEnvironmentStore, defaultEnvironments, isColor } from './environment-store'
 import { checkEncoding, decode, decompress, detectEncoding, hexDump, hexDumpLimit } from './file-content'
+import { readLastLines, startFileFollow } from './file-follow'
 import { fileIcon, folderIcon } from './file-icons'
 import type { FileSource } from './file-source'
 import { kubeConfigFor, listKubeContexts } from './kubeconfig'
@@ -326,7 +330,7 @@ export function createCore(options: CoreOptions = {}): Core {
     await settingsLoaded
     const lastNLines = asked ?? sourceFor(sourceId).lastNLines ?? settings.defaultLastNLines
     const read = { timestamps: timestamps || forFollowing }
-    const snapshot = (lines: string[]): LogSnapshot => ({ view: 'log', path, name: container, pod, previous, lastNLines, timestamps, content: lines.join('\n') })
+    const snapshot = (lines: string[]): LogSnapshot => ({ view: 'log', of: 'logStream', path, name: container, pod, previous, lastNLines, timestamps, content: lines.join('\n') })
     let text: string
     try {
       if (lastNLines !== 'all') text = await logSource.readLog(path, { ...read, tailLines: lastNLines })
@@ -359,11 +363,46 @@ export function createCore(options: CoreOptions = {}): Core {
     return text
   }
 
+  /**
+   * A file's last lines, as openFileLog gives them, along with where following them goes on from and the file's
+   * identity then. When `forFollowing`, a last line not yet ended is left for the Follow to add once it is.
+   */
+  const readFileLog = async (fileSource: FileSource, sourceId: string, path: SourcePath, options: FileLogOptions, forFollowing = false) => {
+    const asked = options.lastNLines === undefined ? undefined : checkLastNLines(options.lastNLines)
+    const info = await fileSource.stat(path)
+    if (info.kind !== 'file') throw new CoreError('NOT_A_FILE', `Not a file: ${path}`)
+    await settingsLoaded
+    const lastNLines = asked ?? sourceFor(sourceId).lastNLines ?? settings.defaultLastNLines
+    const threshold = settings.largeFileThreshold
+    const whole = lastNLines === 'all'
+    if (whole && info.size > threshold && !options.allowLarge) {
+      throw new CoreError('LOG_TOO_LARGE', `The whole file is over the Large File threshold of ${threshold} bytes`)
+    }
+    // Lines long enough to take more than the threshold to find are more than a log view should hold anyway.
+    const maxBytes = whole ? Infinity : threshold
+    const { lines, partial, end } = await readLastLines(fileSource, path, { size: info.size, lastNLines, maxBytes })
+    const shown = forFollowing || !partial ? lines : [...lines, partial].slice(whole ? 0 : -lastNLines)
+    const name = path.slice(path.lastIndexOf('/') + 1)
+    const fileLog: FileLog = { view: 'log', of: 'file', path, name, previous: false, lastNLines, timestamps: false, content: shown.join('\n') }
+    return { fileLog, end, identity: info.identity }
+  }
+
   // Follows under way, by id, each with the Source it reads from.
   const follows = new Map<string, { sourceId: string; follow: Follow }>()
   const followListeners = new Set<(event: FollowEvent) => void>()
   const announceFollow = (event: FollowEvent) => {
     for (const listener of followListeners) listener(event)
+  }
+
+  /** Starts a Follow of a Source, telling its updates to listeners under a new id, which it returns. */
+  const track = (sourceId: string, start: (emit: (update: FollowUpdate) => void) => Follow) => {
+    const followId = randomUUID()
+    const follow = start((update) => {
+      if (update.kind === 'ended') follows.delete(followId)
+      announceFollow({ ...update, followId })
+    })
+    follows.set(followId, { sourceId, follow })
+    return followId
   }
 
   /** Stops every Follow of a Source, telling its listeners: the connection it used is gone. */
@@ -725,19 +764,36 @@ export function createCore(options: CoreOptions = {}): Core {
       const { snapshot, lastTimestamp, lastTimestampCount } = read
       // Disconnected or reconnected while reading: this Follow would outlive the connection it was for.
       if (logSourceFor(sourceId, path) !== logSource) throw new CoreError('SOURCE_DISCONNECTED', `${sourceFor(sourceId).name} was reconnected`)
-      const followId = randomUUID()
-      const follow = startFollow(logSource, path, {
-        ...(lastTimestamp !== undefined && { after: lastTimestamp, afterCount: lastTimestampCount }),
-        restarts,
-        timestamps: snapshot.timestamps,
-        cap: snapshot.lastNLines,
-        emit: (update) => {
-          if (update.kind === 'ended') follows.delete(followId)
-          announceFollow({ ...update, followId })
-        }
-      })
-      follows.set(followId, { sourceId, follow })
+      const followId = track(sourceId, (emit) =>
+        startFollow(logSource, path, {
+          ...(lastTimestamp !== undefined && { after: lastTimestamp, afterCount: lastTimestampCount }),
+          restarts,
+          timestamps: snapshot.timestamps,
+          cap: snapshot.lastNLines,
+          emit
+        })
+      )
       return { ...snapshot, followId }
+    },
+
+    async openFileLog(sourceId, path, options = {}) {
+      await loaded
+      return (await readFileLog(fileSourceFor(sourceId, path), sourceId, path, options)).fileLog
+    },
+
+    async followFile(sourceId, path, options = {}) {
+      await loaded
+      if (!followableSourceTypes.includes(sourceFor(sourceId).type)) {
+        throw new CoreError('NOT_FOLLOWABLE', `Only Local and Kubernetes Files Sources’ files grow, so only they can be followed: ${path}`)
+      }
+      const fileSource = fileSourceFor(sourceId, path)
+      const { fileLog, end, identity } = await readFileLog(fileSource, sourceId, path, options, true)
+      // Disconnected or reconnected while reading: this Follow would outlive the connection it was for.
+      if (fileSourceFor(sourceId, path) !== fileSource) throw new CoreError('SOURCE_DISCONNECTED', `${sourceFor(sourceId).name} was reconnected`)
+      const followId = track(sourceId, (emit) =>
+        startFileFollow(fileSource, path, { from: end, ...(identity !== undefined && { identity }), cap: fileLog.lastNLines, emit })
+      )
+      return { ...fileLog, followId }
     },
 
     async pauseFollow(followId) {

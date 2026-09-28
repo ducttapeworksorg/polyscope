@@ -1,4 +1,4 @@
-import type { FollowUpdate, LogSnapshot } from '@shared/core-api'
+import type { FollowUpdate, LogOf, LogSnapshot } from '@shared/core-api'
 import { describeFailure } from './core-client'
 import { t } from './i18n'
 
@@ -6,7 +6,10 @@ import { t } from './i18n'
 export interface LogFormat {
   timestamps: boolean
   utc: boolean
+  /** What the lines are of, which marks mention; a Log Stream unless given. */
+  of?: LogOf
 }
+
 
 // An RFC 3339 UTC timestamp at the start of a line, as a Log Source gives it, then a space (unless the line is empty).
 const leadingTimestamp = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)(?= |$)/
@@ -42,17 +45,22 @@ export const isMarker = (line: string) => line.startsWith(markOpen) && line.ends
 export const markerPattern = /^── .* ──$/
 
 /** The lines a Follow's update adds to its log view: its new lines, or a mark saying what happened. */
-export function followLines(update: FollowUpdate, { timestamps, utc }: LogFormat): string[] {
+export function followLines(update: FollowUpdate, { timestamps, utc, of = 'logStream' }: LogFormat): string[] {
   switch (update.kind) {
     case 'lines':
       return timestamps ? update.lines.map((line) => showTimestamp(line, utc)) : update.lines
     case 'restarted':
       return [mark(t('logView.mark.restarted'))]
+    case 'truncated':
+      return [mark(t('logView.mark.truncated'))]
+    case 'rotated':
+      return [mark(t('logView.mark.rotated'))]
     case 'failed':
       return [mark(t('logView.mark.failed', { reason: describeFailure(update), seconds: Math.round(update.retryIn / 1000) }))]
     case 'recovered':
       return [mark(t('logView.mark.recovered'))]
     case 'ended':
-      return [mark(t(`logView.mark.ended.${update.reason}`))]
+      // A file is gone with the pod it was in.
+      return [mark(t(of === 'file' && update.reason === 'gone' ? 'logView.mark.ended.podGone' : `logView.mark.ended.${update.reason}`))]
   }
 }

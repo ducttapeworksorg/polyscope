@@ -144,7 +144,9 @@ export function createLocalFileSource(rootPath: string, { showHidden }: LocalFil
     stat: (path) =>
       withinRoot(path, async (absolute) => {
         const s = await stat(absolute)
-        return s.isDirectory() ? { kind: 'folder', modifiedTime: s.mtimeMs } : { kind: 'file', size: s.size, modifiedTime: s.mtimeMs }
+        if (s.isDirectory()) return { kind: 'folder', modifiedTime: s.mtimeMs }
+        // A file system without inode numbers reports 0 for every file, which tells none apart.
+        return { kind: 'file', size: s.size, modifiedTime: s.mtimeMs, ...(s.ino && { identity: `${s.dev}:${s.ino}` }) }
       }),
 
     read: (path, { offset, length }: ByteRange) =>

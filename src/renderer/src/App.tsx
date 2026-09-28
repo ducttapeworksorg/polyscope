@@ -45,6 +45,7 @@ import {
   setLanguage,
   setLogView,
   tabName,
+  type LogTooLarge,
   type TabContent,
   type Workspace
 } from './workspace'
@@ -209,21 +210,20 @@ export function App() {
   }
 
   /**
-   * Fetches a container's log (or its Previous Log), and Follows it when `following`. When all of it is
-   * asked for but it's over the Large File threshold, the tab says so instead of showing it, until the
-   * user goes ahead or picks fewer lines.
+   * Fetches a container's log (or its Previous Log), or a file's last lines, and Follows it when `following`.
+   * When all of it is asked for but it's over the Large File threshold, the tab says so instead of showing
+   * it, until the user goes ahead or picks fewer lines.
    */
-  const readLog = async (
-    sourceId: string,
-    { path, name, previous }: { path: string; name: string; previous: boolean },
-    options?: OpenLogOptions,
-    following = false
-  ): Promise<TabContent> => {
+  const readLog = async (sourceId: string, log: Omit<LogTooLarge, 'view'>, options: OpenLogOptions = {}, following = false): Promise<TabContent> => {
+    const { of, path } = log
     try {
-      return await (following ? core.followLog(sourceId, path, options) : core.openLog(sourceId, path, options))
+      if (of === 'logStream') return await (following ? core.followLog(sourceId, path, options) : core.openLog(sourceId, path, options))
+      // A file's lines have no timestamps to show.
+      const { timestamps: _, ...fileOptions } = options
+      return await (following ? core.followFile(sourceId, path, fileOptions) : core.openFileLog(sourceId, path, fileOptions))
     } catch (error) {
       if (!(error instanceof CoreCallError) || error.code !== 'LOG_TOO_LARGE') throw error
-      return { view: 'logTooLarge', path, name, previous }
+      return { view: 'logTooLarge', ...log }
     }
   }
 
@@ -233,7 +233,21 @@ export function App() {
   const openLog = (source: SourceInfo, node: ContainerNode | PreviousLogNode, options?: { pinned: boolean }) => {
     const log =
       node.kind === 'previousLog' ? { path: node.path, name: node.container, previous: true } : { path: node.path, name: node.name, previous: false }
-    return openInTab(source, { path: log.path, name: tabName(log) }, options, () => readLog(source.id, log))
+    return openInTab(source, { path: log.path, name: tabName(log) }, options, () => readLog(source.id, { of: 'logStream', ...log }))
+  }
+
+  /**
+   * Follows a file in a log view, starting from its last lines: in its tab, if it's open (in the editor
+   * or not), or else in a new one. Either way the tab is pinned, as following is working with it.
+   */
+  const followFile = (source: SourceInfo, node: { path: string; name: string }) => {
+    const key = nodeKey(source.id, node.path)
+    if (!tabs.some((tab) => tab.key === key)) {
+      const read = () => readLog(source.id, { of: 'file', path: node.path, name: node.name, previous: false }, {}, true)
+      return openInTab(source, node, { pinned: true }, read)
+    }
+    setWorkspace((ws) => activateTab(ws, key))
+    return reopenLog(key, {}, true)
   }
 
   const openInTab = async (
@@ -284,14 +298,17 @@ export function App() {
   /**
    * Fetches a log tab's lines again: as many as `options` asks for, or else as many as it shows, with or
    * without timestamps likewise. Following goes on (from the new lines) if it was, unless `following` says
-   * otherwise. Pins the tab.
+   * otherwise. A file open in the editor moves to a log view, with its Source's "Last N lines". Pins the tab.
    */
   const reopenLog = async (key: string, options: OpenLogOptions = {}, following?: boolean) => {
     const tab = tabs.find((open) => open.key === key)
-    if (!tab || !isLog(tab.file)) return
-    const { path, name, previous } = tab.file
-    const shown = tab.file.view === 'log' ? tab.file.lastNLines : 'all'
-    const timestamps = tab.file.view === 'log' && tab.file.timestamps
+    if (!tab) return
+    const { file } = tab
+    const log = isLog(file)
+      ? { of: file.of, path: file.path, name: file.name, previous: file.previous }
+      : { of: 'file' as const, path: file.path, name: file.name, previous: false }
+    const shown = file.view === 'log' ? file.lastNLines : file.view === 'logTooLarge' ? 'all' : undefined
+    const timestamps = file.view === 'log' && file.timestamps
     // Only the latest fetch for a tab lands: picking 1K then 50K quickly must end on 50K, whichever answers first.
     const request = {}
     latestLogFetch.current.set(key, request)
@@ -299,10 +316,11 @@ export function App() {
     setOpenError(null)
     setWorkspace((ws) => pinTab(ws, key))
     try {
-      const file = await readLog(tab.source.id, { path, name, previous }, { lastNLines: shown, timestamps, ...options }, following ?? Boolean(tab.follow))
-      if (isLatest()) setWorkspace((ws) => reopenLogTab(ws, key, file))
+      const lines = shown === undefined ? {} : { lastNLines: shown }
+      const read = await readLog(tab.source.id, log, { ...lines, timestamps, ...options }, following ?? Boolean(tab.follow))
+      if (isLatest()) setWorkspace((ws) => reopenLogTab(ws, key, read))
       // Overtaken by a later fetch: its Follow is shown nowhere.
-      else if ('followId' in file) void core.stopFollow(file.followId).catch(() => undefined)
+      else if ('followId' in read) void core.stopFollow(read.followId).catch(() => undefined)
     } catch (error) {
       if (isLatest()) setOpenError(describeError(error))
     }
@@ -316,6 +334,12 @@ export function App() {
       reopenLog(key, { lastNLines }),
       core.rememberLastNLines(tab.source.id, lastNLines).then(reloadSources, (error) => setOpenError(describeError(error)))
     ])
+  }
+
+  /** Follows a tab's file in a log view. */
+  const followTab = (key: string) => {
+    const tab = tabs.find((open) => open.key === key)
+    if (tab) void followFile(tab.source, tab.file)
   }
 
   /** Turns a log tab's Follow on (fetching its lines afresh to follow on from) or off, keeping what it shows. */
@@ -377,6 +401,7 @@ export function App() {
         onSourcesChanged={() => void reloadSources()}
         onOpenFile={openFile}
         onOpenLog={openLog}
+        onFollowFile={(source, node) => void followFile(source, node)}
         onOpenSettings={() => setSettingsOpen(true)}
         showDetails={settings.showTreeDetails}
         onToggleDetails={() => void toggleTreeDetails()}
@@ -419,6 +444,7 @@ export function App() {
           onActivate={(key) => setWorkspace((ws) => activateTab(ws, key))}
           onPin={(key) => setWorkspace((ws) => pinTab(ws, key))}
           onReload={(key) => void reopenTabAs(key)}
+          onFollow={followTab}
           onClose={(key) => setWorkspace((ws) => closeTab(ws, key))}
           onCloseOthers={(key) => setWorkspace((ws) => closeOtherTabs(ws, key))}
           onCloseAll={() => setWorkspace(closeAllTabs)}

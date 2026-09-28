@@ -28,6 +28,8 @@ interface Props {
   onOpenFile(source: SourceInfo, node: EntryNode, options?: { pinned: boolean }): void
   /** Opens a container's Log Stream in the preview tab, or in a tab of its own when pinned. */
   onOpenLog(source: SourceInfo, node: ContainerNode, options?: { pinned: boolean }): void
+  /** Follows a file of a Local or Kubernetes Files Source in a log view. */
+  onFollowFile(source: SourceInfo, node: EntryNode): void
   onOpenSettings(): void
   /** Whether tree rows show their size and modified time. */
   showDetails: boolean
@@ -71,7 +73,7 @@ const disconnected: ConnectionState = { state: 'disconnected' }
 const settingsShortcut = navigator.userAgent.includes('Mac') ? '⌘,' : 'Ctrl+,'
 
 export function Sidebar(props: Props) {
-  const { sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile, onOpenLog, onOpenSettings } = props
+  const { sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile, onOpenLog, onFollowFile, onOpenSettings } = props
   const { showDetails, onToggleDetails, theme, environments, onManageEnvironments } = props
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const { menu, open: openContextMenu, close: closeMenu } = useContextMenu<{ label: string; items: MenuItem[] }>()
@@ -248,6 +250,7 @@ export function Sidebar(props: Props) {
                   onSelect={setSelectedKey}
                   onOpenFile={onOpenFile}
                   onOpenLog={onOpenLog}
+                  onFollowFile={onFollowFile}
                   sourceRowProps={sourceRowProps(source)}
                   treeProps={treeProps(source, group)}
                   showDetails={showDetails}

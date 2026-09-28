@@ -1,24 +1,34 @@
-import type { FollowedLog, LanguageId, LogSnapshot, OpenedFile, OpenOptions, SourceInfo, SourcePath } from '@shared/core-api'
+import type { FileLog, FollowedFile, FollowedLog, LanguageId, LogOf, LogSnapshot, OpenedFile, OpenOptions, SourceInfo, SourcePath } from '@shared/core-api'
+import { followableSourceTypes } from '@shared/core-api'
 import { t } from './i18n'
 
 /**
- * A Log Stream whose whole log was asked for but is larger than the Large File threshold: nothing of
- * it is shown until the user says to go ahead anyway, or asks for fewer lines.
+ * A Log Stream or file whose whole log was asked for but is larger than the Large File threshold: nothing
+ * of it is shown until the user says to go ahead anyway, or asks for fewer lines.
  */
 export interface LogTooLarge {
   view: 'logTooLarge'
+  of: LogOf
   path: SourcePath
-  /** The container's name. */
+  /** The container's or file's name. */
   name: string
   /** Whether it's the container's Previous Log. */
   previous: boolean
 }
 
-/** What a tab shows: a file, or a Log Stream (followed or not). */
-export type TabContent = OpenedFile | LogSnapshot | FollowedLog | LogTooLarge
+/** What a tab shows: a file, or a Log Stream or a file's last lines in a log view (followed or not). */
+export type TabContent = OpenedFile | LogSnapshot | FollowedLog | FileLog | FollowedFile | LogTooLarge
 
-export const isLog = (content: TabContent): content is LogSnapshot | LogTooLarge =>
+/** Whether a tab's content is shown in a log view. */
+export const isLog = (content: TabContent): content is LogSnapshot | FileLog | LogTooLarge =>
   content.view === 'log' || content.view === 'logTooLarge'
+
+/** Whether a Source's files can be Followed: those of Local and Kubernetes Files Sources grow; S3 objects don't. */
+export const followsFiles = (source: SourceInfo) => followableSourceTypes.includes(source.type)
+
+/** Whether a tab offers to Follow its file: text of a Source whose files grow, not followed already. */
+export const canFollowFile = ({ source, file, follow }: Pick<OpenTab, 'source' | 'file' | 'follow'>) =>
+  followsFiles(source) && !follow && (isLog(file) ? file.of === 'file' : file.view === 'editor')
 
 /** What a tab is called: its file's or container's name, marked for a Previous Log. */
 export const tabName = (content: { name: string; previous?: boolean }) =>

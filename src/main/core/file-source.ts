@@ -14,7 +14,16 @@ export interface FileEntry {
 }
 
 export type FileStat =
-  | { kind: 'file'; size: number; modifiedTime: number }
+  | {
+      kind: 'file'
+      size: number
+      modifiedTime: number
+      /**
+       * Which file it is, beyond its name, when the backend can tell (e.g. its device and inode): another file
+       * put in its place, as log rotation does, has another.
+       */
+      identity?: string
+    }
   /** Milliseconds since the epoch, only when the backend keeps one for folders. */
   | { kind: 'folder'; modifiedTime?: number }
 

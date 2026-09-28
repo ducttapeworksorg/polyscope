@@ -51,10 +51,10 @@ done
 batch "$@"
 exit 0`
 
-/** $1 as `mode size mtime`, following links. */
+/** $1 as `mode size mtime device:inode`, following links. */
 const statScript = `${needs('stat')}
 [ -e "$1" ] || exit 10
-stat -L -c '%f %s %Y' -- "$1" || exit 13`
+stat -L -c '%f %s %Y %d:%i' -- "$1" || exit 13`
 
 /**
  * $3 bytes of $1 from byte $2 on: dd seeks to the block they start in and reads only the blocks they span, so the
@@ -149,10 +149,12 @@ export function createShellFileSource(shell: Shell, root: string): FileSource {
     },
 
     async stat(path): Promise<FileStat> {
-      const stated = parseStat(text(await run(statScript, path)).trim())
+      const line = text(await run(statScript, path)).trim()
+      const identity = line.slice(line.lastIndexOf(' ') + 1)
+      const stated = parseStat(line.slice(0, line.length - identity.length).trim())
       if (!stated) throw new CoreError('UNKNOWN', `Couldn’t read what ${locate(path)} is`)
       if (stated.kind === 'folder') return { kind: 'folder', modifiedTime: stated.modifiedTime }
-      return { kind: 'file', size: stated.size, modifiedTime: stated.modifiedTime }
+      return { kind: 'file', size: stated.size, modifiedTime: stated.modifiedTime, identity }
     },
 
     async read(path, range) {

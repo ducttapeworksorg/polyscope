@@ -168,8 +168,8 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
       // A reader at the end is kept there as lines come; one who has scrolled up is left in peace.
       const shown = editor?.getModel() === model
       const atEnd = shown && (editor.getVisibleRanges().at(-1)?.endLineNumber ?? 0) >= model.getLineCount()
-      if (timestamped) timestamped.lines = capped([...timestamped.lines, ...followLines(update, { timestamps: false, utc: false })], lastNLines)
-      appendLines(model, followLines(update, { timestamps: file.timestamps, utc: timestamped?.utc ?? false }), lastNLines)
+      if (timestamped) timestamped.lines = capped([...timestamped.lines, ...followLines(update, { timestamps: false, utc: false, of: file.of })], lastNLines)
+      appendLines(model, followLines(update, { timestamps: file.timestamps, utc: timestamped?.utc ?? false, of: file.of }), lastNLines)
       if (atEnd) editor.revealLine(model.getLineCount())
       onLineCount(followId, model.getLineCount())
     })

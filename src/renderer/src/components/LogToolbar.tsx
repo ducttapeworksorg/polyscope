@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import type { LastNLines } from '@shared/core-api'
 import { t } from '../i18n'
-import type { OpenTab } from '../workspace'
+import { isLog, type OpenTab } from '../workspace'
 import { LastNLinesControl } from './LastNLinesControl'
 
 interface Props {
@@ -32,19 +32,21 @@ function Toggle({ pressed, disabled, tooltip, onToggle, children }: ToggleProps)
 
 /**
  * The controls at the top of every log view: its "Last N lines", Follow (with pause and resume) for a
- * container's current log, timestamps in local time or UTC, and wrapping.
+ * container's current log or a file, timestamps in local time or UTC for a container's log, and wrapping.
  */
 export function LogToolbar({ tab, onChangeLastNLines, onToggleFollow, onTogglePause, onToggleTimestamps, onToggleUtc, onToggleWrap }: Props) {
   const { file, follow } = tab
   const log = file.view === 'log' ? file : null
   const timestamps = log?.timestamps ?? false
+  // A file's lines come as they are, with no timestamps to add.
+  const ofFile = isLog(file) && file.of === 'file'
   return (
     <div className="log-toolbar">
       <LastNLinesControl value={log ? log.lastNLines : 'all'} onChange={onChangeLastNLines} />
       <div className="log-toolbar__toggles">
         {!log?.previous && (
           <>
-            <Toggle pressed={Boolean(follow)} disabled={!log} tooltip={t('logView.follow.tooltip')} onToggle={onToggleFollow}>
+            <Toggle pressed={Boolean(follow)} disabled={!log} tooltip={t(ofFile ? 'logView.follow.file.tooltip' : 'logView.follow.tooltip')} onToggle={onToggleFollow}>
               {t('logView.follow')}
             </Toggle>
             <Toggle pressed={follow?.paused ?? false} disabled={!follow} tooltip={t('logView.pause.tooltip')} onToggle={onTogglePause}>
@@ -52,12 +54,16 @@ export function LogToolbar({ tab, onChangeLastNLines, onToggleFollow, onTogglePa
             </Toggle>
           </>
         )}
-        <Toggle pressed={timestamps} disabled={!log} tooltip={t('logView.timestamps.tooltip')} onToggle={onToggleTimestamps}>
-          {t('logView.timestamps')}
-        </Toggle>
-        <Toggle pressed={tab.utc ?? false} disabled={!timestamps} tooltip={t('logView.utc.tooltip')} onToggle={onToggleUtc}>
-          {t('logView.utc')}
-        </Toggle>
+        {!ofFile && (
+          <>
+            <Toggle pressed={timestamps} disabled={!log} tooltip={t('logView.timestamps.tooltip')} onToggle={onToggleTimestamps}>
+              {t('logView.timestamps')}
+            </Toggle>
+            <Toggle pressed={tab.utc ?? false} disabled={!timestamps} tooltip={t('logView.utc.tooltip')} onToggle={onToggleUtc}>
+              {t('logView.utc')}
+            </Toggle>
+          </>
+        )}
         <Toggle pressed={tab.wrap ?? false} disabled={!log} tooltip={t('logView.wrap.tooltip')} onToggle={onToggleWrap}>
           {t('logView.wrap')}
         </Toggle>

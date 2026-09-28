@@ -39,8 +39,44 @@ const comparable = (timestamp: string) => {
   return `${whole}.${fraction.padEnd(9, '0')}`
 }
 
-const asCoreError = (error: unknown) =>
+export const asCoreError = (error: unknown) =>
   error instanceof CoreError ? error : new CoreError('UNKNOWN', error instanceof Error ? error.message : String(error))
+
+/**
+ * Passes a Follow's updates on to `send`, or, while paused, holds them back until resumed: at most the
+ * last `cap` lines, dropping the oldest and any marks before them.
+ */
+export function holdBack(cap: LastNLines, send: (update: FollowUpdate) => void) {
+  // Updates held back while paused, in order; undefined while not.
+  let held: FollowUpdate[] | undefined
+  return {
+    emit(update: FollowUpdate) {
+      if (!held) return send(update)
+      held.push(update)
+      if (cap === 'all') return
+      let excess = held.reduce((count, u) => count + (u.kind === 'lines' ? u.lines.length : 0), 0) - cap
+      while (excess > 0) {
+        const first = held[0]!
+        if (first.kind !== 'lines') held.shift()
+        else if (first.lines.length <= excess) {
+          excess -= first.lines.length
+          held.shift()
+        } else {
+          held[0] = { kind: 'lines', lines: first.lines.slice(excess) }
+          excess = 0
+        }
+      }
+    },
+    pause() {
+      held ??= []
+    },
+    resume() {
+      const updates = held ?? []
+      held = undefined
+      for (const update of updates) send(update)
+    }
+  }
+}
 
 /**
  * Follows a container's log in a Log Source, sending what comes as updates. When the stream ends it
@@ -48,28 +84,9 @@ const asCoreError = (error: unknown) =>
  * followed on from the last line; a container finished for good, or gone, ends the Follow.
  */
 export function startFollow(logSource: LogSource, path: SourcePath, options: FollowOptions): Follow {
-  const { timestamps, cap } = options
-  // Updates held back while paused, in order; undefined while not.
-  let held: FollowUpdate[] | undefined
-
-  /** Sends an update, or holds it back while paused, dropping the oldest lines past the cap and any marks before them. */
-  const emit = (update: FollowUpdate) => {
-    if (!held) return options.emit(update)
-    held.push(update)
-    if (cap === 'all') return
-    let excess = held.reduce((count, u) => count + (u.kind === 'lines' ? u.lines.length : 0), 0) - cap
-    while (excess > 0) {
-      const first = held[0]!
-      if (first.kind !== 'lines') held.shift()
-      else if (first.lines.length <= excess) {
-        excess -= first.lines.length
-        held.shift()
-      } else {
-        held[0] = { kind: 'lines', lines: first.lines.slice(excess) }
-        excess = 0
-      }
-    }
-  }
+  const { timestamps } = options
+  const hold = holdBack(options.cap, options.emit)
+  const { emit } = hold
   let restarts = options.restarts
   // The last line sent's timestamp (comparable) and as the backend gave it; lines before it were sent already…
   let after = options.after === undefined ? undefined : comparable(options.after)
@@ -189,14 +206,8 @@ export function startFollow(logSource: LogSource, path: SourcePath, options: Fol
   void run()
 
   return {
-    pause() {
-      held ??= []
-    },
-    resume() {
-      const updates = held ?? []
-      held = undefined
-      for (const update of updates) options.emit(update)
-    },
+    pause: hold.pause,
+    resume: hold.resume,
     stop() {
       stopped = true
       connection?.stop()

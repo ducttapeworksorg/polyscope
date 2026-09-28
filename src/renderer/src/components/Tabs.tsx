@@ -1,6 +1,6 @@
 import type { Environment } from '@shared/core-api'
 import { environmentOf, environmentStyle } from '../environments'
-import { isLog, tabName, type OpenTab } from '../workspace'
+import { canFollowFile, isLog, tabName, type OpenTab } from '../workspace'
 import { t } from '../i18n'
 import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
 import { CloseIcon, FileIcon, LogIcon, ReloadIcon } from './icons'
@@ -13,18 +13,25 @@ interface Props {
   onActivate(key: string): void
   onPin(key: string): void
   onReload(key: string): void
+  /** Follows a tab's file in a log view. */
+  onFollow(key: string): void
   onClose(key: string): void
   onCloseOthers(key: string): void
   onCloseAll(): void
 }
 
-export function Tabs({ tabs, activeKey, environments, onActivate, onPin, onReload, onClose, onCloseOthers, onCloseAll }: Props) {
+export function Tabs({ tabs, activeKey, environments, onActivate, onPin, onReload, onFollow, onClose, onCloseOthers, onCloseAll }: Props) {
   const { menu, open: openMenu, close: closeMenu } = useContextMenu<{ tab: OpenTab }>()
 
   if (tabs.length === 0) return null
 
-  const menuItems = ({ key }: OpenTab): MenuItem[] => [
-    { label: t('tabs.reload'), onSelect: () => onReload(key) },
+  const menuItems = (tab: OpenTab): MenuItem[] => [
+    { label: t('tabs.reload'), onSelect: () => onReload(tab.key) },
+    ...(canFollowFile(tab) ? [{ label: t('tabs.follow'), onSelect: () => onFollow(tab.key) }] : []),
+    ...closeItems(tab)
+  ]
+
+  const closeItems = ({ key }: OpenTab): MenuItem[] => [
     { label: t('tabs.closeTab'), onSelect: () => onClose(key) },
     ...(tabs.length > 1 ? [{ label: t('tabs.closeOthers'), onSelect: () => onCloseOthers(key) }] : []),
     { label: t('tabs.closeAll'), onSelect: onCloseAll }

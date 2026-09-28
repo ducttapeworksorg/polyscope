@@ -60,6 +60,22 @@ describe('what a Follow adds to its log view', () => {
     expect(marks[1]![0]).toMatch(/4 s/)
   })
 
+  it('marks a followed file cut short or rotated', () => {
+    const [truncated] = followLines({ kind: 'truncated' }, plain)
+    const [rotated] = followLines({ kind: 'rotated' }, plain)
+
+    expect(isMarker(truncated!) && isMarker(rotated!)).toBe(true)
+    expect(truncated).toMatch(/truncated/)
+    expect(rotated).toMatch(/rotated/)
+  })
+
+  it('says a followed file’s Follow ended with its pod, not its container', () => {
+    const [ended] = followLines({ kind: 'ended', reason: 'gone' }, { ...plain, of: 'file' })
+
+    expect(ended).toMatch(/pod/)
+    expect(ended).not.toMatch(/container/)
+  })
+
   it('does not take a log line for a mark', () => {
     expect(isMarker('── not from Polyscope')).toBe(false)
   })

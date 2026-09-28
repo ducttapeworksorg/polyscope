@@ -121,6 +121,17 @@ export function describeFileSourceContract(name: string, seed: (tree: SeedTree) 
         withSource({ 'a.log': 'a' }, async (source) => {
           await expect(source.stat('missing.log')).rejects.toMatchObject({ code: 'NOT_FOUND' })
         }))
+
+      it('tells files apart by their identity, where it gives one, and gives a file the same one each time', () =>
+        withSource({ 'a.log': 'a', 'b.log': 'b' }, async (source) => {
+          const identity = async (path: string) => {
+            const info = await source.stat(path)
+            return info.kind === 'file' ? info.identity : undefined
+          }
+          const [a, b, again] = [await identity('a.log'), await identity('b.log'), await identity('a.log')]
+          expect(again).toBe(a)
+          if (a !== undefined && b !== undefined) expect(a).not.toBe(b)
+        }))
     })
 
     describe('reading a byte range', () => {
