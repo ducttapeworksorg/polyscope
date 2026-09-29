@@ -146,6 +146,95 @@ test('preview and pinned tabs, reload, closing, and the status bar', async () =>
   await expect(tabs).toHaveCount(0)
 })
 
+test('browse the tree and work the tabs by keyboard alone', async () => {
+  const window = await app.firstWindow()
+  const logs = join(dir, 'root', 'logs')
+  await writeFile(join(logs, 'other.log'), 'INFO other\n')
+  await writeFile(join(logs, 'settings.json'), '{ "level": "info" }\n')
+  await writeFile(join(dir, 'root', 'readme.md'), '# Fixture\n')
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  const row = (name: string) => window.getByRole('treeitem', { name: new RegExp(`^${name.replaceAll('.', '\\.')}`) })
+  const tabs = window.getByRole('tab')
+  const tab = (name: string) => window.getByRole('tab', { name })
+  const keys = async (...pressed: string[]) => {
+    for (const key of pressed) await window.keyboard.press(key)
+  }
+
+  // Ctrl+0 goes to the sidebar; Right connects the Source and opens it, then goes in and opens the folder.
+  await keys('Control+0')
+  await expect(row('Fixture')).toBeFocused()
+  await expect(row('Fixture')).toHaveCSS('outline-style', 'solid')
+  await keys('ArrowRight')
+  await expect(row('Fixture')).toHaveAttribute('aria-expanded', 'true')
+  await keys('ArrowRight')
+  await expect(row('logs')).toBeFocused()
+  await expect(row('logs')).toHaveAttribute('aria-selected', 'true')
+  await keys('ArrowRight')
+  await expect(row('logs')).toHaveAttribute('aria-expanded', 'true')
+
+  // Space previews a file; Enter opens one pinned. The keyboard stays in the tree.
+  await keys('ArrowDown', 'Space')
+  await expect(tab('app.log')).toHaveClass(/is-preview/)
+  await expect(row('app.log')).toBeFocused()
+  await keys('ArrowDown', 'Enter')
+  await expect(tab('other.log')).not.toHaveClass(/is-preview/)
+  await expect(tabs).toHaveCount(2)
+
+  // Typing a name jumps to it; Home and End go to the first and last rows.
+  await keys('s')
+  await expect(row('settings.json')).toBeFocused()
+  await keys('Enter')
+  await expect(tabs).toHaveCount(3)
+  await keys('End')
+  await expect(row('readme.md')).toBeFocused()
+  await keys('Home')
+  await expect(row('Fixture')).toBeFocused()
+
+  // Left closes an open folder, then goes out to its parent.
+  await keys('l')
+  await expect(row('logs')).toBeFocused()
+  await keys('ArrowLeft')
+  await expect(row('logs')).toHaveAttribute('aria-expanded', 'false')
+  await expect(row('app.log')).toHaveCount(0)
+  await keys('ArrowLeft')
+  await expect(row('Fixture')).toBeFocused()
+
+  // Ctrl+1 goes to the editor; Ctrl+Tab and Ctrl+PageUp/PageDown go through the tabs, wrapping around.
+  await keys('Control+1')
+  await expect(window.getByTestId('editor').locator('textarea')).toBeFocused()
+  await expect(tab('settings.json')).toHaveAttribute('aria-selected', 'true')
+  await keys('Control+Tab')
+  await expect(tab('app.log')).toHaveAttribute('aria-selected', 'true')
+  await keys('Control+Shift+Tab')
+  await expect(tab('settings.json')).toHaveAttribute('aria-selected', 'true')
+  await keys('Control+PageUp')
+  await expect(tab('other.log')).toHaveAttribute('aria-selected', 'true')
+  await expect(window.getByRole('tabpanel', { name: 'other.log' })).toContainText('INFO other')
+
+  // Tab reaches the tabs, at the active one; arrows, Home and End move along them, Enter pins and Delete closes.
+  await keys('Control+0')
+  for (let i = 0; i < 20 && !(await window.locator('[role="tab"]:focus').count()); i++) await keys('Tab')
+  await expect(tab('other.log')).toBeFocused()
+  await expect(tab('other.log')).toHaveCSS('outline-style', 'solid')
+  await keys('ArrowRight')
+  await expect(tab('settings.json')).toBeFocused()
+  await expect(tab('settings.json')).toHaveAttribute('aria-selected', 'true')
+  await keys('Home')
+  await expect(tab('app.log')).toBeFocused()
+  await keys('Enter')
+  await expect(tab('app.log')).not.toHaveClass(/is-preview/)
+  await keys('End', 'Delete')
+  await expect(tabs).toHaveCount(2)
+  await expect(tab('other.log')).toBeFocused()
+
+  // Ctrl+W closes the active tab; with none left, it leaves the window open.
+  await keys('Control+w')
+  await expect(tab('app.log')).toBeFocused()
+  await keys('Control+w', 'Control+w')
+  await expect(tabs).toHaveCount(0)
+  await expect(row('Fixture')).toBeVisible()
+})
+
 test('binary, hex, encodings, languages and compressed files', async () => {
   const window = await app.firstWindow()
   const logs = join(dir, 'root', 'logs')

@@ -153,6 +153,7 @@ export const en = {
   'tree.tlsOff': 'TLS',
   'tree.tlsOff.tooltip': 'TLS verification is off: the store’s certificate isn’t checked.',
 
+  'tabs.label': 'Open files and logs',
   'tabs.close': 'Close {name}',
   'tabs.closeTab': 'Close',
   'tabs.closeOthers': 'Close Others',

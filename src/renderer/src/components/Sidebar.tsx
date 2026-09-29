@@ -1,10 +1,11 @@
-import { useCallback, useRef, useState, type DragEvent, type HTMLAttributes, type MouseEvent } from 'react'
+import { useState, type DragEvent, type HTMLAttributes, type KeyboardEvent, type MouseEvent, type Ref } from 'react'
 import type { ConnectionState, ContainerNode, EntryNode, Environment, SourceInfo, SourceTypeId, TreeNode } from '@shared/core-api'
 import type { Theme } from '@shared/settings'
 import { core, describeError } from '../core-client'
 import { environmentOf } from '../environments'
 import { t } from '../i18n'
 import { targetOf, uiFor } from '../source-types'
+import { createTypeAhead, treeFocusTarget, treeNavigationKeys, typeAheadTarget, type TreeRow } from '../tree-navigation'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
 import { DetailsIcon, DuplicateIcon, GearIcon, PencilIcon, PlusIcon, ThemeIcon, TrashIcon, UnlinkIcon } from './icons'
@@ -12,6 +13,7 @@ import { SourceDialog } from './SourceDialog'
 import { SourceTree, type SourceAction } from './SourceTree'
 
 interface Props {
+  ref?: Ref<HTMLElement>
   /** In sidebar order: grouped by Source Type, groups in their user-chosen order. */
   sources: SourceInfo[]
   /** Every Environment, for labelling Sources. */
@@ -71,18 +73,29 @@ const isAfter = (event: DragEvent<HTMLElement>) => {
   return event.clientY > top + height / 2
 }
 
+/** A tree row as keyboard navigation sees it, read from its element. */
+const treeRowOf = (item: HTMLElement): TreeRow => {
+  const expanded = item.getAttribute('aria-expanded')
+  return {
+    label: item.querySelector('.tree-row__label')?.textContent ?? '',
+    level: Number(item.getAttribute('aria-level')),
+    expanded: expanded === null ? undefined : expanded === 'true'
+  }
+}
+
 const disconnected: ConnectionState = { state: 'disconnected' }
 const settingsShortcut = navigator.userAgent.includes('Mac') ? '⌘,' : 'Ctrl+,'
 
 export function Sidebar(props: Props) {
   const { sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile, onOpenLog, onFollowFile, onOpenSettings } = props
-  const { showDetails, onToggleDetails, theme, onToggleTheme, environments, onManageEnvironments } = props
+  const { showDetails, onToggleDetails, theme, onToggleTheme, environments, onManageEnvironments, ref } = props
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const { menu, open: openContextMenu, close: closeMenu } = useContextMenu<{ label: string; items: MenuItem[] }>()
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [dragging, setDragging] = useState<Dragging | null>(null)
   const [dropAt, setDropAt] = useState<DropAt | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [typeAhead] = useState(() => createTypeAhead())
   const groups = groupByType(sources)
 
   const run = async (action: () => Promise<unknown>) => {
@@ -166,10 +179,29 @@ export function Sidebar(props: Props) {
     }
   })
 
+  /**
+   * Moves the keyboard between rows: every Source's rows, in order, as one list. A row handles its own keys
+   * (Enter, Space, opening and closing a folder) first; typing a name jumps to the next row starting with it.
+   */
+  const onTreeKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || target.getAttribute('role') !== 'treeitem') return
+    const items = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="treeitem"]')]
+    const rows = items.map(treeRowOf)
+    const index = items.indexOf(target)
+    const typed = event.key.length === 1 && event.key !== ' '
+    const to = typed ? typeAheadTarget(rows, index, typeAhead.type(event.key)) : treeFocusTarget(rows, index, event.key)
+    if (!typed) typeAhead.reset()
+    if (!typed && !treeNavigationKeys.includes(event.key)) return
+    // Arrows, Home and End would scroll the sidebar besides.
+    event.preventDefault()
+    if (to !== null) items[to]!.focus()
+  }
+
   const isEmpty = sources.length === 0
 
   return (
-    <nav className="sidebar" aria-label={t('sidebar.heading')}>
+    <nav ref={ref} className="sidebar" aria-label={t('sidebar.heading')}>
       <header className="sidebar__header">
         <h2 className="sidebar__heading">{t('sidebar.heading')}</h2>
         <span className="sidebar__actions">
@@ -233,7 +265,7 @@ export function Sidebar(props: Props) {
         </div>
       )}
 
-      <div className="sidebar__sources">
+      <div className="sidebar__sources" onKeyDown={onTreeKeyDown}>
         {groups.map((group) => {
           const { Icon, label } = uiFor(group.type)
           return (

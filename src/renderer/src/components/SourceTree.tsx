@@ -46,6 +46,7 @@ interface Props {
   /** Buttons at the end of the Source's own row; the tree puts its own, like Refresh, ahead of them. */
   sourceActions: SourceAction[]
   onContextMenu(event: MouseEvent<HTMLElement>, label: string, items: MenuItem[]): void
+  /** The row selected in the sidebar, which is where the keyboard is too when it's in the sidebar. */
   selectedKey: string | null
   onSelect(key: string): void
   /** Opens a file in the preview tab, or in a tab of its own when pinned. */
@@ -214,19 +215,32 @@ export function SourceTree(props: Props) {
     setExpanded((prev) => new Set(prev).add(''))
   }
 
+  // The tree is one stop for Tab: its selected row, if it's shown, or else the Source's own row.
+  let selectedShown = false
+
   const row = (props: RowProps) => {
     const { path, depth, label, icon, folder, onActivate, onDoubleActivate, menuItems, status, badge, details, actions, labelledBy } = props
     const { className = '', extra } = props
     const key = nodeKey(source.id, path)
     const isExpanded = folder && expanded.has(path)
+    const selected = selectedKey === key
+    if (selected) selectedShown = true
     const activate = () => {
       onSelect(key)
       onActivate()
     }
+    // Enter opens a file in a tab of its own, like a double-click; Space previews it, like a click. On a
+    // folder, either opens or closes it, as do Right and Left; the sidebar moves between rows with the rest.
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Enter' && event.key !== ' ') return
+      if (event.altKey || event.ctrlKey || event.metaKey) return
+      const pressed = event.key
+      const toggles = (pressed === 'ArrowRight' && folder && !isExpanded) || (pressed === 'ArrowLeft' && isExpanded)
+      if (pressed !== 'Enter' && pressed !== ' ' && !toggles) return
       event.preventDefault()
-      activate()
+      if (pressed === 'Enter' && onDoubleActivate) {
+        onSelect(key)
+        onDoubleActivate()
+      } else activate()
     }
     const openMenu = (event: MouseEvent<HTMLElement>) => {
       if (menuItems?.length) onContextMenu(event, t('tree.menuLabel', { name: label }), menuItems)
@@ -236,16 +250,18 @@ export function SourceTree(props: Props) {
         {...extra}
         key={key}
         role="treeitem"
-        tabIndex={0}
+        tabIndex={selected || (path === '' && !selectedShown) ? 0 : -1}
         aria-level={depth + 1}
         aria-expanded={folder ? isExpanded : undefined}
-        aria-selected={selectedKey === key}
+        aria-selected={selected}
         aria-labelledby={labelledBy}
         className={`tree-row ${className} ${extra?.className ?? ''}`}
         style={depthStyle(depth)}
         onClick={activate}
         onDoubleClick={onDoubleActivate}
         onKeyDown={onKeyDown}
+        // Moving to a row selects it; focus reaching one of its buttons doesn't.
+        onFocus={(event) => event.target === event.currentTarget && !selected && onSelect(key)}
         onContextMenu={openMenu}
       >
         <span className={`tree-row__twisty ${isExpanded ? 'is-open' : ''}`}>{folder && <ChevronIcon />}</span>
@@ -527,6 +543,9 @@ export function SourceTree(props: Props) {
     </>
   )
 
+  // Rendered ahead of the Source's own row, so that row knows whether the selected one is among them.
+  const children = connected && expanded.has('') ? renderChildren('', 1) : null
+
   return (
     <div {...treeProps} role="tree" aria-label={source.name} className={`source-tree ${treeProps?.className ?? ''}`}>
       {row({
@@ -543,7 +562,7 @@ export function SourceTree(props: Props) {
         className: `tree-row--source ${connectError ? 'is-error' : ''}`,
         extra: { ...sourceRowProps, title: connectError ?? undefined }
       })}
-      {connected && expanded.has('') && renderChildren('', 1)}
+      {children}
     </div>
   )
 }

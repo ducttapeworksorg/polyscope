@@ -6,6 +6,7 @@ import {
   closeAllTabs,
   closeOtherTabs,
   closeTab,
+  cycleTab,
   emptyWorkspace,
   markPodGone,
   openTab,
@@ -240,5 +241,23 @@ describe('offering to Follow a tab’s file', () => {
   it('doesn’t for a Log Stream, which has its own Follow', () => {
     const log = { view: 'log', of: 'logStream', path: 'p', name: 'c', pod: 'p', previous: false, lastNLines: 10, timestamps: false, content: '' } as const
     expect(canFollowFile({ source, file: log })).toBe(false)
+  })
+})
+
+describe('cycling through tabs', () => {
+  it('activates the next tab, or the previous one', () => {
+    const ws = activateTab(open('a', 'b', 'c'), 'b')
+
+    expect(shape(cycleTab(ws, 1))).toEqual(['a', 'b', '[c]'])
+    expect(shape(cycleTab(ws, -1))).toEqual(['[a]', 'b', 'c'])
+  })
+
+  it('wraps around from either end', () => {
+    expect(shape(cycleTab(open('a', 'b', 'c'), 1))).toEqual(['[a]', 'b', 'c'])
+    expect(shape(cycleTab(activateTab(open('a', 'b', 'c'), 'a'), -1))).toEqual(['a', 'b', '[c]'])
+  })
+
+  it('leaves a workspace without tabs as it is', () => {
+    expect(cycleTab(emptyWorkspace, 1)).toBe(emptyWorkspace)
   })
 })

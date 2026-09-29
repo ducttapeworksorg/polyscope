@@ -92,6 +92,15 @@ export function openTab(ws: Workspace, tab: Pick<OpenTab, 'key' | 'source' | 'fi
 
 export const activateTab = (ws: Workspace, key: string): Workspace => ({ ...ws, activeKey: key })
 
+/** Activates the tab `delta` places on from the active one (back, if negative), wrapping around at either end. */
+export function cycleTab(ws: Workspace, delta: number): Workspace {
+  const { tabs } = ws
+  if (!tabs.length) return ws
+  const active = tabs.findIndex((open) => open.key === ws.activeKey)
+  const next = (((active + delta) % tabs.length) + tabs.length) % tabs.length
+  return activateTab(ws, tabs[next]!.key)
+}
+
 export const pinTab = (ws: Workspace, key: string): Workspace => ({
   ...ws,
   tabs: ws.tabs.map((open) => (open.key === key && !open.pinned ? { ...open, pinned: true } : open))

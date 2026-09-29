@@ -34,6 +34,7 @@ import {
   closeAllTabs,
   closeOtherTabs,
   closeTab,
+  cycleTab,
   emptyWorkspace,
   endFollow,
   followIdsOf,
@@ -51,6 +52,8 @@ import {
   type TabContent,
   type Workspace
 } from './workspace'
+
+const viewerPanelId = 'viewer-panel'
 
 /** Whether two versions of a Source point at the same place, whatever they are called. */
 const sameTarget = (a: SourceInfo, b: SourceInfo) => targetOf(a) === targetOf(b)
@@ -86,6 +89,8 @@ export function App() {
   const shownFollows = useRef(new Set<string>())
   // Likewise the Large Files, to close those they no longer have.
   const shownLargeFiles = useRef(new Set<string>())
+  const sidebarRef = useRef<HTMLElement>(null)
+  const viewerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const unsubscribe = core.onSettingsChanged(setSettings)
@@ -98,16 +103,40 @@ export function App() {
     if (theme) applyTheme(theme)
   }, [theme])
 
+  // Ctrl+, opens the Settings; Ctrl+0 takes the keyboard to the sidebar, and Ctrl+1 to what the active tab shows.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === ',' && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey) {
-        event.preventDefault()
-        setSettingsOpen(true)
-      }
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
+      const shortcut = { ',': () => setSettingsOpen(true), '0': focusSidebar, '1': focusViewer }[event.key]
+      // A dialog keeps the keyboard until it closes.
+      if (!shortcut || document.querySelector('dialog:modal')) return
+      event.preventDefault()
+      event.stopPropagation()
+      shortcut()
     }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    // Taken ahead of the editor, like the tabs' shortcuts.
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [])
+
+  // Shown focused, as it's the keyboard that moved there, though Ctrl held down wouldn't show it by itself.
+  const shownFocus = { focusVisible: true }
+
+  /** Focuses the sidebar where the keyboard was last in it: its selected row if shown, or else the first Source; with none, adding one. */
+  const focusSidebar = () => {
+    const sidebar = sidebarRef.current
+    const target =
+      sidebar?.querySelector<HTMLElement>('[role="treeitem"][aria-selected="true"][tabindex="0"]') ??
+      sidebar?.querySelector<HTMLElement>('[role="treeitem"][tabindex="0"]') ??
+      sidebar?.querySelector<HTMLElement>('.sidebar__empty button')
+    target?.focus(shownFocus)
+  }
+
+  /** Focuses what the active tab shows: the editor, a Large File's lines, or the button offered in their place. */
+  const focusViewer = () => {
+    const shown = '.viewer__editor:not([hidden]) textarea, .large-file__scroller, .viewer__binary button'
+    viewerRef.current?.querySelector<HTMLElement>(shown)?.focus(shownFocus)
+  }
 
   const setConnection = (sourceId: string, state: ConnectionState) =>
     setConnections((prev) => new Map(prev).set(sourceId, state))
@@ -416,6 +445,7 @@ export function App() {
   return (
     <div className="app" style={layout}>
       <Sidebar
+        ref={sidebarRef}
         sources={sources}
         environments={environments}
         onManageEnvironments={() => setEnvironmentsOpen(true)}
@@ -467,6 +497,7 @@ export function App() {
           activeKey={activeTab?.key ?? null}
           environments={environments}
           onActivate={(key) => setWorkspace((ws) => activateTab(ws, key))}
+          onCycle={(delta) => setWorkspace((ws) => cycleTab(ws, delta))}
           onPin={(key) => setWorkspace((ws) => pinTab(ws, key))}
           onReload={(key) => void reopenTabAs(key)}
           onFollow={followTab}
@@ -475,6 +506,7 @@ export function App() {
           onCloseAll={() => setWorkspace(closeAllTabs)}
           minimap={settings.showMinimap}
           onToggleMinimap={() => void toggleMinimap()}
+          panelId={viewerPanelId}
         />
         {openError && (
           <p className="workbench__error" role="alert">
@@ -518,7 +550,13 @@ export function App() {
         {activeTab && (activeTab.file.view === 'editor' || activeTab.file.view === 'hex') && (
           <FileToolbar tab={activeTab} onToggleWrap={() => toggleWrap(activeTab.key)} />
         )}
-        <div className="viewer">
+        <div
+          ref={viewerRef}
+          id={viewerPanelId}
+          className="viewer"
+          role={activeTab ? 'tabpanel' : undefined}
+          aria-label={activeTab ? tabName(activeTab.file) : undefined}
+        >
           <Viewer
             tabs={tabs}
             activeTab={activeTab}
