@@ -1,9 +1,11 @@
 import { homedir } from 'node:os'
 import { app, clipboard, dialog, ipcMain, type BrowserWindow, type FileFilter, type OpenDialogOptions } from 'electron'
 import { coreMethods, type CoreApi, type CoreEvents, type CoreMethod, type CoreResult } from '@shared/core-api'
+import type { UpdateStatus } from '@shared/updates'
 import type { AppLog } from './app-log'
 import { CoreError } from './core/core-error'
 import { formatDiagnostics } from './diagnostics'
+import type { Updater } from './updates'
 
 const isCoreMethod = (value: unknown): value is CoreMethod => coreMethods.includes(value as CoreMethod)
 
@@ -68,4 +70,13 @@ export function registerDiagnosticsIpc(log: AppLog): void {
     })
     clipboard.writeText(report)
   })
+}
+
+/** Lets the renderer show and act on updates; a development build (no updater) says updates are off. */
+export function registerUpdateIpc(updater: Updater | null, getWindow: () => BrowserWindow | null): void {
+  ipcMain.handle('updates:appVersion', () => app.getVersion())
+  ipcMain.handle('updates:status', (): UpdateStatus => updater?.status() ?? { state: 'off' })
+  ipcMain.handle('updates:check', () => updater?.check())
+  ipcMain.handle('updates:apply', () => updater?.apply())
+  updater?.onStatus((status) => getWindow()?.webContents.send('updates:status', status))
 }

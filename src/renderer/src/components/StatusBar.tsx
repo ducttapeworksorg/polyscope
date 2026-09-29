@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { textEncodings, type Environment, type LanguageId, type LargeFileEncoding, type TextEncoding } from '@shared/core-api'
+import { canApply, type UpdateStatus } from '@shared/updates'
 import { environmentStyle } from '../environments'
 import { t } from '../i18n'
 import { formatCount, formatDateTime, formatSize } from '../i18n/format'
@@ -17,6 +18,7 @@ interface Props {
   onPickLanguage(language: LanguageId): void
   /** How many lines a followed log's tab holds now, once lines have been added to it. */
   logLineCount?: number
+  update: UpdateStatus
 }
 
 /** Picked in the encoding list to go back to whatever the core detects. */
@@ -38,7 +40,7 @@ interface OpenPicker {
  * Facts about the active tab: its Environment and where it's from, then a file's size, modified time,
  * encoding and language, or how many lines of a Log Stream are shown.
  */
-export function StatusBar({ activeTab, environment, onPickEncoding, onPickLanguage, logLineCount }: Props) {
+export function StatusBar({ activeTab, environment, onPickEncoding, onPickLanguage, logLineCount, update }: Props) {
   const [picker, setPicker] = useState<OpenPicker | null>(null)
   const closePicker = () => {
     setPicker(null)
@@ -49,6 +51,7 @@ export function StatusBar({ activeTab, environment, onPickEncoding, onPickLangua
     return (
       <footer className="statusbar">
         <span className="statusbar__item statusbar__item--end">{t('status.readOnly')}</span>
+        <UpdateItem status={update} />
       </footer>
     )
   }
@@ -128,6 +131,7 @@ export function StatusBar({ activeTab, environment, onPickEncoding, onPickLangua
         </>
       )}
       <span className="statusbar__item">{t('status.readOnly')}</span>
+      <UpdateItem status={update} />
 
       {shownPicker?.kind === 'encoding' && (
         <QuickPick
@@ -160,6 +164,24 @@ const lineCount = (content: string) => lineCountLabel(content ? content.split('\
 
 function lineCountLabel(count: number) {
   return count === 1 ? t('status.oneLine') : t('status.lines', { count: formatCount(count) })
+}
+
+/** Offers an update once one is found: its download page, or a restart into it once downloaded. */
+function UpdateItem({ status }: { status: UpdateStatus }) {
+  if (status.state === 'downloading') {
+    return <span className="statusbar__item">{t('status.update.downloading', { percent: status.percent })}</span>
+  }
+  if (!canApply(status)) return null
+  return (
+    <button
+      type="button"
+      className="statusbar__item statusbar__button statusbar__update"
+      title={t(`status.update.${status.state}.tooltip`, { version: status.version })}
+      onClick={() => void window.polyscope.applyUpdate()}
+    >
+      {t(`status.update.${status.state}`)}
+    </button>
+  )
 }
 
 /** What the encoding item says: the encoding text was decoded with, or how undecoded bytes are shown. */

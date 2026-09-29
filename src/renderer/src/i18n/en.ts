@@ -1,5 +1,6 @@
 import type { Compression, ContainerRole, CoreErrorCode, FilesWorkloadKind, TextEncoding, WorkloadKind } from '@shared/core-api'
 import type { SettingProblem } from '@shared/settings'
+import type { UpdateStatus } from '@shared/updates'
 
 export const en = {
   'sidebar.heading': 'Sources',
@@ -189,6 +190,19 @@ export const en = {
   'settings.diagnostics.copied': 'Copied to the clipboard.',
   'settings.diagnostics.failed': 'Couldn’t copy the diagnostics.',
   'settings.save': 'Save',
+  'settings.updates': 'Updates',
+  'settings.version': 'This is Polyscope {version}.',
+  'settings.checkForUpdates': 'Check for updates',
+  'settings.update.off': 'A development build doesn’t update itself.',
+  'settings.update.idle': '',
+  'settings.update.checking': 'Checking…',
+  'settings.update.upToDate': 'You have the latest version.',
+  'settings.update.available': 'Polyscope {version} is out.',
+  'settings.update.downloading': 'Downloading Polyscope {version}… {percent}%',
+  'settings.update.ready': 'Polyscope {version} is ready to install.',
+  'settings.update.error': 'Couldn’t check for updates: {message}',
+  'settings.downloadUpdate': 'Download',
+  'settings.restartToUpdate': 'Restart to update',
   'settings.problem.notPositiveWholeNumber': 'Enter a whole number greater than zero.',
   'settings.problem.notATheme': 'Choose a theme.',
   'settings.problem.notTrueOrFalse': 'Turn this on or off.',
@@ -265,6 +279,11 @@ export const en = {
   'status.oneLine': '1 line',
 
   'status.readOnly': 'Read-only',
+  'status.update.available': 'Update available',
+  'status.update.available.tooltip': 'Polyscope {version} is out: open its download page',
+  'status.update.downloading': 'Downloading update… {percent}%',
+  'status.update.ready': 'Restart to update',
+  'status.update.ready.tooltip': 'Restart into Polyscope {version}',
   'status.largeFile': 'Large File',
   'status.largeFile.tooltip': 'Over the Large File threshold, so shown in the Large File Viewer',
   'status.size': 'Size',
@@ -350,6 +369,7 @@ export const en = {
 } satisfies Record<string, string> &
   Record<`error.${CoreErrorCode}`, string> &
   Record<`settings.problem.${SettingProblem}`, string> &
+  Record<`settings.update.${UpdateStatus['state']}`, string> &
   Record<`encoding.${TextEncoding}`, string> &
   Record<`compression.${Compression}`, string> &
   Record<`workloadGroup.${WorkloadKind}`, string> &

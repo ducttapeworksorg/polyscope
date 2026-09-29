@@ -1,0 +1,58 @@
+# Packages the built app (`npm run build`, into out/) as each platform's installers, into dist/.
+# `npm run dist` builds this platform's; the release workflow builds all three and publishes them.
+appId: com.ducttapeworks.polyscope
+productName: Polyscope
+copyright: Copyright © 2026 Duct Tape Works
+artifactName: ${productName}-${version}-${arch}.${ext}
+
+directories:
+  # Where the icon is: icon.png, from which each platform's icon is made.
+  buildResources: build
+  output: dist
+
+# The dependencies electron-vite leaves out of the bundle (electron-updater) are added from node_modules.
+files:
+  - out/**/*
+  - package.json
+
+# electron-updater finds releases here; the workflow uploads to a draft that it publishes once every platform's
+# installers are in, so no one is offered a release before its files are there.
+publish:
+  provider: github
+  owner: ducttapeworksorg
+  repo: polyscope
+  releaseType: draft
+
+win:
+  target:
+    - target: msi
+      arch: [x64]
+
+msi:
+  # An ordinary install for the current user, with no administrator rights needed.
+  oneClick: true
+  perMachine: false
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  runAfterFinish: true
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  # Unsigned in v1 (see the README for opening it the first time). Apple silicon won't start an app with no
+  # signature at all, so it's signed ad hoc; the hardened runtime needs a real identity.
+  identity: '-'
+  hardenedRuntime: false
+
+dmg:
+  # A dmg's name has to fit in the Finder window.
+  title: ${productName} ${version}
+
+linux:
+  target: [AppImage, deb, rpm]
+  category: Development
+  synopsis: A viewer for files and logs from many systems
+  maintainer: Duct Tape Works
+  executableName: polyscope

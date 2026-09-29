@@ -4,8 +4,10 @@ import type { Theme } from '@shared/settings'
 import { createAppLog, type AppLog } from './app-log'
 import { createCore } from './core/core'
 import { createSecretStore } from './core/secret-store'
-import { forwardCoreEvents, registerCoreIpc, registerDiagnosticsIpc, registerShellIpc } from './ipc'
+import { forwardCoreEvents, registerCoreIpc, registerDiagnosticsIpc, registerShellIpc, registerUpdateIpc } from './ipc'
 import { loadLoginShellPath } from './login-shell-path'
+import { createUpdateEngine } from './update-engines'
+import { createUpdater } from './updates'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -98,11 +100,15 @@ void app.whenReady().then(async () => {
   registerCoreIpc(core, log)
   registerShellIpc(() => mainWindow)
   registerDiagnosticsIpc(log)
+  // Only an installed build updates itself; one run from source is whatever was checked out.
+  const updater = app.isPackaged ? createUpdater({ engine: createUpdateEngine(log), log }) : null
+  registerUpdateIpc(updater, () => mainWindow)
   forwardCoreEvents(core, () => mainWindow)
   core.onSettingsChanged(({ theme }) => applyNativeTheme(theme))
   const { theme } = await core.getSettings()
   applyNativeTheme(theme)
   createWindow(theme, log)
+  updater?.start()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) void core.getSettings().then((settings) => createWindow(settings.theme, log))

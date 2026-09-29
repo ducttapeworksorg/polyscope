@@ -90,9 +90,19 @@ test('copy diagnostics for a bug report', async () => {
   )
 
   await dialog.getByRole('button', { name: 'Copy diagnostics' }).click()
-  await expect(dialog.getByRole('status')).toHaveText('Copied to the clipboard.')
+  await expect(dialog.getByRole('group', { name: 'Help' }).getByRole('status')).toHaveText('Copied to the clipboard.')
   const copied = await app.evaluate(({ clipboard }) => clipboard.readText())
   expect(copied).toContain('### Polyscope diagnostics')
   expect(copied).toMatch(/- Electron: \d+\.\d+\.\d+/)
   expect(copied).toMatch(/INFO {2}Polyscope \S+ started/)
+})
+
+test('see the version, and that a build run from source does not update itself', async () => {
+  const window = await app.firstWindow()
+  await window.getByRole('button', { name: 'Settings' }).click()
+  const updates = window.getByRole('dialog', { name: 'Settings' }).getByRole('group', { name: 'Updates' })
+  const version = await app.evaluate(({ app }) => app.getVersion())
+  await expect(updates.getByText(`This is Polyscope ${version}.`)).toBeVisible()
+  await expect(updates.getByRole('status')).toHaveText('A development build doesn’t update itself.')
+  await expect(updates.getByRole('button', { name: 'Check for updates' })).toBeDisabled()
 })

@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { FollowEvent, LargeFileEvent, LargeFileSearchEvent } from '@shared/core-api'
 import type { Settings } from '@shared/settings'
+import type { UpdateStatus } from '@shared/updates'
 import type { PolyscopeBridge } from './bridge'
 
 const bridge: PolyscopeBridge = {
@@ -8,6 +9,15 @@ const bridge: PolyscopeBridge = {
   pickFolder: () => ipcRenderer.invoke('shell:pickFolder'),
   pickFile: (filters) => ipcRenderer.invoke('shell:pickFile', filters),
   copyDiagnostics: () => ipcRenderer.invoke('diagnostics:copy'),
+  appVersion: () => ipcRenderer.invoke('updates:appVersion'),
+  getUpdateStatus: () => ipcRenderer.invoke('updates:status'),
+  checkForUpdates: () => ipcRenderer.invoke('updates:check'),
+  applyUpdate: () => ipcRenderer.invoke('updates:apply'),
+  onUpdateStatus: (listener) => {
+    const forward = (_event: IpcRendererEvent, status: UpdateStatus) => listener(status)
+    ipcRenderer.on('updates:status', forward)
+    return () => ipcRenderer.off('updates:status', forward)
+  },
   onSettingsChanged: (listener) => {
     const forward = (_event: IpcRendererEvent, settings: Settings) => listener(settings)
     ipcRenderer.on('core:settingsChanged', forward)

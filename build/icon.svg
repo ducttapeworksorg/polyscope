@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- The app's mark, seven lenses in one aperture (ApertureMark), on the editor's slate. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b3548" />
+      <stop offset="1" stop-color="#141a25" />
+    </linearGradient>
+    <radialGradient id="lens" cx="0.5" cy="0.3" r="0.75">
+      <stop offset="0" stop-color="#eef2f8" stop-opacity="0.26" />
+      <stop offset="1" stop-color="#eef2f8" stop-opacity="0.05" />
+    </radialGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#tile)" />
+  <rect x="101.5" y="101.5" width="821" height="821" rx="182.5" fill="none" stroke="#364257" stroke-width="3" />
+  <g transform="translate(512 512) scale(4.2) translate(-74 -74)" fill="url(#lens)" stroke="#8591a7" stroke-width="1.75">
+    <circle cx="74" cy="74" r="70" fill="none" stroke="#5d697f" stroke-width="2" />
+    <circle cx="74" cy="74" r="62" fill="none" stroke="#364257" stroke-width="1.5" />
+    <circle cx="74" cy="38" r="17" />
+    <circle cx="105.2" cy="56" r="17" />
+    <circle cx="105.2" cy="92" r="17" />
+    <circle cx="74" cy="110" r="17" />
+    <circle cx="42.8" cy="92" r="17" />
+    <circle cx="42.8" cy="56" r="17" />
+    <circle cx="74" cy="74" r="17" stroke="#d5dce8" />
+  </g>
+</svg>

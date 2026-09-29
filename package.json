@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "A cross-platform desktop viewer for files and logs from many systems.",
   "license": "Apache-2.0",
+  "author": "Duct Tape Works",
+  "homepage": "https://github.com/ducttapeworksorg/polyscope",
+  "repository": "github:ducttapeworksorg/polyscope",
   "private": true,
   "main": "./out/main/index.js",
   "scripts": {
@@ -11,7 +14,9 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
-    "test:smoke": "playwright test"
+    "test:smoke": "playwright test",
+    "icon": "electron scripts/render-icon.cjs",
+    "dist": "npm run build && electron-builder --publish never"
   },
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.1141.0",
@@ -25,6 +30,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "material-icon-theme": "^5.38.1",
     "monaco-editor": "^0.57.0",
@@ -38,5 +44,8 @@
   "allowScripts": {
     "esbuild@0.25.12": true,
     "esbuild@0.28.2": true
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

@@ -22,6 +22,7 @@ import { SidebarResizer, sidebarMinWidth, useSidebarWidth, workbenchMinWidth } f
 import { nodeKey } from './components/SourceTree'
 import { StatusBar } from './components/StatusBar'
 import { Tabs } from './components/Tabs'
+import { useUpdateStatus } from './components/use-update-status'
 import { Viewer } from './components/Viewer'
 import { core, CoreCallError, describeError, describeFailure } from './core-client'
 import { environmentOf } from './environments'
@@ -77,6 +78,7 @@ export function App() {
   // Null until loaded; nothing is shown before then, so a saved theme never flashes the other one first.
   const [settings, setSettings] = useState<Settings | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const update = useUpdateStatus()
   // A theme being tried out in the Settings dialog, shown instead of the saved one until it closes.
   const [previewTheme, setPreviewTheme] = useState<Theme | null>(null)
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth()
@@ -467,6 +469,7 @@ export function App() {
       {settingsOpen && (
         <SettingsDialog
           settings={settings}
+          update={update}
           onPreviewTheme={setPreviewTheme}
           onManageEnvironments={() => setEnvironmentsOpen(true)}
           onSaved={(saved) => {
@@ -587,6 +590,7 @@ export function App() {
         }
         onPickLanguage={(language) => activeTab && setWorkspace((ws) => setLanguage(ws, activeTab.key, language))}
         logLineCount={activeTab?.follow ? followedLineCounts.get(activeTab.follow.followId) : undefined}
+        update={update}
       />
     </div>
   )

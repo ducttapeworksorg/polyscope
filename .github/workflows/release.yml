@@ -1,0 +1,77 @@
+name: Release
+
+# Pushing a version tag (v1.2.3, matching package.json) builds every platform's installers and publishes them
+# to GitHub Releases, where the app looks for updates.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  # One draft for every platform to upload to; building them side by side would otherwise race to create it.
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches the version
+        run: |
+          version="v$(node -p "require('./package.json').version")"
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match package.json's version, $version"
+            exit 1
+          fi
+
+      # A rerun after a failed build finds the draft already there, and uploads to it again.
+      - name: Create the draft release
+        run: |
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "Polyscope ${GITHUB_REF_NAME#v}" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  package:
+    name: package (${{ matrix.os }})
+    needs: draft
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # electron-builder makes the .rpm with rpmbuild.
+      - name: Install rpm (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      # Uploads the installers, and the latest*.yml files electron-updater reads, to the draft.
+      - run: npx electron-builder --publish always
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      # A tag with a pre-release part (v1.3.0-beta.1) is published as a pre-release, which installed copies skip.
+      - name: Publish the release
+        run: |
+          case "$GITHUB_REF_NAME" in
+            *-*) kind=(--prerelease) ;;
+            *) kind=(--latest) ;;
+          esac
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false "${kind[@]}"
+        env:
+          GH_TOKEN: ${{ github.token }}

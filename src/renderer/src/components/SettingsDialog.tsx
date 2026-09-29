@@ -1,11 +1,13 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { MB, settingProblems, themes, type NumberSetting, type Settings, type Theme } from '@shared/settings'
+import { canApply, type UpdateStatus } from '@shared/updates'
 import { core, describeError } from '../core-client'
 import { t } from '../i18n'
 import { useModalDialog } from './use-modal-dialog'
 
 interface Props {
   settings: Settings
+  update: UpdateStatus
   /** Shows a theme while it is being chosen, or null to go back to the saved one. */
   onPreviewTheme(theme: Theme | null): void
   onManageEnvironments(): void
@@ -27,7 +29,7 @@ const parseWhole = (text: string) => (/^\s*\d+\s*$/.test(text) ? Number(text) : 
 const issuesUrl = 'https://github.com/ducttapeworksorg/polyscope/issues'
 
 /** Edits the app-wide settings. The theme is previewed as soon as it's picked; nothing is saved until Save. */
-export function SettingsDialog({ settings, onPreviewTheme, onManageEnvironments, onSaved, onClose }: Props) {
+export function SettingsDialog({ settings, update, onPreviewTheme, onManageEnvironments, onSaved, onClose }: Props) {
   const close = () => {
     onPreviewTheme(null)
     onClose()
@@ -40,6 +42,11 @@ export function SettingsDialog({ settings, onPreviewTheme, onManageEnvironments,
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [diagnostics, setDiagnostics] = useState<'copied' | 'failed' | null>(null)
+  const [version, setVersion] = useState<string | null>(null)
+
+  useEffect(() => {
+    void window.polyscope.appVersion().then(setVersion)
+  }, [])
 
   // Settings this dialog doesn't edit, like the sidebar's details toggle, are kept as they are.
   const edited: Settings = {
@@ -140,6 +147,30 @@ export function SettingsDialog({ settings, onPreviewTheme, onManageEnvironments,
         <fieldset className="settings-section">
           <legend className="settings-section__title">{t('settings.logs')}</legend>
           {fields.filter((f) => f.section === 'logs').map(numberField)}
+        </fieldset>
+
+        <fieldset className="settings-section">
+          <legend className="settings-section__title">{t('settings.updates')}</legend>
+          {version && <p className="field__hint">{t('settings.version', { version })}</p>}
+          <div className="settings-action">
+            {canApply(update) ? (
+              <button type="button" className="button button--quiet" onClick={() => void window.polyscope.applyUpdate()}>
+                {t(update.state === 'available' ? 'settings.downloadUpdate' : 'settings.restartToUpdate')}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="button button--quiet"
+                disabled={update.state === 'off' || update.state === 'checking' || update.state === 'downloading'}
+                onClick={() => void window.polyscope.checkForUpdates()}
+              >
+                {t('settings.checkForUpdates')}
+              </button>
+            )}
+            <span role="status" className={update.state === 'error' ? 'field__problem' : 'field__hint'}>
+              {t(`settings.update.${update.state}`, { ...update })}
+            </span>
+          </div>
         </fieldset>
 
         <fieldset className="settings-section">
