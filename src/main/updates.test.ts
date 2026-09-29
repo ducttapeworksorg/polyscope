@@ -1,16 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { UpdateStatus } from '@shared/updates'
-import { createUpdater, findNewerRelease, isNewerVersion, updateMode } from './updates'
+import { createUpdater, findNewerRelease, isNewerVersion, summarizeUpdateError, updateMode } from './updates'
 
 describe('updateMode', () => {
-  it('installs updates itself from an AppImage, a .deb or an .rpm', () => {
+  it('installs updates itself on Windows (NSIS), and from an AppImage, a .deb or an .rpm', () => {
+    expect(updateMode({ platform: 'win32' })).toBe('install')
     expect(updateMode({ platform: 'linux', appImage: '/home/alice/Polyscope.AppImage' })).toBe('install')
     expect(updateMode({ platform: 'linux', packageType: 'deb' })).toBe('install')
     expect(updateMode({ platform: 'linux', packageType: 'rpm' })).toBe('install')
   })
 
-  it('only offers the download where it cannot install: MSI installs, unsigned macOS apps, and other Linux packages', () => {
-    expect(updateMode({ platform: 'win32' })).toBe('offer')
+  it('only offers the download where it cannot install: unsigned macOS apps, and other Linux packages', () => {
     expect(updateMode({ platform: 'darwin' })).toBe('offer')
     expect(updateMode({ platform: 'linux' })).toBe('offer')
     expect(updateMode({ platform: 'linux', packageType: 'pacman' })).toBe('offer')
@@ -34,6 +34,25 @@ describe('isNewerVersion', () => {
   it('ignores a leading v and anything it cannot read', () => {
     expect(isNewerVersion('v0.2.0', '0.1.0')).toBe(true)
     expect(isNewerVersion('nightly', '0.1.0')).toBe(false)
+  })
+})
+
+describe('summarizeUpdateError', () => {
+  it('keeps the status and address of a failed request, and drops the headers electron-updater adds', () => {
+    const message = [
+      '404 ',
+      // electron-updater quotes the request as JSON, so its line breaks are written out as `\n`.
+      '"method: GET url: https://github.com/ducttapeworksorg/polyscope/releases.atom\\n\\nPlease double check that your authentication token is correct."',
+      'Headers: {',
+      '  "set-cookie": ["_gh_sess=abc"]',
+      '}'
+    ].join('\n')
+    expect(summarizeUpdateError(new Error(message))).toBe('GitHub answered 404 for https://github.com/ducttapeworksorg/polyscope/releases.atom')
+  })
+
+  it('keeps just the first line of anything else', () => {
+    expect(summarizeUpdateError(new Error('net::ERR_INTERNET_DISCONNECTED\nmore detail'))).toBe('net::ERR_INTERNET_DISCONNECTED')
+    expect(summarizeUpdateError('offline')).toBe('offline')
   })
 })
 

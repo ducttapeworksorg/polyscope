@@ -2,8 +2,8 @@ import { canApply, type UpdateStatus } from '@shared/updates'
 
 /**
  * How an install gets a newer release: `install` downloads and applies it (electron-updater), `offer` only says
- * one is out and opens its download page. electron-updater can't apply an update to an MSI install, and macOS won't
- * let it replace an unsigned app, so those are told rather than updated (ADR 0003).
+ * one is out and opens its download page. macOS won't let electron-updater replace an unsigned app, and it knows only
+ * the AppImage, .deb and .rpm among Linux packages, so the others are told rather than updated (ADR 0003).
  */
 export type UpdateMode = 'install' | 'offer'
 
@@ -16,6 +16,7 @@ interface Install {
 }
 
 export function updateMode({ platform, appImage, packageType }: Install): UpdateMode {
+  if (platform === 'win32') return 'install'
   if (platform !== 'linux') return 'offer'
   return appImage || packageType === 'deb' || packageType === 'rpm' ? 'install' : 'offer'
 }
@@ -67,6 +68,19 @@ export async function findNewerRelease({ fetch, repository, currentVersion }: Re
   }
   const version = body.tag_name.replace(/^v/, '')
   return isNewerVersion(version, currentVersion) ? { version, url: body.html_url } : null
+}
+
+/**
+ * A failed update check in a line. electron-updater's HTTP errors carry the whole response, headers and cookies
+ * included; this keeps the status and address, which is all the log and the Settings need.
+ */
+export function summarizeUpdateError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  const status = /^(\d{3})\b/.exec(message)
+  // The address ends where electron-updater's quoting of the request goes on (`\n`, or the closing quote).
+  const url = /\burl: (https?:\/\/[^\s"\\]+)/.exec(message)
+  if (status && url) return `GitHub answered ${status[1]} for ${url[1]}`
+  return message.split('\n')[0]!.trim()
 }
 
 /** One way of finding and applying updates: electron-updater's, or looking the release up and opening its page. */

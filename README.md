@@ -13,7 +13,7 @@ Each **Source** you configure is one place to read from:
 
 Download the installer for your system from the [latest release](https://github.com/ducttapeworksorg/polyscope/releases/latest):
 
-- **Windows**: `Polyscope-<version>-x64.msi`
+- **Windows**: `Polyscope-<version>-x64.exe`
 - **macOS**: `Polyscope-<version>-arm64.dmg` (Apple silicon) or `Polyscope-<version>-x64.dmg` (Intel)
 - **Linux**: `Polyscope-<version>-x86_64.AppImage`, or the `.deb` (Debian, Ubuntu) or `.rpm` (Fedora, RHEL, openSUSE) package
 
@@ -27,8 +27,8 @@ The installers aren't signed yet, so each system warns you the first time you op
 
 Polyscope checks GitHub Releases for a newer version when it starts, and every few hours after that. When one is out, the status bar says so; you can also check from **Settings → Updates**.
 
-- The **AppImage**, **`.deb`** and **`.rpm`** download the update in the background; choose **Restart to update** to install it (the `.deb` and `.rpm` ask for your password).
-- On **Windows** and **macOS**, choosing **Update available** opens the release's page, to download and run the new installer over the old one.
+- On **Windows**, and from the **AppImage**, **`.deb`** and **`.rpm`**, the update downloads in the background; choose **Restart to update** to install it (the `.deb` and `.rpm` ask for your password).
+- On **macOS**, choosing **Update available** opens the release's page, to download the new `.dmg` and drag Polyscope into Applications over the old one.
 
 ## Privacy
 

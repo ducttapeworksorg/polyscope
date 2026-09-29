@@ -25,10 +25,11 @@ publish:
 
 win:
   target:
-    - target: msi
+    - target: nsis
       arch: [x64]
 
-msi:
+# NSIS, not MSI, as electron-updater can update only NSIS installs on Windows (ADR 0003).
+nsis:
   # An ordinary install for the current user, with no administrator rights needed.
   oneClick: true
   perMachine: false

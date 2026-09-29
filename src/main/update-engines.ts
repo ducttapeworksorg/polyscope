@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { app, net, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import type { AppLog } from './app-log'
-import { findNewerRelease, updateMode, type Release, type UpdateEngine } from './updates'
+import { findNewerRelease, summarizeUpdateError, updateMode, type Release, type UpdateEngine } from './updates'
 
 /** Where releases are published; electron-builder.yml publishes to the same repository. */
 const repository = 'ducttapeworksorg/polyscope'
@@ -19,25 +19,30 @@ function packageType(): string | undefined {
 
 /** electron-updater: downloads a newer release in the background, then restarts into it when asked. */
 function installEngine(log: AppLog): UpdateEngine {
-  const prefixed = (message: unknown) => `Updater: ${String(message)}`
+  const prefixed = (message: unknown) => `Updater: ${summarizeUpdateError(message)}`
   autoUpdater.logger = {
     info: (message) => log.info(prefixed(message)),
     warn: (message) => log.warn(prefixed(message)),
-    error: (message) => log.error(prefixed(message))
+    // A failed check is logged once, by the updater it fails.
+    error: () => {}
   }
   autoUpdater.autoDownload = true
   // Installing a .deb or .rpm asks for the administrator password, which would be a surprise on quitting.
   autoUpdater.autoInstallOnAppQuit = false
   return {
     check: async (report) => {
-      const result = await autoUpdater.checkForUpdates()
+      const result = await autoUpdater.checkForUpdates().catch((error: unknown) => {
+        throw new Error(summarizeUpdateError(error))
+      })
       if (!result?.isUpdateAvailable || !result.downloadPromise) return
       const { version } = result.updateInfo
       report({ state: 'downloading', version, percent: 0 })
       const progress = ({ percent }: { percent: number }) => report({ state: 'downloading', version, percent: Math.floor(percent) })
       autoUpdater.on('download-progress', progress)
       try {
-        await result.downloadPromise
+        await result.downloadPromise.catch((error: unknown) => {
+          throw new Error(summarizeUpdateError(error))
+        })
       } finally {
         autoUpdater.off('download-progress', progress)
       }
