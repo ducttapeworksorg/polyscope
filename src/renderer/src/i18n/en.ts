@@ -181,6 +181,13 @@ export const en = {
   'settings.defaultLastNLines.hint': 'Lines a log view fetches and keeps, unless its Source remembers another number.',
   'settings.environments': 'Environments',
   'settings.manageEnvironments': 'Manage Environments…',
+  'settings.help': 'Help',
+  'settings.diagnostics.hint':
+    'Filing a bug? Copy diagnostics puts the app and OS versions and the recent app log on the clipboard, with secrets, tokens and your home folder removed, to paste into the issue.',
+  'settings.reportIssue': 'Report an issue on GitHub',
+  'settings.copyDiagnostics': 'Copy diagnostics',
+  'settings.diagnostics.copied': 'Copied to the clipboard.',
+  'settings.diagnostics.failed': 'Couldn’t copy the diagnostics.',
   'settings.save': 'Save',
   'settings.problem.notPositiveWholeNumber': 'Enter a whole number greater than zero.',
   'settings.problem.notATheme': 'Choose a theme.',

@@ -699,6 +699,17 @@ body.is-resizing {
   border: 0;
 }
 
+.settings-section a {
+  color: var(--text);
+  text-underline-offset: 2px;
+}
+
+.settings-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .settings-section__title {
   margin-bottom: 8px;
   padding: 0;

@@ -79,3 +79,20 @@ test('switch the theme from the sidebar, and find it again after a relaunch', as
   await relaunched.getByRole('button', { name: 'Switch to the dark theme' }).click()
   await expect(relaunched.locator('html')).toHaveAttribute('data-theme', 'dark')
 })
+
+test('copy diagnostics for a bug report', async () => {
+  const window = await app.firstWindow()
+  await window.getByRole('button', { name: 'Settings' }).click()
+  const dialog = window.getByRole('dialog', { name: 'Settings' })
+  await expect(dialog.getByRole('link', { name: 'Report an issue on GitHub' })).toHaveAttribute(
+    'href',
+    'https://github.com/ducttapeworksorg/polyscope/issues'
+  )
+
+  await dialog.getByRole('button', { name: 'Copy diagnostics' }).click()
+  await expect(dialog.getByRole('status')).toHaveText('Copied to the clipboard.')
+  const copied = await app.evaluate(({ clipboard }) => clipboard.readText())
+  expect(copied).toContain('### Polyscope diagnostics')
+  expect(copied).toMatch(/- Electron: \d+\.\d+\.\d+/)
+  expect(copied).toMatch(/INFO {2}Polyscope \S+ started/)
+})

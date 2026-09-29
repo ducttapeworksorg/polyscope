@@ -1,9 +1,10 @@
 import { join } from 'node:path'
 import { app, BrowserWindow, nativeTheme, safeStorage, shell } from 'electron'
 import type { Theme } from '@shared/settings'
+import { createAppLog, type AppLog } from './app-log'
 import { createCore } from './core/core'
 import { createSecretStore } from './core/secret-store'
-import { forwardCoreEvents, registerCoreIpc, registerShellIpc } from './ipc'
+import { forwardCoreEvents, registerCoreIpc, registerDiagnosticsIpc, registerShellIpc } from './ipc'
 import { loadLoginShellPath } from './login-shell-path'
 
 let mainWindow: BrowserWindow | null = null
@@ -24,7 +25,22 @@ function applyNativeTheme(theme: Theme): void {
   mainWindow?.setBackgroundColor(backgroundColor[theme])
 }
 
-function createWindow(theme: Theme): void {
+/**
+ * Starts the app log in the user-data directory, noting the start and anything that goes wrong beyond a core
+ * call (which the IPC layer logs itself). Only ever read back by "Copy diagnostics": nothing is sent anywhere.
+ */
+function startAppLog(): AppLog {
+  const log = createAppLog({ dir: join(app.getPath('userData'), 'logs') })
+  log.info(`Polyscope ${app.getVersion()} started (Electron ${process.versions.electron}, ${process.platform} ${process.arch})`)
+  // The monitor only observes, so uncaught exceptions still end the app as they would otherwise.
+  process.on('uncaughtExceptionMonitor', (error) => log.error('Uncaught exception', error))
+  process.on('unhandledRejection', (reason) => log.error('Unhandled rejection', reason))
+  app.on('render-process-gone', (_event, _contents, details) => log.error(`Renderer gone: ${details.reason} (exit code ${details.exitCode})`))
+  app.on('child-process-gone', (_event, details) => log.error(`${details.type} process gone: ${details.reason} (exit code ${details.exitCode})`))
+  return log
+}
+
+function createWindow(theme: Theme, log: AppLog): void {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -54,6 +70,9 @@ function createWindow(theme: Theme): void {
   mainWindow.once('ready-to-show', show)
   mainWindow.webContents.once('did-finish-load', show)
   mainWindow.on('closed', () => (mainWindow = null))
+  mainWindow.webContents.on('console-message', ({ level, message }) => {
+    if (level === 'error') log.warn(`Renderer: ${message}`)
+  })
 
   // The renderer never navigates; anything that tries to is sent to the OS browser.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -68,6 +87,7 @@ function createWindow(theme: Theme): void {
 }
 
 void app.whenReady().then(async () => {
+  const log = startAppLog()
   await loginShellPathLoaded
   const dataDir = app.getPath('userData')
   const cipher = {
@@ -75,16 +95,17 @@ void app.whenReady().then(async () => {
     decrypt: (encrypted: Buffer) => safeStorage.decryptString(encrypted)
   }
   const core = createCore({ dataDir, secrets: createSecretStore({ dataDir, cipher }) })
-  registerCoreIpc(core)
+  registerCoreIpc(core, log)
   registerShellIpc(() => mainWindow)
+  registerDiagnosticsIpc(log)
   forwardCoreEvents(core, () => mainWindow)
   core.onSettingsChanged(({ theme }) => applyNativeTheme(theme))
   const { theme } = await core.getSettings()
   applyNativeTheme(theme)
-  createWindow(theme)
+  createWindow(theme, log)
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) void core.getSettings().then((settings) => createWindow(settings.theme))
+    if (BrowserWindow.getAllWindows().length === 0) void core.getSettings().then((settings) => createWindow(settings.theme, log))
   })
 })
 

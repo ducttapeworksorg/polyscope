@@ -24,6 +24,8 @@ const fields: { key: NumberSetting; unit: number; section: 'files' | 'logs' }[] 
 /** A typed whole number, or NaN for anything else (which the shared rules then reject). */
 const parseWhole = (text: string) => (/^\s*\d+\s*$/.test(text) ? Number(text) : NaN)
 
+const issuesUrl = 'https://github.com/ducttapeworksorg/polyscope/issues'
+
 /** Edits the app-wide settings. The theme is previewed as soon as it's picked; nothing is saved until Save. */
 export function SettingsDialog({ settings, onPreviewTheme, onManageEnvironments, onSaved, onClose }: Props) {
   const close = () => {
@@ -37,6 +39,7 @@ export function SettingsDialog({ settings, onPreviewTheme, onManageEnvironments,
   )
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [diagnostics, setDiagnostics] = useState<'copied' | 'failed' | null>(null)
 
   // Settings this dialog doesn't edit, like the sidebar's details toggle, are kept as they are.
   const edited: Settings = {
@@ -62,6 +65,16 @@ export function SettingsDialog({ settings, onPreviewTheme, onManageEnvironments,
     } catch (e) {
       setError(describeError(e))
       setBusy(false)
+    }
+  }
+
+  const copyDiagnostics = async () => {
+    setDiagnostics(null)
+    try {
+      await window.polyscope.copyDiagnostics()
+      setDiagnostics('copied')
+    } catch {
+      setDiagnostics('failed')
     }
   }
 
@@ -127,6 +140,24 @@ export function SettingsDialog({ settings, onPreviewTheme, onManageEnvironments,
         <fieldset className="settings-section">
           <legend className="settings-section__title">{t('settings.logs')}</legend>
           {fields.filter((f) => f.section === 'logs').map(numberField)}
+        </fieldset>
+
+        <fieldset className="settings-section">
+          <legend className="settings-section__title">{t('settings.help')}</legend>
+          <p className="field__hint">
+            {t('settings.diagnostics.hint')}{' '}
+            <a href={issuesUrl} target="_blank" rel="noreferrer">
+              {t('settings.reportIssue')}
+            </a>
+          </p>
+          <div className="settings-action">
+            <button type="button" className="button button--quiet" onClick={copyDiagnostics}>
+              {t('settings.copyDiagnostics')}
+            </button>
+            <span role="status" className={diagnostics === 'failed' ? 'field__problem' : 'field__hint'}>
+              {diagnostics && t(`settings.diagnostics.${diagnostics}`)}
+            </span>
+          </div>
         </fieldset>
 
         {error && (

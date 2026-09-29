@@ -7,6 +7,7 @@ const bridge: PolyscopeBridge = {
   invokeCore: (method, args) => ipcRenderer.invoke('core', method, args),
   pickFolder: () => ipcRenderer.invoke('shell:pickFolder'),
   pickFile: (filters) => ipcRenderer.invoke('shell:pickFile', filters),
+  copyDiagnostics: () => ipcRenderer.invoke('diagnostics:copy'),
   onSettingsChanged: (listener) => {
     const forward = (_event: IpcRendererEvent, settings: Settings) => listener(settings)
     ipcRenderer.on('core:settingsChanged', forward)
