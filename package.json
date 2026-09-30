@@ -23,7 +23,7 @@
     "dist": "npm run build && electron-builder --publish never"
   },
   "devDependencies": {
-    "@aws-sdk/client-s3": "^3.1141.0",
+    "@aws-sdk/client-s3": "^3.1143.0",
     "@fontsource-variable/atkinson-hyperlegible-next": "^5.3.0",
     "@fontsource-variable/red-hat-mono": "^5.3.0",
     "@kubernetes/client-node": "^2.0.0",
@@ -33,7 +33,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^5.2.0",
-    "electron": "^44.4.5",
+    "electron": "^44.5.1",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "material-icon-theme": "^5.38.1",
@@ -43,7 +43,7 @@
     "reflect-metadata": "^0.2.2",
     "typescript": "^7.0.2",
     "vite": "^7.3.6",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.3"
   },
   "allowScripts": {
     "esbuild@0.25.12": true,
