@@ -63,6 +63,8 @@ export function createLargeFileCache(dir: string, cap: () => number): LargeFileC
       if (info?.isFile()) entries.set(name, { size: info.size, lastUsed: info.mtimeMs, users: 0 })
     }
   })()
+  // A directory that can't be made fails whoever opens or creates a file; nobody may, so it's not unhandled meanwhile.
+  loaded.catch(() => undefined)
 
   // What's being done to each key's file on disk, one thing at a time: an evicted file is deleted before
   // a new copy is renamed into its place, and two copies committed together don't both think they're first.

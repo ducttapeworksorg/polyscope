@@ -286,8 +286,8 @@ describe.skipIf(!hasTestStore)('an S3 Source against the test store', () => {
   })
 
   it('opens a Large File at its end, then caches it through range reads', async () => {
-    const lines = Array.from({ length: 300_000 }, (_, i) => `line ${i + 1}`)
-    const prefix = await seeded({ 'big.log': lines.map((line) => `${line}\n`).join('') })
+    const content = Array.from({ length: 300_000 }, (_, i) => `line ${i + 1}\n`).join('')
+    const prefix = await seeded({ 'big.log': content })
     const core = createCore({ cacheDir: join(dir, 'cache') })
     await core.updateSettings({ largeFileThreshold: MB, openAnywayLimit: MB, cacheSizeCap: 8 * MB })
     const source = await core.addSource(testS3Source('Bucket', prefix))
@@ -298,7 +298,7 @@ describe.skipIf(!hasTestStore)('an S3 Source against the test store', () => {
     expect(file).toMatchObject({ view: 'large', encoding: 'utf-8' })
     if (file.view !== 'large') return
     expect(file.lastLines.at(-1)).toBe('line 300000')
-    await vi.waitFor(async () => expect(await core.largeFileStatus(file.largeFileId)).toEqual({ state: 'ready', lineCount: 300_000, fromCache: false }), {
+    await vi.waitFor(async () => expect(await core.largeFileStatus(file.largeFileId)).toEqual({ state: 'ready', lineCount: 300_000, contentLength: content.length, fromCache: false }), {
       timeout: 30_000,
       interval: 100
     })
