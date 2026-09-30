@@ -8,6 +8,8 @@ export interface PolyscopeBridge {
   pickFolder(): Promise<string | null>
   /** Asks for a file, offering to show those matching each filter in turn (`*` for any); null if none was picked. */
   pickFile(filters: { name: string; extensions: string[] }[]): Promise<string | null>
+  /** Whether secrets would only be obfuscated at rest, as on Linux with no keyring running. */
+  secretStorageIsWeak(): Promise<boolean>
   /** Copies the versions, OS and recent app log, with secrets redacted, to the clipboard. */
   copyDiagnostics(): Promise<void>
   /** This copy's version, e.g. `0.1.0`. */

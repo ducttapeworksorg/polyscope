@@ -116,3 +116,20 @@ test('new S3 Sources use path-style addressing', async () => {
 
   await expect(dialog.getByLabel('Path-style addressing')).toBeChecked()
 })
+
+test('warn that secret keys are only obfuscated when no keyring is running', async () => {
+  const weak = 'No keyring (GNOME Keyring or KWallet) is running'
+  if (process.platform === 'linux') {
+    // Chromium's basic password store is the fallback it picks when there's no keyring.
+    await app.close()
+    app = await electron.launch({
+      args: [join(__dirname, '..', '..', 'out', 'main', 'index.js'), `--user-data-dir=${join(dir, 'user-data')}`, '--password-store=basic']
+    })
+  }
+  const window = await app.firstWindow()
+  const dialog = await openAddSource(window, 's3')
+
+  await expect(dialog.getByLabel('Secret key')).toBeVisible()
+  if (process.platform === 'linux') await expect(dialog.getByText(weak)).toBeVisible()
+  else await expect(dialog.getByText(weak)).toHaveCount(0)
+})

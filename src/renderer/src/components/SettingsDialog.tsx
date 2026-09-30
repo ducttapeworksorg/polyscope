@@ -27,6 +27,7 @@ const fields: { key: NumberSetting; unit: number; section: 'files' | 'logs' }[] 
 const parseWhole = (text: string) => (/^\s*\d+\s*$/.test(text) ? Number(text) : NaN)
 
 const issuesUrl = 'https://github.com/ducttapeworksorg/polyscope/issues'
+const licenseUrl = 'https://github.com/ducttapeworksorg/polyscope/blob/main/LICENSE'
 
 /** Edits the app-wide settings. The theme is previewed as soon as it's picked; nothing is saved until Save. */
 export function SettingsDialog({ settings, update, onPreviewTheme, onManageEnvironments, onSaved, onClose }: Props) {
@@ -189,6 +190,13 @@ export function SettingsDialog({ settings, update, onPreviewTheme, onManageEnvir
               {diagnostics && t(`settings.diagnostics.${diagnostics}`)}
             </span>
           </div>
+          <p className="field__hint">
+            {t('settings.disclaimer')}{' '}
+            <a href={licenseUrl} target="_blank" rel="noreferrer">
+              {t('settings.license')}
+            </a>
+            .
+          </p>
         </fieldset>
 
         {error && (

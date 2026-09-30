@@ -32,6 +32,8 @@ test('change settings and the theme, and find them again after a relaunch', asyn
   await expect(dialog.getByLabel('Large File threshold (MB)')).toHaveValue('50')
   await expect(dialog.getByLabel('“Open anyway” limit (MB)')).toHaveValue('200')
   await expect(dialog.getByLabel('Default “Last N lines”')).toHaveValue('10000')
+  await expect(dialog.getByText('provided “as is”, without warranty')).toBeVisible()
+  await expect(dialog.getByRole('link', { name: 'Apache License 2.0' })).toBeVisible()
 
   // Picking a theme shows it at once; Cancel goes back to the saved one.
   await dialog.getByText('Light', { exact: true }).click()

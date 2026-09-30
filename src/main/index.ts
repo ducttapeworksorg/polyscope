@@ -21,6 +21,12 @@ if (userDataDir) app.setPath('userData', userDataDir)
 // The window's colour before the renderer paints, matching the editor well of each theme in app.css.
 const backgroundColor: Record<Theme, string> = { dark: '#1b2230', light: '#fbfcfd' }
 
+/**
+ * Whether secrets are only obfuscated at rest: on Linux with no Secret Service or KWallet, Electron's safeStorage
+ * falls back to a hard-coded key. Only known once the app is ready.
+ */
+const secretStorageIsWeak = () => process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text'
+
 /** Makes native chrome (title bar, OS dialogs) and the window background follow the app's theme. */
 function applyNativeTheme(theme: Theme): void {
   nativeTheme.themeSource = theme
@@ -97,8 +103,10 @@ void app.whenReady().then(async () => {
     decrypt: (encrypted: Buffer) => safeStorage.decryptString(encrypted)
   }
   const core = createCore({ dataDir, secrets: createSecretStore({ dataDir, cipher }) })
+  const weakSecrets = secretStorageIsWeak()
+  if (weakSecrets) log.warn('No Secret Service or KWallet found: secrets are only obfuscated at rest')
   registerCoreIpc(core, log)
-  registerShellIpc(() => mainWindow)
+  registerShellIpc(() => mainWindow, { secretStorageIsWeak: weakSecrets })
   registerDiagnosticsIpc(log)
   // Only an installed build updates itself; one run from source is whatever was checked out.
   const updater = app.isPackaged ? createUpdater({ engine: createUpdateEngine(log), log }) : null

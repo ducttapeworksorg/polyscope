@@ -113,6 +113,11 @@ function S3Fields({ value, onChange, editing }: FieldsProps<S3Settings>) {
   // Only a secret stored for keys counts: one signing in with a profile has none.
   const stored = editing?.type === 's3' && editing.auth === 'keys' ? editing.secretKeySet : undefined
   const auth = value.auth ?? 'keys'
+  const [weakSecrets, setWeakSecrets] = useState(false)
+
+  useEffect(() => {
+    void window.polyscope.secretStorageIsWeak().then(setWeakSecrets)
+  }, [])
 
   const browseCaBundle = async () => {
     const picked = await window.polyscope.pickFile([
@@ -162,6 +167,7 @@ function S3Fields({ value, onChange, editing }: FieldsProps<S3Settings>) {
             {stored !== undefined && (
               <span className="field__hint">{t(stored ? 's3Source.secretKey.stored' : 's3Source.secretKey.missing')}</span>
             )}
+            {weakSecrets && <span className="field__problem">{t('s3Source.secretKey.weak')}</span>}
           </label>
         </>
       ) : (

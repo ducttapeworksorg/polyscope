@@ -8,6 +8,7 @@ const bridge: PolyscopeBridge = {
   invokeCore: (method, args) => ipcRenderer.invoke('core', method, args),
   pickFolder: () => ipcRenderer.invoke('shell:pickFolder'),
   pickFile: (filters) => ipcRenderer.invoke('shell:pickFile', filters),
+  secretStorageIsWeak: () => ipcRenderer.invoke('shell:secretStorageIsWeak'),
   copyDiagnostics: () => ipcRenderer.invoke('diagnostics:copy'),
   appVersion: () => ipcRenderer.invoke('updates:appVersion'),
   getUpdateStatus: () => ipcRenderer.invoke('updates:status'),

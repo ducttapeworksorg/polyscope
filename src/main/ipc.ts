@@ -44,7 +44,7 @@ const isFileFilter = (value: unknown): value is FileFilter =>
   Array.isArray((value as FileFilter).extensions) &&
   (value as FileFilter).extensions.every((e) => typeof e === 'string')
 
-export function registerShellIpc(getWindow: () => BrowserWindow | null): void {
+export function registerShellIpc(getWindow: () => BrowserWindow | null, { secretStorageIsWeak }: { secretStorageIsWeak: boolean }): void {
   const pick = async (options: OpenDialogOptions) => {
     const window = getWindow()
     const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options)
@@ -54,6 +54,7 @@ export function registerShellIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle('shell:pickFile', (_event, filters: unknown) =>
     pick({ properties: ['openFile'], filters: Array.isArray(filters) ? filters.filter(isFileFilter) : [] })
   )
+  ipcMain.handle('shell:secretStorageIsWeak', () => secretStorageIsWeak)
 }
 
 const osNames: Partial<Record<NodeJS.Platform, string>> = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' }
