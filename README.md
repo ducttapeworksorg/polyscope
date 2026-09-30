@@ -1,65 +1,68 @@
 # Polyscope
 
-A cross-platform desktop viewer for browsing and reading files and logs from many systems in one editor-like interface.
+**One desktop app for reading files and logs, wherever they live.** Browse a folder on your machine, an S3 bucket, the files inside a Kubernetes pod, or every container log in a namespace, side by side in one editor-like window.
 
-Each **Source** you configure is one place to read from:
+![Polyscope following a container's log in a Kubernetes namespace](docs/images/kubernetes-logs.png)
 
-- **Local Filesystem**: a folder on this machine.
-- **S3-compatible Storage**: a bucket (and optional prefix) on AWS S3, MinIO, or another S3-compatible store.
-- **Kubernetes Files**: a path inside the pods of one Workload, read over `exec`.
-- **Kubernetes Logs**: the pod logs of every Workload in a namespace, as snapshots or followed live.
+## Why Polyscope
 
-## Installing
+Chasing a problem across systems usually means a terminal per place, each with its own tool: `tail -f` for a server's files, the AWS console or `aws s3 cp` for archived logs, `kubectl logs` and `kubectl exec … cat` for a cluster. Each shows you text in a different way, loses your place when you switch, and makes it easy to lose track of which environment you're looking at.
 
-Download the installer for your system from the [latest release](https://github.com/ducttapeworksorg/polyscope/releases/latest):
+Polyscope puts them all in one tree, read the same way:
 
-- **Windows**: `Polyscope-<version>-x64.exe`
-- **macOS**: `Polyscope-<version>-arm64.dmg` (Apple silicon) or `Polyscope-<version>-x64.dmg` (Intel)
-- **Linux**: `Polyscope-<version>-x86_64.AppImage`, or the `.deb` (Debian, Ubuntu) or `.rpm` (Fedora, RHEL, openSUSE) package
+- **Every place in one sidebar.** Local folders, S3-compatible buckets, files inside pods, and pod logs, each configured once as a **Source**.
+- **A real viewer.** Tabs, syntax and log-level highlighting, search, a minimap, line wrapping, and gzip and zstd files shown decompressed. It's the editor that powers VS Code, opened read-only.
+- **Logs that keep up.** Follow a container's log, or a growing file, live. Pause to read, and pick up where you left off. A crashed container's **Previous Log** is one click away.
+- **Files of any size.** Files over 50 MB open end-first in a paged viewer that can jump to any line and search the whole file with a regular expression, without loading it all into memory.
+- **Always know where you are.** Label Sources with an **Environment** like *prod* or *staging*. Its colour follows you onto every tab and the status bar.
+- **Read-only and private.** Polyscope never writes to what it reads, collects no telemetry, and keeps your secrets in your OS keychain.
 
-The installers aren't signed yet, so each system warns you the first time you open Polyscope.
+It runs on Windows, macOS and Linux.
 
-- **Windows**: SmartScreen says *Windows protected your PC*. Choose **More info**, then **Run anyway**.
-- **macOS**: macOS says Polyscope can't be opened, or can't be checked for malicious software. Choose **Done** (not *Move to Trash*), then open **System Settings → Privacy & Security**, scroll down to the message about Polyscope, choose **Open Anyway**, and confirm with your password. You only need to do this once.
-- **Linux**: make the AppImage executable (`chmod +x Polyscope-*.AppImage`) before running it. Some distributions need `libfuse2` installed to run AppImages.
+## What it reads
 
-### Updates
+| Source Type | What it shows | Signs in with |
+| --- | --- | --- |
+| **Local Filesystem** | A folder on this machine, or a UNC share on Windows | Your own file permissions |
+| **S3-compatible Storage** | A bucket, or the keys under a prefix, on AWS S3, MinIO, Ceph and others | Access keys, or an AWS profile (SSO included) |
+| **Kubernetes Files** | A folder inside every pod of one Deployment, StatefulSet or DaemonSet | Your kubeconfig, as `kubectl` does |
+| **Kubernetes Logs** | The logs of every container in a namespace, grouped by Workload, with pod health and restarts | Your kubeconfig, as `kubectl` does |
 
-Polyscope checks GitHub Releases for a newer version when it starts, and every few hours after that. When one is out, the status bar says so; you can also check from **Settings → Updates**.
+## Quick start
 
-- On **Windows**, and from the **AppImage**, **`.deb`** and **`.rpm`**, the update downloads in the background; choose **Restart to update** to install it (the `.deb` and `.rpm` ask for your password).
-- On **macOS**, choosing **Update available** opens the release's page, to download the new `.dmg` and drag Polyscope into Applications over the old one.
+1. **Install** Polyscope from the [latest release](https://github.com/ducttapeworksorg/polyscope/releases/latest): the `.exe` on Windows, the `.dmg` on macOS, or the AppImage, `.deb` or `.rpm` on Linux. The installers aren't signed yet, so see [Installing](docs/installing.md) for getting past the first-run warning.
+2. **Add a Source.** Choose **Add Source** in the sidebar (later, the **+** at its top), pick a Source Type, fill in where it points, and choose **Test connection**, then **Add Source**.
+3. **Browse.** Expand the Source to connect to it. Click a file or a container to preview it, double-click to keep it open in its own tab, and choose **Follow** to watch it grow.
 
-## Privacy
+![The Add Source dialog, for an S3 bucket](docs/images/add-source.png)
 
-Polyscope collects **no telemetry**. It has no analytics or crash reporting, and does not phone home.
+## A closer look
 
-It contacts only:
+Files open in a read-only editor with highlighting picked from the file's name. Logs get their levels, timestamps and numbers coloured. The status bar shows the file's Source, path, size, encoding and language, and you can change the last two there.
 
-- the **Sources** you configure, plus whatever they need to sign in (your AWS SSO or kubeconfig exec plugins, for example), through any proxy you set;
-- GitHub Releases, to check for updates.
+![A local folder of logs, with app.log open among several tabs](docs/images/local-files.png)
 
-Secrets you enter, such as S3 secret keys, are stored encrypted using your operating system's secure storage where one is available (Keychain on macOS, DPAPI on Windows, the Secret Service on Linux).
+Files over the Large File threshold open in the **Large File Viewer**. It shows the end first, then lets you go to any line and search the whole file once it's cached.
 
-Polyscope keeps a small log of its own errors in its user-data folder (`logs/`, about 2 MB at most). Secret keys, tokens, passwords, and credential-bearing URLs are redacted before anything is written to it, and it never leaves your machine unless you copy it yourself.
+![The Large File Viewer, listing every line matching a search](docs/images/large-file.png)
+
+There's a light theme too, a click away at the top of the sidebar.
+
+![Polyscope in its light theme](docs/images/light-theme.png)
+
+## Documentation
+
+- [Installing and updating](docs/installing.md): downloads, first-run warnings on each system, and how updates work
+- [Sources](docs/sources.md): setting up each Source Type, and labelling Sources with Environments
+- [Reading files and logs](docs/reading.md): tabs, following logs, Large Files, encodings, settings and keyboard shortcuts
+- [Privacy](docs/privacy.md): what Polyscope connects to and what it stores
+- [Development](docs/development.md): building, testing and releasing Polyscope
 
 ## Reporting a bug
 
-Please [open an issue on GitHub](https://github.com/ducttapeworksorg/polyscope/issues). To help us reproduce it, open **Settings → Help → Copy diagnostics** and paste the result into the issue. It contains the Polyscope, OS, and Electron versions and the recent app log. Secret keys, tokens, passwords, credential-bearing URLs, and your home folder's path are removed first, but read it over before you post it.
+Please [open an issue on GitHub](https://github.com/ducttapeworksorg/polyscope/issues). To help us reproduce it, open **Settings → Help → Copy diagnostics** and paste the result into the issue. It contains the Polyscope, OS and Electron versions and the recent app log. Secret keys, tokens, passwords, credential-bearing URLs and your home folder's path are removed first, but read it over before you post it.
 
-## Development
-
-```sh
-npm install
-git config core.hooksPath .githooks   # enforces Conventional Commits
-npm run dev          # run the app with hot reload
-npm run typecheck
-npm test             # unit and integration tests
-npm run build && npm run test:smoke   # end-to-end tests against the built app
-npm run dist         # this platform's installers, in dist/
-```
-
-To release, bump `version` in `package.json`, commit, and push a matching tag (`git tag v1.2.3 && git push origin v1.2.3`); a tag with a pre-release part, like `v1.3.0-beta.1`, is published as a pre-release, which installed copies don't update to. The release workflow builds the installers on each platform and publishes them to GitHub Releases, where installed copies find them. `build/icon.png` is rendered from `build/icon.svg` by `npm run icon`.
+To report a security problem, please email [ducttapeworks@proton.me](mailto:ducttapeworks@proton.me) rather than opening a public issue.
 
 ## License
 
