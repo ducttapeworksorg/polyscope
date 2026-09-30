@@ -33,7 +33,7 @@ A bucket on AWS S3, MinIO, Ceph, or any other S3-compatible store.
 - **Bucket**, and an optional **Prefix** to browse only the keys under it, like `logs/app`.
 - **Region**, and **Path-style addressing**, which MinIO and most self-hosted stores need. It's on for new Sources.
 - **Sign in with**:
-  - **Access keys**: an access key and secret key. The secret key is stored encrypted in your OS keychain.
+  - **Access keys**: an access key and secret key. The secret key is stored encrypted by your operating system's secure storage (see [Privacy](privacy.md) for Linux without a keyring).
   - **AWS profile**: a profile from your AWS config and credentials files, or the default credential chain. An SSO profile needs you to have run `aws sso login` recently.
 - **CA bundle**: a PEM file of extra CA certificates to trust, for stores with a private CA.
 - **Verify TLS certificates**: turn it off only when you must. The Source shows a **TLS** warning while it's off.

@@ -15,7 +15,7 @@ Polyscope puts them all in one tree, read the same way:
 - **Logs that keep up.** Follow a container's log, or a growing file, live. Pause to read, and pick up where you left off. A crashed container's **Previous Log** is one click away.
 - **Files of any size.** Files over 50 MB open end-first in a paged viewer that can jump to any line and search the whole file with a regular expression, without loading it all into memory.
 - **Always know where you are.** Label Sources with an **Environment** like *prod* or *staging*. Its colour follows you onto every tab and the status bar.
-- **Read-only and private.** Polyscope never writes to what it reads, collects no telemetry, and keeps your secrets in your OS keychain.
+- **Read-only and private.** Polyscope never writes to what it reads, collects no telemetry, and encrypts your secrets with your operating system's secure storage.
 
 It runs on Windows, macOS and Linux.
 
@@ -66,4 +66,4 @@ To report a security problem, please email [ducttapeworks@proton.me](mailto:duct
 
 ## License
 
-[Apache-2.0](LICENSE)
+[Apache-2.0](LICENSE). Polyscope is provided "as is", without warranty of any kind, and its authors aren't liable for any damage arising from its use. See sections 7 and 8 of the license.
