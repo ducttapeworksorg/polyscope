@@ -2,7 +2,7 @@
 
 A **Source** is one place Polyscope reads from: a folder, a bucket, a Workload's files, or a namespace's logs. You configure each one once, give it a name, and it stays in the sidebar, grouped by its Source Type.
 
-To add one, choose **Add Source** in the empty sidebar, or **+** at its top once you have Sources, pick a **Source Type**, and fill in the rest. **Test connection** checks the settings without saving anything.
+To add one, choose **+** next to **Sources** at the top of the sidebar, pick a **Source Type**, and fill in the rest. **Test connection** checks the settings without saving anything.
 
 ## Connecting
 
@@ -14,7 +14,7 @@ Point at a Source's row to see its actions:
 - **Disconnect** stops every live Follow of the Source but leaves its tabs open, with a **Reconnect** button.
 - **Edit…**, **Duplicate** and **Delete…**. Deleting a Source forgets its settings and any secrets stored for it. What it points at is never touched.
 
-Drag a Source to reorder it within its group. The first icon at the top of the sidebar shows or hides file sizes and modified times.
+Drag a Source to reorder it within its group. The first of the icons at the top right of the sidebar shows or hides file sizes and modified times.
 
 ## Local Filesystem
 

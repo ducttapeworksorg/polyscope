@@ -204,6 +204,16 @@ export function Sidebar(props: Props) {
     <nav ref={ref} className="sidebar" aria-label={t('sidebar.heading')}>
       <header className="sidebar__header">
         <h2 className="sidebar__heading">{t('sidebar.heading')}</h2>
+        {/* Next to the heading and solid, so it isn't taken for one of the view controls on the right. */}
+        <button
+          type="button"
+          className="add-source"
+          aria-label={t('sidebar.add')}
+          title={t('sidebar.add')}
+          onClick={() => setDialog({ kind: 'add' })}
+        >
+          <PlusIcon />
+        </button>
         <span className="sidebar__actions">
           {!isEmpty && (
             <button
@@ -215,17 +225,6 @@ export function Sidebar(props: Props) {
               onClick={onToggleDetails}
             >
               <DetailsIcon />
-            </button>
-          )}
-          {!isEmpty && (
-            <button
-              type="button"
-              className="icon-button"
-              aria-label={t('sidebar.add')}
-              title={t('sidebar.add')}
-              onClick={() => setDialog({ kind: 'add' })}
-            >
-              <PlusIcon />
             </button>
           )}
           <button
@@ -255,17 +254,13 @@ export function Sidebar(props: Props) {
         </p>
       )}
 
-      {isEmpty && (
-        <div className="sidebar__empty">
-          <p className="sidebar__empty-title">{t('sidebar.empty.title')}</p>
-          <p className="sidebar__empty-body">{t('sidebar.empty.body')}</p>
-          <button type="button" className="button button--primary" onClick={() => setDialog({ kind: 'add' })}>
-            {t('sidebar.add')}
-          </button>
-        </div>
-      )}
-
       <div className="sidebar__sources" onKeyDown={onTreeKeyDown}>
+        {isEmpty && (
+          <div className="sidebar__empty">
+            <p className="sidebar__empty-title">{t('sidebar.empty.title')}</p>
+            <p className="sidebar__empty-body">{t('sidebar.empty.body')}</p>
+          </div>
+        )}
         {groups.map((group) => {
           const { Icon, label } = uiFor(group.type)
           return (

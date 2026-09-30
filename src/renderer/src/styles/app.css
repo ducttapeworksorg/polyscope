@@ -294,7 +294,7 @@ body.is-resizing {
 .sidebar__header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 10px;
   height: 38px;
   padding: 0 8px 0 14px;
   flex: none;
@@ -303,6 +303,7 @@ body.is-resizing {
 .sidebar__actions {
   display: flex;
   gap: 2px;
+  margin-left: auto;
 }
 
 .sidebar__heading {
@@ -335,9 +336,37 @@ body.is-resizing {
 }
 
 .sidebar__empty-body {
-  margin: 0 0 14px;
+  margin: 0;
   color: var(--text-dim);
   max-width: 30ch;
+}
+
+/* The one solid mark in the sidebar's chrome, so adding a Source stands apart from the view controls. */
+.add-source {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: var(--text);
+  color: var(--slate-900);
+  cursor: pointer;
+}
+
+.add-source svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2;
+}
+
+.add-source:hover {
+  background: var(--glint);
+}
+
+.add-source:focus-visible {
+  outline-offset: 2px;
 }
 
 /* ---------- Dialogs ---------- */

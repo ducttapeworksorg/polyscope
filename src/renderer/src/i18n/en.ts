@@ -6,7 +6,7 @@ export const en = {
   'sidebar.heading': 'Sources',
   'sidebar.add': 'Add Source',
   'sidebar.empty.title': 'No Sources yet',
-  'sidebar.empty.body': 'Add a folder on this computer, an S3 bucket or a Kubernetes namespace to browse its files and logs.',
+  'sidebar.empty.body': 'Choose + to add a folder on this computer, an S3 bucket or a Kubernetes namespace, and browse its files and logs.',
   'sidebar.settings': 'Settings',
   'sidebar.lightTheme': 'Switch to the light theme',
   'sidebar.darkTheme': 'Switch to the dark theme',

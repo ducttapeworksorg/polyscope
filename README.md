@@ -31,7 +31,7 @@ It runs on Windows, macOS and Linux.
 ## Quick start
 
 1. **Install** Polyscope from the [latest release](https://github.com/ducttapeworksorg/polyscope/releases/latest): the `.exe` on Windows, the `.dmg` on macOS, or the AppImage, `.deb` or `.rpm` on Linux. The installers aren't signed yet, so see [Installing](docs/installing.md) for getting past the first-run warning.
-2. **Add a Source.** Choose **Add Source** in the sidebar (later, the **+** at its top), pick a Source Type, fill in where it points, and choose **Test connection**, then **Add Source**.
+2. **Add a Source.** Choose **+** next to **Sources** at the top of the sidebar, pick a Source Type, fill in where it points, and choose **Test connection**, then **Add Source**.
 3. **Browse.** Expand the Source to connect to it. Click a file or a container to preview it, double-click to keep it open in its own tab, and choose **Follow** to watch it grow.
 
 ![The Add Source dialog, for an S3 bucket](docs/images/add-source.png)
