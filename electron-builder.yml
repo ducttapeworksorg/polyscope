@@ -55,5 +55,5 @@ linux:
   target: [AppImage, deb, rpm]
   category: Development
   synopsis: A viewer for files and logs from many systems
-  maintainer: Duct Tape Works
+  maintainer: Duct Tape Works <ducttapeworks@proton.me>
   executableName: polyscope
