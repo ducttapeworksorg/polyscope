@@ -571,7 +571,8 @@ export function createCore(options: CoreOptions = {}): Core {
   /** A Log Source node's children: groups in the order of their kind, containers in their pod's, the rest by name. */
   const listLogNodes = async (logSource: LogSource, path: SourcePath): Promise<TreeNode[]> => {
     const nodes = await logSource.listChildren(path)
-    if (nodes.every((node) => node.kind === 'container')) return nodes
+    // A pod's containers, each restarted one followed by its Previous Log.
+    if (nodes.every((node) => node.kind === 'container' || node.kind === 'previousLog')) return nodes
     const rank = (node: LogNode) => (node.kind === 'group' ? workloadKinds.indexOf(node.workloadKind) : 0)
     return nodes.toSorted((a, b) => rank(a) - rank(b) || byName.compare(a.name, b.name))
   }
