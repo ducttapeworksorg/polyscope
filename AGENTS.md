@@ -4,7 +4,7 @@
 
 ### Issue tracker
 
-Issues are tracked as local markdown files under `.scratch/<feature>/`. See `docs/agents/issue-tracker.md`.
+Issues are tracked in GitHub Issues on `ducttapeworksorg/polyscope` (via the `gh` CLI). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
