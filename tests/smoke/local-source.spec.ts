@@ -557,8 +557,9 @@ test('open a Large File at its end, then scroll to any line once it is cached', 
   await search.fill(String.raw`^000012345\d `)
   await search.press('Enter')
   await expect(window.getByText('10 matching lines')).toBeVisible({ timeout: 30_000 })
+  // Only the matches that fit are rendered, however many there are.
   const matches = window.getByRole('listbox', { name: 'Matching lines' }).getByRole('option')
-  await expect(matches).toHaveCount(10)
+  await expect(matches.first()).toContainText('0000123450 INFO')
   // From the end, the next match wraps around to the first.
   await search.press('Enter')
   await expect(window.getByText('1 of 10')).toBeVisible()
@@ -566,7 +567,7 @@ test('open a Large File at its end, then scroll to any line once it is cached', 
   await expect(view.locator('.large-file__match').first()).toHaveText('0000123450 ')
   await search.press('Shift+Enter')
   await expect(window.getByText('10 of 10')).toBeVisible()
-  await matches.nth(4).click()
+  await matches.filter({ hasText: '0000123454 INFO' }).click()
   await expect(window.getByText('5 of 10')).toBeVisible()
   await expect(view).toContainText('0000123454 INFO')
   // Levels are picked out in the lines.

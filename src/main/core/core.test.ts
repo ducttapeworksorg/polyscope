@@ -103,8 +103,9 @@ describe('tree metadata and icons', () => {
     return { core, source, nodes: (await core.connect(source.id)) as EntryNode[] }
   }
   const recently = () => ({ before: Date.now() - 60_000 })
+  // Times carry fractions of a millisecond, Date.now() doesn't: one taken in the same millisecond isn't in the future.
   const isRecent = (time: number | undefined, { before }: { before: number }) =>
-    time !== undefined && time > before && time <= Date.now()
+    time !== undefined && time > before && Math.floor(time) <= Date.now()
 
   it('gives files their size and modified time', async () => {
     const since = recently()
