@@ -664,12 +664,17 @@ describe.skipIf(!hasTestCluster)('Previous Logs against the test cluster', () =>
     const [container, previous] = await core.expand(sourceId, pod.path)
     expect(container).toMatchObject({ kind: 'container', name: 'crash' })
     expect(previous).toEqual({ kind: 'previousLog', name: 'previous', path: `${pod.path}/crash/previous`, container: 'crash' })
-    expect(await core.openLog(sourceId, `${pod.path}/crash/previous`)).toMatchObject({
-      name: 'crash',
-      pod: pod.name,
-      previous: true,
-      content: 'crashing'
-    })
+    // Between restarts the kubelet can briefly answer with "unable to retrieve container logs" instead.
+    await vi.waitFor(
+      async () =>
+        expect(await core.openLog(sourceId, `${pod.path}/crash/previous`)).toMatchObject({
+          name: 'crash',
+          pod: pod.name,
+          previous: true,
+          content: 'crashing'
+        }),
+      { timeout: 20_000, interval: 1_000 }
+    )
   }, 120_000)
 
   it('lists none for a container that has not restarted', async () => {

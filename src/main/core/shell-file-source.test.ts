@@ -63,8 +63,8 @@ describe.skipIf(!hasSh)('a Shell File Source run by the local sh', () => {
       expect(entries).toEqual([
         { kind: 'folder', name: 'current', modifiedTime: expect.any(Number) },
         { kind: 'file', name: 'dangling', problem: expect.objectContaining({ code: 'NOT_FOUND' }) },
-        { kind: 'file', name: 'loop', problem: expect.objectContaining({ code: 'NOT_FOUND' }) },
-        { kind: 'folder', name: 'logs', modifiedTime: expect.any(Number) }
+        { kind: 'folder', name: 'logs', modifiedTime: expect.any(Number) },
+        { kind: 'file', name: 'loop', problem: expect.objectContaining({ code: 'NOT_FOUND' }) }
       ])
     } finally {
       await rm(root, { recursive: true, force: true })
