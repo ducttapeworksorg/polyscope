@@ -12,6 +12,7 @@ import {
   counterLines,
   hasRestrictedContext,
   hasTestCluster,
+  restartedOnceNamespace,
   restrictedKubernetesLogsSource,
   testKubernetesLogsSource,
   tickerNamespace
@@ -658,24 +659,29 @@ describe.skipIf(!hasTestCluster)('Previous Logs against the test cluster', () =>
     await core.connect(sourceId)
   })
 
+  // Not on the seeded crasher: while it waits to run again, Kubernetes has often removed the run before its last.
   it('lists a restarted container’s Previous Log right after it, and opens the run before the current one', async () => {
-    const pod = await crashedPod(core, sourceId)
+    const namespace = `polyscope-test-previous-${process.pid}`
+    const { remove } = await restartedOnceNamespace(namespace)
+    const restarted = (await core.addSource(testKubernetesLogsSource('Restarted', namespace))).id
+    try {
+      await core.connect(restarted)
 
-    const [container, previous] = await core.expand(sourceId, pod.path)
-    expect(container).toMatchObject({ kind: 'container', name: 'crash' })
-    expect(previous).toEqual({ kind: 'previousLog', name: 'previous', path: `${pod.path}/crash/previous`, container: 'crash' })
-    // Between restarts the kubelet can briefly answer with "unable to retrieve container logs" instead.
-    await vi.waitFor(
-      async () =>
-        expect(await core.openLog(sourceId, `${pod.path}/crash/previous`)).toMatchObject({
-          name: 'crash',
-          pod: pod.name,
-          previous: true,
-          content: 'crashing'
-        }),
-      { timeout: 20_000, interval: 1_000 }
-    )
-  }, 120_000)
+      const [container, previous] = await core.expand(restarted, 'pods/restarted')
+      expect(container).toMatchObject({ kind: 'container', name: 'restarted' })
+      expect(previous).toEqual({ kind: 'previousLog', name: 'previous', path: 'pods/restarted/restarted/previous', container: 'restarted' })
+      expect(await core.openLog(restarted, 'pods/restarted/restarted/previous')).toMatchObject({
+        name: 'restarted',
+        pod: 'restarted',
+        previous: true,
+        content: 'crashing'
+      })
+      expect(await core.openLog(restarted, 'pods/restarted/restarted')).toMatchObject({ previous: false, content: 'running' })
+    } finally {
+      await core.disconnect(restarted)
+      await remove()
+    }
+  }, 150_000)
 
   it('lists none for a container that has not restarted', async () => {
     expect(described(await core.expand(sourceId, 'pods/counter'))).toEqual(['container counter'])

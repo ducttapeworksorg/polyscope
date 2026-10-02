@@ -4,7 +4,7 @@
 // POLYSCOPE_TEST_KUBE_RESTRICTED_CONTEXT names a context signed in as the seed's `restricted` ServiceAccount.
 
 import { randomUUID } from 'node:crypto'
-import { CoreV1Api } from '@kubernetes/client-node'
+import { CoreV1Api, type V1ContainerStatus, type V1PodSpec } from '@kubernetes/client-node'
 import type { NewKubernetesFilesSource, NewKubernetesLogsSource } from '@shared/core-api'
 import type { SeedTree } from './file-source-contract'
 import { execInPod, type ExecTarget } from './kubernetes-exec'
@@ -129,21 +129,53 @@ export const counterLines = Array.from({ length: 100 }, (_, i) => `line ${i + 1}
  * the pod is running; `remove` deletes the namespace.
  */
 export async function tickerNamespace(namespace: string, ticks: number) {
+  const script = `i=0; while [ $i -lt ${ticks} ]; do i=$((i+1)); echo "tick $i"; sleep 1; done; exit 1`
+  return podNamespace(namespace, 'ticker', script, (status) => status.state?.running !== undefined)
+}
+
+/**
+ * Creates `namespace` with a pod, `restarted`, whose container logs "crashing" and crashes on its first run, then
+ * logs "running" and keeps running. Its crashed run stays its Previous Log, unlike a crash-looping container's:
+ * between runs, that one's last run is the current one, and Kubernetes has already removed the run before it.
+ */
+export async function restartedOnceNamespace(namespace: string) {
+  // The marker is kept in an emptyDir, which outlives the container, so only the first run crashes.
+  const script = 'if [ -e /state/crashed ]; then echo running; exec sleep 3600; fi; touch /state/crashed; echo crashing; exit 1'
+  return podNamespace(namespace, 'restarted', script, (status) => (status.restartCount ?? 0) > 0 && status.state?.running !== undefined, {
+    volumes: [{ name: 'state', emptyDir: {} }],
+    mounts: [{ name: 'state', mountPath: '/state' }]
+  })
+}
+
+/** Creates `namespace` with a pod of one busybox container, both named `name`, running `script`, once `ready` holds for it. */
+async function podNamespace(
+  namespace: string,
+  name: string,
+  script: string,
+  ready: (status: V1ContainerStatus) => boolean,
+  { volumes, mounts }: { volumes?: V1PodSpec['volumes']; mounts?: V1PodSpec['containers'][number]['volumeMounts'] } = {}
+) {
   const api = kubeConfigFor(context ?? '').makeApiClient(CoreV1Api)
   await api.createNamespace({ body: { metadata: { name: namespace } } })
   const remove = () => api.deleteNamespace({ name: namespace, gracePeriodSeconds: 0 }).then(() => undefined)
   try {
     // A bare pod isn't retried like a Workload's: its namespace's default ServiceAccount has to be there first.
     await until(() => api.readNamespacedServiceAccount({ name: 'default', namespace }).then(() => true, () => false))
-    const script = `i=0; while [ $i -lt ${ticks} ]; do i=$((i+1)); echo "tick $i"; sleep 1; done; exit 1`
     await api.createNamespacedPod({
       namespace,
       body: {
-        metadata: { name: 'ticker' },
-        spec: { terminationGracePeriodSeconds: 0, containers: [{ name: 'ticker', image: 'busybox:1.36', command: ['sh', '-c', script] }] }
+        metadata: { name },
+        spec: {
+          terminationGracePeriodSeconds: 0,
+          volumes,
+          containers: [{ name, image: 'busybox:1.36', command: ['sh', '-c', script], volumeMounts: mounts }]
+        }
       }
     })
-    await until(async () => (await api.readNamespacedPod({ name: 'ticker', namespace })).status?.containerStatuses?.[0]?.state?.running !== undefined)
+    await until(async () => {
+      const status = (await api.readNamespacedPod({ name, namespace })).status?.containerStatuses?.[0]
+      return status !== undefined && ready(status)
+    })
   } catch (error) {
     await remove()
     throw error
