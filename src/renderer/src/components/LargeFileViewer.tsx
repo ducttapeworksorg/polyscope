@@ -156,11 +156,14 @@ export function LargeFileViewer({ file, place, onPlace, openAnywayLimit, onOpenA
   }, [shownTop, maxTop, scrollRange])
 
   const onScroll = () => {
-    const { scrollTop } = scrollerRef.current!
+    const { scrollTop, scrollHeight: laidOut, clientHeight } = scrollerRef.current!
     const expected = settingScroll.current
     settingScroll.current = null
     if (expected !== null && Math.abs(scrollTop - expected) < 1) return
-    moveTo(scrollTop >= scrollRange - 1 ? Infinity : scrollRange > 0 ? (scrollTop / scrollRange) * maxTop : 0)
+    // Measured, not from this render: when the view grows, the browser pulls scrollTop back to its new end
+    // before the new height is rendered, and that must still read as the end.
+    const range = laidOut - clientHeight
+    moveTo(scrollTop >= range - 1 ? Infinity : range > 0 ? (scrollTop / range) * maxTop : 0)
   }
 
   // The wheel moves by lines, not by pixels of a scaled scrollbar, however tall the file.
