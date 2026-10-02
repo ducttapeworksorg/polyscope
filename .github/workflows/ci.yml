@@ -34,9 +34,20 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
+      # Xvfb alone has no window manager, so nothing would maximize the window; Fluxbox does.
+      - name: Install a window manager (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fluxbox x11-utils
+
       - name: Smoke test (Linux)
         if: runner.os == 'Linux'
-        run: xvfb-run --auto-servernum npm run test:smoke
+        run: |
+          xvfb-run --auto-servernum sh -c '
+            fluxbox > /dev/null 2>&1 &
+            for _ in $(seq 1 30); do xprop -root _NET_SUPPORTING_WM_CHECK 2> /dev/null | grep -q "window id" && break; sleep 1; done
+            npm run test:smoke'
 
       - name: Smoke test
         if: runner.os != 'Linux'
