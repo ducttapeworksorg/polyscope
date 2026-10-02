@@ -12,6 +12,8 @@ npm run build && npm run test:smoke   # end-to-end tests against the built app
 npm run dist         # this platform's installers, in dist/
 ```
 
+A build run from source (`npm run dev` or `npm start`) keeps its Sources, settings and secrets in `Ducttapeworks/Polyscope Dev` in the OS's app-data folder (`%APPDATA%` on Windows, `~/Library/Application Support` on macOS, `~/.config` on Linux), apart from an installed copy's `Ducttapeworks/Polyscope`, so the two can run side by side. `--user-data-dir=<folder>` points either at another folder.
+
 ## Where things are
 
 - `src/main/core/`: the core. Sources, Source Types and their backends, following, the Large File cache, settings and secrets.

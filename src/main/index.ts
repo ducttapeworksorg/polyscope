@@ -14,9 +14,12 @@ let mainWindow: BrowserWindow | null = null
 // Started straight away, so the shell runs while Electron gets ready; Sources only connect once it's done.
 const loginShellPathLoaded = loadLoginShellPath()
 
-// Lets tests (and anyone keeping separate profiles) point the app at another user-data directory.
+// Under the company's folder rather than Electron's default (the package name alone), so another app called
+// Polyscope can't share it. A build run from source has its own, so it never touches an installed app's Sources
+// and secrets. Tests (and anyone keeping separate profiles) can point the app at another one.
 const userDataDir = app.commandLine.getSwitchValue('user-data-dir')
-if (userDataDir) app.setPath('userData', userDataDir)
+const userDataName = app.isPackaged ? 'Polyscope' : 'Polyscope Dev'
+app.setPath('userData', userDataDir || join(app.getPath('appData'), 'Ducttapeworks', userDataName))
 
 // The window's colour before the renderer paints, matching the editor well of each theme in app.css.
 const backgroundColor: Record<Theme, string> = { dark: '#1b2230', light: '#fbfcfd' }
