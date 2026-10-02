@@ -2,7 +2,8 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 /**
- * Reads a JSON file, or returns undefined when it doesn't exist yet. A file that can't be
+ * Reads a JSON file, or returns undefined when it doesn't exist yet, including when a file stands
+ * where one of its folders should be (missing on Windows, ENOTDIR elsewhere). A file that can't be
  * parsed is renamed aside (kept for the user to recover by hand) and treated as missing,
  * so one damaged file never locks the user out of the app.
  */
@@ -11,7 +12,8 @@ export async function readJsonFile(file: string): Promise<unknown> {
   try {
     text = await readFile(file, 'utf8')
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    const { code } = error as NodeJS.ErrnoException
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined
     throw error
   }
   try {

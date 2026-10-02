@@ -275,6 +275,8 @@ export function createCore(options: CoreOptions = {}): Core {
       sources.push(...saved.sources.map(withDefaults))
       groupOrder.splice(0, groupOrder.length, ...saved.groupOrder)
     })
+  // A failed load is reported to whoever awaits it, not as an unhandled rejection when nobody has yet.
+  loaded?.catch(() => undefined)
   let settings: Settings = { ...defaultSettings }
   // Settings that can't be read at all leave the defaults in place rather than keep the app from starting.
   const settingsLoaded = settingsStore?.load().then(
