@@ -54,7 +54,10 @@ jobs:
 
       - run: npm ci
 
+      # Bundling Monaco peaks near the ~2 GB heap Node defaults to on the smaller runners private repos get.
       - run: npm run build
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
 
       # Uploads the installers, and the latest*.yml files electron-updater reads, to the draft.
       - run: npx electron-builder --publish always
