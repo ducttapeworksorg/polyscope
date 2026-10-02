@@ -2,7 +2,7 @@
 # `npm run dist` builds this platform's; the release workflow builds all three and publishes them.
 appId: com.ducttapeworks.polyscope
 productName: Polyscope
-copyright: Copyright © 2026 Duct Tape Works
+copyright: Copyright © 2026 Ducttapeworks
 artifactName: ${productName}-${version}-${arch}.${ext}
 
 directories:
@@ -55,5 +55,5 @@ linux:
   target: [AppImage, deb, rpm]
   category: Development
   synopsis: A viewer for files and logs from many systems
-  maintainer: Duct Tape Works <ducttapeworks@proton.me>
+  maintainer: Ducttapeworks <ducttapeworks@proton.me>
   executableName: polyscope

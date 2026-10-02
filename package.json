@@ -4,7 +4,7 @@
   "description": "A cross-platform desktop viewer for files and logs from many systems.",
   "license": "Apache-2.0",
   "author": {
-    "name": "Duct Tape Works",
+    "name": "Ducttapeworks",
     "email": "ducttapeworks@proton.me"
   },
   "homepage": "https://github.com/ducttapeworksorg/polyscope",
