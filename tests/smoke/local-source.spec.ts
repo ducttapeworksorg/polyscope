@@ -166,11 +166,14 @@ test('browse the tree and work the tabs by keyboard alone', async () => {
   await expect(row('Fixture')).toHaveCSS('outline-style', 'solid')
   await keys('ArrowRight')
   await expect(row('Fixture')).toHaveAttribute('aria-expanded', 'true')
+  // A folder shows as open before its children have loaded; moving on any sooner would skip past them.
+  await expect(row('logs')).toBeVisible()
   await keys('ArrowRight')
   await expect(row('logs')).toBeFocused()
   await expect(row('logs')).toHaveAttribute('aria-selected', 'true')
   await keys('ArrowRight')
   await expect(row('logs')).toHaveAttribute('aria-expanded', 'true')
+  await expect(row('app.log')).toBeVisible()
 
   // Space previews a file; Enter opens one pinned. The keyboard stays in the tree.
   await keys('ArrowDown', 'Space')
