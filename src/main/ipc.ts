@@ -1,32 +1,15 @@
 import { homedir } from 'node:os'
 import { app, clipboard, dialog, ipcMain, type BrowserWindow, type FileFilter, type OpenDialogOptions } from 'electron'
-import { coreMethods, type CoreApi, type CoreEvents, type CoreMethod, type CoreResult } from '@shared/core-api'
+import type { CoreApi, CoreEvents } from '@shared/core-api'
 import type { UpdateStatus } from '@shared/updates'
 import type { AppLog } from './app-log'
-import { CoreError } from './core/core-error'
+import { callCore } from './core-call'
 import { formatDiagnostics } from './diagnostics'
 import type { Updater } from './updates'
 
-const isCoreMethod = (value: unknown): value is CoreMethod => coreMethods.includes(value as CoreMethod)
-
-/** Exposes the core API to the renderer. Errors travel as values so their code survives IPC; each is logged. */
+/** Exposes the core API to the renderer. */
 export function registerCoreIpc(core: CoreApi, log: AppLog): void {
-  ipcMain.handle('core', async (_event, method: unknown, args: unknown): Promise<CoreResult<unknown>> => {
-    if (!isCoreMethod(method) || !Array.isArray(args)) {
-      return { ok: false, code: 'UNKNOWN', message: `Unknown core call: ${String(method)}` }
-    }
-    try {
-      const call = core[method] as (...a: unknown[]) => Promise<unknown>
-      return { ok: true, value: await call(...args) }
-    } catch (error) {
-      if (error instanceof CoreError) {
-        log.warn(`${method} failed (${error.code})`, error.message)
-        return { ok: false, code: error.code, message: error.message }
-      }
-      log.error(`${method} failed`, error)
-      return { ok: false, code: 'UNKNOWN', message: error instanceof Error ? error.message : String(error) }
-    }
-  })
+  ipcMain.handle('core', (_event, method: unknown, args: unknown) => callCore(core, log, method, args))
 }
 
 /** Forwards the core's events to whichever window is open. */

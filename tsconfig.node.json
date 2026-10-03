@@ -14,5 +14,6 @@
     "src/shared/**/*",
     "tests/**/*",
     "scripts/screenshots/**/*"
-  ]
+  ],
+  "exclude": ["tests/extension/**/*"]
 }

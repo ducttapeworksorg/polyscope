@@ -1,0 +1,9 @@
+# Only the manifest, the bundles and their media go into the .vsix.
+**
+!package.json
+!README.md
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+!icon.png
+!media/**
+!dist/**

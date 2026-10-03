@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync, zstdCompressSync } from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { MB } from '@shared/settings'
 import { createCore } from './core'
 import { hexDumpLimit } from './file-content'
 
@@ -228,5 +229,52 @@ describe('language detection', () => {
     const { languageIds } = await import('./languages')
 
     expect(languageIds.filter((id) => !known.has(id))).toEqual([])
+  })
+})
+
+describe('reading a file whole, for an editor outside Polyscope', () => {
+  it('gives its bytes as they are, whatever they encode', async () => {
+    const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), utf16le(text), Buffer.alloc(3)])
+    const { core, source } = await withFiles({ 'a.bin': bytes })
+
+    expect(Buffer.from(await core.readFile(source.id, 'a.bin'))).toEqual(bytes)
+  })
+
+  it('decompresses a compressed file', async () => {
+    const { core, source } = await withFiles({ 'app.log.gz': gzipSync(text), 'app.log.zst': zstdCompressSync(Buffer.from(text)) })
+
+    expect(Buffer.from(await core.readFile(source.id, 'app.log.gz')).toString()).toBe(text)
+    expect(Buffer.from(await core.readFile(source.id, 'app.log.zst')).toString()).toBe(text)
+  })
+
+  it('refuses a file whose content is over the "open anyway" limit', async () => {
+    const { core, source } = await withFiles({ 'big.log': 'x'.repeat(2 * MB + 1), 'big.log.gz': gzipSync('x'.repeat(2 * MB + 1)) })
+    await core.updateSettings({ largeFileThreshold: MB, openAnywayLimit: 2 * MB, cacheSizeCap: 4 * MB })
+
+    await expect(core.readFile(source.id, 'big.log')).rejects.toMatchObject({ code: 'OVER_OPEN_ANYWAY_LIMIT' })
+    await expect(core.readFile(source.id, 'big.log.gz')).rejects.toMatchObject({ code: 'OVER_OPEN_ANYWAY_LIMIT' })
+  })
+
+  it('refuses a folder', async () => {
+    const { core, source } = await withFiles({})
+
+    await expect(core.readFile(source.id, '')).rejects.toMatchObject({ code: 'NOT_A_FILE' })
+  })
+
+  it('tells files from folders, with a file’s size as stored', async () => {
+    const compressed = gzipSync(text)
+    const { core, source } = await withFiles({ 'app.log.gz': compressed })
+
+    expect(await core.statPath(source.id, 'app.log.gz')).toMatchObject({ kind: 'file', size: compressed.length, modifiedTime: expect.any(Number) })
+    expect(await core.statPath(source.id, '')).toMatchObject({ kind: 'folder' })
+    await expect(core.statPath(source.id, 'nope.log')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+
+  it('needs the Source connected', async () => {
+    const { core, source } = await withFiles({ 'a.log': text })
+    await core.disconnect(source.id)
+
+    await expect(core.readFile(source.id, 'a.log')).rejects.toMatchObject({ code: 'SOURCE_DISCONNECTED' })
+    await expect(core.statPath(source.id, 'a.log')).rejects.toMatchObject({ code: 'SOURCE_DISCONNECTED' })
   })
 })

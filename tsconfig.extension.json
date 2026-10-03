@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "lib": ["ES2023"],
+    "types": ["node", "vscode"]
+  },
+  "include": [
+    "src/extension/**/*",
+    "src/main/**/*",
+    "src/shared/**/*",
+    "src/preload/bridge.ts",
+    "src/renderer/src/i18n/index.ts",
+    "src/renderer/src/i18n/en.ts",
+    "tests/extension/**/*",
+    "scripts/build-extension.ts"
+  ]
+}

@@ -257,7 +257,18 @@ async function readUpTo(
 
 const inMemory = { encrypt: (plain: string) => Buffer.from(plain), decrypt: (encrypted: Buffer) => encrypted.toString() }
 
-export type Core = CoreApi & CoreEvents
+/**
+ * What a host showing files in an editor of its own reads them with: an Extension Copy's file provider, for VS
+ * Code's editor. Left out of the core API the renderer reaches, as the renderer has an editor of its own.
+ */
+export interface CoreFiles {
+  /** A file or folder of a Connected File Source; a file's size is as stored, before any decompression. */
+  statPath(sourceId: string, path: SourcePath): Promise<FileStat>
+  /** A file's content, decompressed if it's compressed: OVER_OPEN_ANYWAY_LIMIT if that's over the "open anyway" limit. */
+  readFile(sourceId: string, path: SourcePath): Promise<Uint8Array>
+}
+
+export type Core = CoreApi & CoreEvents & CoreFiles
 
 export function createCore(options: CoreOptions = {}): Core {
   const store = options.dataDir ? createRegistryStore(options.dataDir) : null
@@ -878,6 +889,25 @@ export function createCore(options: CoreOptions = {}): Core {
       if (!options.hex) return { view: 'binary', ...common, contentLength: bytes.length }
       const shown = bytes.subarray(0, hexDumpLimit)
       return { view: 'hex', ...common, content: hexDump(shown), contentLength: bytes.length, shownLength: shown.length }
+    },
+
+    async statPath(sourceId, path) {
+      await loaded
+      return fileSourceFor(sourceId, path).stat(path)
+    },
+
+    async readFile(sourceId, path) {
+      await loaded
+      const fileSource = fileSourceFor(sourceId, path)
+      const info = await fileSource.stat(path)
+      if (info.kind !== 'file') throw new CoreError('NOT_A_FILE', `Not a file: ${path}`)
+      const name = path.slice(path.lastIndexOf('/') + 1)
+      const { compression } = compressionOf(name)
+      await settingsLoaded
+      const limit = settings.openAnywayLimit
+      const { bytes, whole } = await readUpTo(fileSource, { path, name, size: info.size, ...(compression && { compression }) }, limit, 0)
+      if (!whole) throw new CoreError('OVER_OPEN_ANYWAY_LIMIT', `The file's content is over the "open anyway" limit of ${limit} bytes`)
+      return bytes
     },
 
     async largeFileStatus(largeFileId) {
