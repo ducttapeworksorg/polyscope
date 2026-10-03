@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { app, net, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import type { AppLog } from './app-log'
@@ -15,6 +15,14 @@ function packageType(): string | undefined {
   } catch {
     return undefined
   }
+}
+
+/**
+ * Whether the NSIS installer put this copy here: it leaves its uninstaller beside the executable, which a Portable
+ * Copy (the portable .exe, or the .zip) doesn't have. It's named after productName in electron-builder.yml.
+ */
+function hasNsisUninstaller(): boolean {
+  return existsSync(join(dirname(process.execPath), 'Uninstall Polyscope.exe'))
 }
 
 /** electron-updater: downloads a newer release in the background, then restarts into it when asked. */
@@ -69,9 +77,14 @@ function offerEngine(): UpdateEngine {
   }
 }
 
-/** The engine that suits how this copy was installed. */
+/** The engine that suits this copy: an Installed Copy updates itself where it can, a Portable Copy is offered a download. */
 export function createUpdateEngine(log: AppLog): UpdateEngine {
-  const mode = updateMode({ platform: process.platform, appImage: process.env['APPIMAGE'], packageType: packageType() })
+  const mode = updateMode({
+    platform: process.platform,
+    hasNsisUninstaller: process.platform === 'win32' && hasNsisUninstaller(),
+    appImage: process.env['APPIMAGE'],
+    packageType: packageType()
+  })
   log.info(`Updates: ${mode === 'install' ? 'installed automatically' : 'offered as a download'}`)
   return mode === 'install' ? installEngine(log) : offerEngine()
 }

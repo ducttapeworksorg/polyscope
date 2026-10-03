@@ -3,8 +3,8 @@ import type { UpdateStatus } from '@shared/updates'
 import { createUpdater, findNewerRelease, isNewerVersion, summarizeUpdateError, updateMode } from './updates'
 
 describe('updateMode', () => {
-  it('installs updates itself on Windows (NSIS), and from an AppImage, a .deb or an .rpm', () => {
-    expect(updateMode({ platform: 'win32' })).toBe('install')
+  it('installs updates itself in an Installed Copy: on Windows (NSIS), and from an AppImage, a .deb or an .rpm', () => {
+    expect(updateMode({ platform: 'win32', hasNsisUninstaller: true })).toBe('install')
     expect(updateMode({ platform: 'linux', appImage: '/home/alice/Polyscope.AppImage' })).toBe('install')
     expect(updateMode({ platform: 'linux', packageType: 'deb' })).toBe('install')
     expect(updateMode({ platform: 'linux', packageType: 'rpm' })).toBe('install')
@@ -12,8 +12,14 @@ describe('updateMode', () => {
 
   it('only offers the download where it cannot install: unsigned macOS apps, and other Linux packages', () => {
     expect(updateMode({ platform: 'darwin' })).toBe('offer')
+    expect(updateMode({ platform: 'darwin', hasNsisUninstaller: true })).toBe('offer')
     expect(updateMode({ platform: 'linux' })).toBe('offer')
     expect(updateMode({ platform: 'linux', packageType: 'pacman' })).toBe('offer')
+  })
+
+  it('only offers the download to a Portable Copy on Windows, which has no NSIS uninstaller beside it', () => {
+    expect(updateMode({ platform: 'win32' })).toBe('offer')
+    expect(updateMode({ platform: 'win32', hasNsisUninstaller: false })).toBe('offer')
   })
 })
 
