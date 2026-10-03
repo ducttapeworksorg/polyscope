@@ -114,7 +114,7 @@ describe('the host’s own calls over the bridge', () => {
   it('pass open requests to the host', async () => {
     const opened: OpenRequest[] = []
     shell.open = async (request) => void opened.push(request)
-    const request: OpenRequest = { kind: 'file', sourceId: 'abc', path: 'logs/app.log', pinned: true }
+    const request: OpenRequest = { kind: 'file', sourceId: 'abc', path: 'logs/app.log', name: 'app.log', pinned: true }
 
     await bridge.open(request)
 
@@ -203,5 +203,49 @@ describe('core events over the bridge', () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
 
     expect(received).toEqual([])
+  })
+})
+
+describe('a webview the host lets go of', () => {
+  it('has its Follows stopped and its Large Files closed, leaving other webviews’ alone', async () => {
+    await invoke('updateSettings', { largeFileThreshold: MB, openAnywayLimit: MB, cacheSizeCap: 4 * MB })
+    await writeFile(join(root, 'app.log'), 'line 1\n')
+    await writeFile(join(root, 'big.log'), 'a haystack\n'.repeat(200_000))
+    const source = await addLocalSource()
+    await invoke('connect', source.id)
+    const followed = await invoke<{ followId: string }>('followFile', source.id, 'app.log')
+    const opened = await invoke<LargeFile>('openFile', source.id, 'big.log')
+    if (!followed.ok || !opened.ok) throw new Error('Not opened')
+    const kept = await core.followFile(source.id, 'app.log')
+    const lines: FollowEvent[] = []
+    core.onFollowEvent((event) => event.kind === 'lines' && lines.push(event))
+
+    host.dispose()
+    await appendFile(join(root, 'app.log'), 'line 2\n')
+
+    await eventually(() => expect(lines.map(({ followId }) => followId)).toContain(kept.followId))
+    expect(lines.map(({ followId }) => followId)).not.toContain(followed.value.followId)
+    await expect(core.largeFileStatus(opened.value.largeFileId)).rejects.toMatchObject({ code: 'LARGE_FILE_NOT_OPEN' })
+    await core.stopFollow(kept.followId)
+  })
+
+  it('has a Follow it started stopped even when the Follow begins after it’s gone', async () => {
+    await writeFile(join(root, 'app.log'), 'line 1\n')
+    const source = await addLocalSource()
+    await invoke('connect', source.id)
+    const lines: FollowEvent[] = []
+    core.onFollowEvent((event) => event.kind === 'lines' && lines.push(event))
+
+    // Asked for, and let go of before the answer comes back.
+    const followed = invoke<{ followId: string }>('followFile', source.id, 'app.log')
+    await new Promise((resolve) => setTimeout(resolve))
+    host.dispose()
+    const kept = await core.followFile(source.id, 'app.log')
+    await appendFile(join(root, 'app.log'), 'line 2\n')
+
+    await eventually(() => expect(lines.map(({ followId }) => followId)).toContain(kept.followId))
+    expect(lines).toHaveLength(1)
+    await followed
+    await core.stopFollow(kept.followId)
   })
 })

@@ -2,12 +2,15 @@
 // Run twice against the same VS Code profile, the second time as if the window had been reloaded.
 
 import assert from 'node:assert/strict'
-import { writeFile } from 'node:fs/promises'
+import { appendFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import * as vscode from 'vscode'
+import type { FollowEvent } from '@shared/core-api'
+import { MB } from '@shared/settings'
 import type { TestApi } from '../../src/extension/extension'
 import { polyscopeUri as uriOf } from '../../src/extension/polyscope-uri'
+import { viewerViewType } from '../../src/extension/viewer-tab'
 
 const phase = process.env['POLYSCOPE_TEST_PHASE']
 /** The Local Source's root, in a folder of the test run's own. */
@@ -24,8 +27,8 @@ async function extension() {
 
 const text = (bytes: Uint8Array) => Buffer.from(bytes).toString('utf8')
 
-/** Waits for `check` to pass, trying again until `timeout` runs out. */
-async function eventually(check: () => void | Promise<void>, timeout = 15_000) {
+/** Waits for `check` to pass, trying again until `timeout` runs out; resolves to what it returns. */
+async function eventually<T>(check: () => T | Promise<T>, timeout = 15_000): Promise<T> {
   const until = Date.now() + timeout
   for (;;) {
     try {
@@ -35,6 +38,24 @@ async function eventually(check: () => void | Promise<void>, timeout = 15_000) {
       await new Promise((resolve) => setTimeout(resolve, 200))
     }
   }
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/** The active tab, once it's a text editor tab. */
+const activeTextTab = () => {
+  const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
+  assert.ok(input instanceof vscode.TabInputText, 'A text editor tab is active')
+  return input
+}
+
+/** The active tab, once it's a Polyscope viewer tab. */
+const activeViewerTab = () => {
+  const tab = vscode.window.tabGroups.activeTabGroup.activeTab
+  assert.ok(tab?.input instanceof vscode.TabInputWebview, 'A webview tab is active')
+  // VS Code prefixes the view type of the webview tabs it reports.
+  assert.ok(tab.input.viewType.endsWith(viewerViewType), `A Polyscope viewer tab is active, not ${tab.input.viewType}`)
+  return tab
 }
 
 const firstRun: [string, () => Promise<void>][] = [
@@ -87,13 +108,72 @@ const firstRun: [string, () => Promise<void>][] = [
       const { core, open } = await extension()
       const [source] = await core.listSources()
 
-      await open({ kind: 'file', sourceId: source!.id, path: 'hello.txt', pinned: true })
+      await open({ kind: 'file', sourceId: source!.id, path: 'hello.txt', name: 'hello.txt', pinned: true })
 
-      await eventually(() => {
-        const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
-        assert.ok(input instanceof vscode.TabInputText, 'A text editor tab is active')
-        assert.equal(input.uri.toString(), uriOf(source!.id, 'hello.txt').toString())
-      })
+      await eventually(() => assert.equal(activeTextTab().uri.toString(), uriOf(source!.id, 'hello.txt').toString()))
+    }
+  ],
+  [
+    'following a file opens a viewer tab, whose Follow gets the lines appended to the file until the tab is closed',
+    async () => {
+      const { core, open } = await extension()
+      const [source] = await core.listSources()
+      const file = join(files, 'growing.log')
+      await writeFile(file, 'line 1\n')
+      const lines: FollowEvent[] = []
+      const unsubscribe = core.onFollowEvent((event) => event.kind === 'lines' && lines.push(event))
+
+      try {
+        await open({ kind: 'follow', sourceId: source!.id, path: 'growing.log', name: 'growing.log', pinned: true })
+        const tab = await eventually(activeViewerTab)
+        // The tab follows once its page has loaded; until then, what's appended goes unseen.
+        await eventually(async () => {
+          await appendFile(file, 'more\n')
+          await sleep(500)
+          assert.ok(lines.length, 'The viewer tab’s Follow got the appended lines')
+        }, 30_000)
+        const [{ followId }] = lines as [FollowEvent]
+
+        await vscode.window.tabGroups.close(tab)
+        await sleep(500)
+        lines.length = 0
+        await appendFile(file, 'after closing\n')
+        await sleep(2_000)
+
+        assert.deepEqual(
+          lines.filter((event) => event.followId === followId),
+          [],
+          'The closed tab’s Follow was stopped'
+        )
+      } finally {
+        unsubscribe()
+      }
+    }
+  ],
+  [
+    'a Large File opens in a viewer tab, and in a text editor tab when opened anyway',
+    async () => {
+      const { core, open } = await extension()
+      const [source] = await core.listSources()
+      const before = await core.getSettings()
+      await core.updateSettings({ largeFileThreshold: MB, openAnywayLimit: 2 * MB, cacheSizeCap: 4 * MB })
+      await writeFile(join(files, 'big.log'), 'a line of a Large File\n'.repeat(50_000))
+      const opened: string[] = []
+      const unsubscribe = core.onLargeFileEvent(({ largeFileId }) => opened.push(largeFileId))
+      const request = { kind: 'file', sourceId: source!.id, path: 'big.log', name: 'big.log', pinned: true } as const
+
+      try {
+        await open(request)
+        await eventually(activeViewerTab)
+        await eventually(() => assert.ok(opened.length, 'The viewer tab opened the Large File'), 30_000)
+
+        await open({ ...request, inEditor: true })
+        await eventually(() => assert.equal(activeTextTab().uri.toString(), uriOf(source!.id, 'big.log').toString()))
+      } finally {
+        unsubscribe()
+        const { largeFileThreshold, openAnywayLimit, cacheSizeCap } = before
+        await core.updateSettings({ largeFileThreshold, openAnywayLimit, cacheSizeCap })
+      }
     }
   ]
 ]

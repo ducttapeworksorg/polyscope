@@ -1,4 +1,5 @@
 import type { CoreApi, CoreEvents } from '@shared/core-api'
+import { isRecord } from '@shared/settings'
 import type { AppLog } from '../../main/app-log'
 import { callCore } from '../../main/core-call'
 import type { BridgeCall, BridgeEvent, BridgeEvents, CallMessage, ExtensionBridge, OpenRequest, ToWebview } from './protocol'
@@ -32,8 +33,38 @@ const isCall = (value: unknown): value is CallMessage =>
  * event to it until disposed. Like the desktop app's IPC, a core call's errors come back as values with their code.
  */
 export function serveBridge({ core, log, shell, post }: Options) {
+  // The Follows and Large Files the webview started, to let go of with it: it can't, once it's gone.
+  const follows = new Set<string>()
+  const largeFiles = new Set<string>()
+  let disposed = false
+
+  const stopFollow = (followId: string) => void core.stopFollow(followId).catch(() => undefined)
+  const closeLargeFile = (largeFileId: string) => void core.closeLargeFile(largeFileId).catch(() => undefined)
+
+  /**
+   * Calls the core, noting the Follows (whichever call starts one) and Large Files the webview starts, and forgetting
+   * those it stops or closes itself. One that starts after the webview is gone is let go of at once.
+   */
+  const invokeCore = async (...[method, args]: Parameters<ExtensionBridge['invokeCore']>) => {
+    const result = await callCore(core, log, method, args)
+    const [id] = args
+    if (method === 'stopFollow') follows.delete(String(id))
+    if (method === 'closeLargeFile') largeFiles.delete(String(id))
+    if (!result.ok || !isRecord(result.value)) return result
+    const { followId, largeFileId } = result.value
+    if (typeof followId === 'string') {
+      if (disposed) stopFollow(followId)
+      else follows.add(followId)
+    }
+    if (typeof largeFileId === 'string' && method === 'openFile') {
+      if (disposed) closeLargeFile(largeFileId)
+      else largeFiles.add(largeFileId)
+    }
+    return result
+  }
+
   const calls: { [M in BridgeCall]: (...args: Parameters<ExtensionBridge[M]>) => Promise<unknown> } = {
-    invokeCore: (method, args) => callCore(core, log, method, args),
+    invokeCore,
     pickFolder: () => shell.pickFolder(),
     pickFile: (filters) => shell.pickFile(filters),
     // VS Code's SecretStorage is backed by the OS keychain, or by its own encryption where there's none.
@@ -70,9 +101,14 @@ export function serveBridge({ core, log, shell, post }: Options) {
       }
     },
 
-    /** Stops forwarding core events, once the webview is gone. */
+    /** Stops forwarding core events, and stops the webview's Follows and closes its Large Files, once it's gone. */
     dispose(): void {
       for (const unsubscribe of unsubscribes) unsubscribe()
+      disposed = true
+      follows.forEach(stopFollow)
+      largeFiles.forEach(closeLargeFile)
+      follows.clear()
+      largeFiles.clear()
     }
   }
 }

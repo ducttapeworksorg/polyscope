@@ -266,6 +266,8 @@ export interface CoreFiles {
   statPath(sourceId: string, path: SourcePath): Promise<FileStat>
   /** A file's content, decompressed if it's compressed: OVER_OPEN_ANYWAY_LIMIT if that's over the "open anyway" limit. */
   readFile(sourceId: string, path: SourcePath): Promise<Uint8Array>
+  /** Whether a file's content, decompressed if it's compressed, is over the Large File threshold. */
+  isLargeFile(sourceId: string, path: SourcePath): Promise<boolean>
 }
 
 export type Core = CoreApi & CoreEvents & CoreFiles
@@ -447,6 +449,18 @@ export function createCore(options: CoreOptions = {}): Core {
     const name = path.slice(path.lastIndexOf('/') + 1)
     const fileLog: FileLog = { view: 'log', of: 'file', path, name, previous: false, lastNLines, timestamps: false, content: shown.join('\n') }
     return { fileLog, end, identity: info.identity }
+  }
+
+  /** A file of a File Source as readUpTo reads it, once the settings it's read by are loaded. */
+  const fileToRead = async (sourceId: string, path: SourcePath) => {
+    await loaded
+    const fileSource = fileSourceFor(sourceId, path)
+    const info = await fileSource.stat(path)
+    if (info.kind !== 'file') throw new CoreError('NOT_A_FILE', `Not a file: ${path}`)
+    const name = path.slice(path.lastIndexOf('/') + 1)
+    const { compression } = compressionOf(name)
+    await settingsLoaded
+    return { fileSource, file: { path, name, size: info.size, ...(compression && { compression }) } }
   }
 
   // Follows under way, by id, each with the Source it reads from.
@@ -897,17 +911,19 @@ export function createCore(options: CoreOptions = {}): Core {
     },
 
     async readFile(sourceId, path) {
-      await loaded
-      const fileSource = fileSourceFor(sourceId, path)
-      const info = await fileSource.stat(path)
-      if (info.kind !== 'file') throw new CoreError('NOT_A_FILE', `Not a file: ${path}`)
-      const name = path.slice(path.lastIndexOf('/') + 1)
-      const { compression } = compressionOf(name)
-      await settingsLoaded
+      const { fileSource, file } = await fileToRead(sourceId, path)
       const limit = settings.openAnywayLimit
-      const { bytes, whole } = await readUpTo(fileSource, { path, name, size: info.size, ...(compression && { compression }) }, limit, 0)
+      const { bytes, whole } = await readUpTo(fileSource, file, limit, 0)
       if (!whole) throw new CoreError('OVER_OPEN_ANYWAY_LIMIT', `The file's content is over the "open anyway" limit of ${limit} bytes`)
       return bytes
+    },
+
+    async isLargeFile(sourceId, path) {
+      const { fileSource, file } = await fileToRead(sourceId, path)
+      const threshold = settings.largeFileThreshold
+      // A compressed file's size says nothing of its content's, so that is decompressed up to the threshold to tell.
+      if (!file.compression) return file.size > threshold
+      return !(await readUpTo(fileSource, file, threshold, 0)).whole
     },
 
     async largeFileStatus(largeFileId) {

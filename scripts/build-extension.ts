@@ -1,4 +1,4 @@
-// Builds the Extension Copy (ADR 0005) into extension/dist: the extension host's bundle and the sidebar webview's.
+// Builds the Extension Copy (ADR 0005) into extension/dist: the extension host's bundle and its webviews'.
 // `--tests` also builds the VS Code integration tests, into extension/test-dist; `--package` then packages extension/
 // as extension/polyscope-<version>.vsix. Neither lands where the desktop app's build or packaging would pick it up.
 
@@ -34,7 +34,8 @@ const nodeBundle = (entry: string, outDir: string, fileName: string): InlineConf
 
 await build(nodeBundle('src/extension/extension.ts', join(extensionDir, 'dist'), 'extension.js'))
 
-// The sidebar, as one script and one stylesheet with fixed names for the webview's page; the rest is found from them.
+// The sidebar's and the viewer tabs' pages, each as one script with a fixed name, sharing one stylesheet; the rest is
+// found from them.
 await build({
   configFile: false,
   root,
@@ -46,10 +47,10 @@ await build({
     emptyOutDir: true,
     cssCodeSplit: false,
     rollupOptions: {
-      input: { sidebar: join(root, 'src/renderer/extension/sidebar.tsx') },
+      input: { sidebar: join(root, 'src/renderer/extension/sidebar.tsx'), viewer: join(root, 'src/renderer/extension/viewer.tsx') },
       output: {
         entryFileNames: '[name].js',
-        assetFileNames: (asset) => (asset.names.some((name) => name.endsWith('.css')) ? 'sidebar.css' : 'assets/[name]-[hash][extname]')
+        assetFileNames: (asset) => (asset.names.some((name) => name.endsWith('.css')) ? 'webview.css' : 'assets/[name]-[hash][extname]')
       }
     }
   }
