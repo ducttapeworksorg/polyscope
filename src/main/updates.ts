@@ -2,21 +2,24 @@ import { canApply, type UpdateStatus } from '@shared/updates'
 
 /**
  * How an install gets a newer release: `install` downloads and applies it (electron-updater), `offer` only says
- * one is out and opens its download page. macOS won't let electron-updater replace an unsigned app, and it knows only
- * the AppImage, .deb and .rpm among Linux packages, so the others are told rather than updated (ADR 0003).
+ * one is out and opens its download page. macOS won't let electron-updater replace an unsigned app, it can replace
+ * only NSIS installs on Windows, so not a Portable Copy, and it knows only the AppImage, .deb and .rpm among Linux
+ * packages, so the others are told rather than updated (ADR 0003).
  */
 export type UpdateMode = 'install' | 'offer'
 
 interface Install {
   platform: NodeJS.Platform
+  /** Whether the NSIS installer's uninstaller is beside the executable, as it is in every Windows Installed Copy. */
+  hasNsisUninstaller?: boolean
   /** Where the running AppImage is (`APPIMAGE`), when it is one. */
   appImage?: string
   /** The Linux package it came from, as electron-builder records it in `resources/package-type`. */
   packageType?: string
 }
 
-export function updateMode({ platform, appImage, packageType }: Install): UpdateMode {
-  if (platform === 'win32') return 'install'
+export function updateMode({ platform, hasNsisUninstaller, appImage, packageType }: Install): UpdateMode {
+  if (platform === 'win32') return hasNsisUninstaller ? 'install' : 'offer'
   if (platform !== 'linux') return 'offer'
   return appImage || packageType === 'deb' || packageType === 'rpm' ? 'install' : 'offer'
 }
