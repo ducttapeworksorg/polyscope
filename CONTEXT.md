@@ -59,6 +59,15 @@ A file above the size threshold (default 50 MB), opened in the **Large File View
 **Large File Viewer**:
 A read-only, end-first, paged viewer for **Large Files**, with backend-side search and minimal highlighting.
 
+### Distribution
+
+**Installed Copy**:
+Polyscope set up from an installer or package (the Windows installer, `.deb`, `.rpm`, or the AppImage), and so able to update itself where the platform allows. Copies are told apart by how they update, not by how they arrive: the AppImage runs without installing but is an **Installed Copy**.
+
+**Portable Copy**:
+Polyscope run straight from a download on Windows (the portable `.exe` or the `.zip`), without installing it. It shares an **Installed Copy**'s **Sources** and settings, and is offered updates as a download.
+_Avoid_: standalone (ADR 0001 uses it for "a desktop app rather than a VS Code extension")
+
 ## Relationships
 
 - A **Source** is an instance of exactly one **Source Type**
