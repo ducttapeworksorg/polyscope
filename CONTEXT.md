@@ -15,7 +15,7 @@ One configured, user-named instance of a **Source Type**, holding its settings (
 _Avoid_: connection, mount, profile
 
 **Disconnected / Connected / Error**:
-The state of a **Source**. Every **Source** starts **Disconnected** when the app launches; no tabs or views are restored from a previous session. Expanding a **Disconnected** **Source** connects it; failing to connect puts it in **Error**. Disconnecting stops all **Follows** but leaves its tabs open.
+The state of a **Source**. Every **Source** starts **Disconnected** when the app launches; no tabs or views are restored from a previous session, except the editor tabs an **Extension Copy**'s editor restores, which connect their **Source**. Expanding a **Disconnected** **Source** connects it; failing to connect puts it in **Error**. Disconnecting stops all **Follows** but leaves its tabs open.
 
 **Environment**:
 An optional, user-defined label (name + colour) attached to a **Source** to show what kind of system it points at (defaults: prod, staging, qa, dev). Shown on the **Source**, its tabs, and the status bar.
@@ -67,6 +67,10 @@ Polyscope set up from an installer or package (the Windows installer, `.deb`, `.
 **Portable Copy**:
 Polyscope run straight from a download on Windows (the portable `.exe` or the `.zip`), without installing it. It shares an **Installed Copy**'s **Sources** and settings, and is offered updates as a download.
 _Avoid_: standalone (ADR 0001 uses it for "a desktop app rather than a VS Code extension")
+
+**Extension Copy**:
+Polyscope running inside VS Code (or a compatible editor) as an extension, and so updated by the editor's marketplace rather than by itself. It keeps its own **Sources** and settings, apart from those of Installed and Portable Copies.
+_Avoid_: plugin
 
 ## Relationships
 
