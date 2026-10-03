@@ -37,6 +37,42 @@ The screenshots in `docs/images` are rendered from the built app by `npm run bui
 
 `build/icon.png` is rendered from `build/icon.svg` by `npm run icon`.
 
+## Branches and pull requests
+
+Work on a short-lived branch off `main`, named for the change's Conventional Commits type: `feat/portable-exe`, `fix/kube-reconnect`, `docs/installing`.
+
+```sh
+git switch main && git pull
+git switch -c feat/portable-exe
+# commit, then
+git push -u origin feat/portable-exe
+gh pr create --base main --fill-first
+```
+
+Pull requests are merged with **Rebase and merge**, so each commit lands on `main` as written. Every commit message counts, and the PR's title doesn't; `--fill-first` just borrows the first commit's. CI runs on the pull request and again on each push to it. GitHub deletes the branch once it's merged; delete yours too:
+
+```sh
+git switch main && git pull
+git branch -D feat/portable-exe   # -D: rebasing gave the commits new hashes, so git thinks they're unmerged
+```
+
 ## Releasing
 
-Bump `version` in `package.json`, commit, and push a matching tag (`git tag v1.2.3 && git push origin v1.2.3`). The release workflow builds the installers on each platform and publishes them to GitHub Releases, where installed copies find them. A tag with a pre-release part, like `v1.3.0-beta.1`, is published as a pre-release, which installed copies don't update to.
+Bump the version on a branch like any other change, and merge it:
+
+```sh
+git switch -c chore/release-1.2.3
+npm version 1.2.3 --no-git-tag-version   # updates package.json and package-lock.json
+git commit -am "chore: release 1.2.3"
+git push -u origin chore/release-1.2.3
+gh pr create --base main --fill-first
+```
+
+Once it's merged, tag `main`, not your branch, since rebasing changed the commit's hash:
+
+```sh
+git switch main && git pull
+git tag v1.2.3 && git push origin v1.2.3
+```
+
+The release workflow checks the tag matches `package.json`'s version, then builds the installers on each platform and publishes them to GitHub Releases, where installed copies find them. A tag with a pre-release part, like `v1.3.0-beta.1`, is published as a pre-release, which installed copies don't update to.
