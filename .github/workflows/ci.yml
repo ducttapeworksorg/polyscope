@@ -59,6 +59,19 @@ jobs:
         if: runner.os != 'Linux'
         run: npm run test:smoke
 
+      # The Extension Copy in real VS Code, downloaded into .vscode-test.
+      - name: VS Code integration test (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npm run test:extension
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+
+      - name: VS Code integration test
+        if: runner.os != 'Linux'
+        run: npm run test:extension
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

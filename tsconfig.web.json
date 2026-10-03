@@ -6,5 +6,5 @@
     "jsx": "react-jsx",
     "types": ["vite/client"]
   },
-  "include": ["src/renderer/src/**/*", "src/preload/*.d.ts", "src/shared/**/*"]
+  "include": ["src/renderer/src/**/*", "src/renderer/extension/**/*", "src/extension/bridge/protocol.ts", "src/extension/bridge/webview.ts", "src/preload/*.d.ts", "src/preload/bridge.ts", "src/shared/**/*"]
 }

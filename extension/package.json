@@ -1,0 +1,45 @@
+{
+  "name": "polyscope",
+  "displayName": "Polyscope",
+  "description": "Browse and read files and logs from many systems in VS Code.",
+  "version": "0.1.1",
+  "publisher": "ducttapeworks",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "Ducttapeworks",
+    "email": "ducttapeworks@proton.me"
+  },
+  "homepage": "https://github.com/ducttapeworksorg/polyscope",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ducttapeworksorg/polyscope.git"
+  },
+  "icon": "icon.png",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": ["Other"],
+  "main": "./dist/extension.js",
+  "extensionKind": ["workspace", "ui"],
+  "activationEvents": ["onFileSystem:polyscope"],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "polyscope",
+          "title": "Polyscope",
+          "icon": "media/activity-bar.svg"
+        }
+      ]
+    },
+    "views": {
+      "polyscope": [
+        {
+          "type": "webview",
+          "id": "polyscope.sources",
+          "name": "Sources"
+        }
+      ]
+    }
+  }
+}

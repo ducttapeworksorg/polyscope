@@ -6,3 +6,10 @@ test-results
 playwright-report
 *.tsbuildinfo
 dist
+.vscode-test
+extension/dist
+extension/test-dist
+extension/*.vsix
+extension/LICENSE
+extension/THIRD_PARTY_NOTICES.md
+extension/icon.png
