@@ -429,6 +429,143 @@ test('follow a file that isn’t open yet, with Follow shown on, and stop follow
   await expect(editor).not.toContainText('INFO written after')
 })
 
+test('pause a Follow, holding new lines back, and resume it, showing them', async () => {
+  const window = await app.firstWindow()
+  const logFile = join(dir, 'root', 'logs', 'app.log')
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  await window.getByRole('treeitem', { name: 'app.log' }).click({ button: 'right' })
+  await window.getByRole('menuitem', { name: 'Follow' }).click()
+
+  const editor = window.getByTestId('editor')
+  const pause = window.getByRole('button', { name: 'Pause', exact: true })
+  await expect(editor).toContainText('INFO hello from polyscope')
+  await expect(pause).toHaveAttribute('aria-pressed', 'false')
+
+  await pause.click()
+  const resume = window.getByRole('button', { name: 'Resume', exact: true })
+  await expect(resume).toHaveAttribute('aria-pressed', 'true')
+  await appendFile(logFile, 'INFO written while paused\n')
+  await window.waitForTimeout(3000)
+  await expect(editor).not.toContainText('INFO written while paused')
+
+  await resume.click()
+  await expect(pause).toHaveAttribute('aria-pressed', 'false')
+  await expect(editor).toContainText('INFO written while paused')
+  await expect(window.getByRole('button', { name: 'Follow', exact: true })).toHaveAttribute('aria-pressed', 'true')
+})
+
+test('pick how many of a followed file’s last lines are shown, remembered for its Source, and wrap them', async () => {
+  const lines = Array.from({ length: 50 }, (_, i) => `INFO line ${String(i + 1).padStart(2, '0')}`)
+  const logFile = join(dir, 'root', 'logs', 'many.log')
+  await writeFile(logFile, `${lines.join('\n')}\n`)
+  const window = await app.firstWindow()
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  await window.getByRole('treeitem', { name: 'many.log' }).click({ button: 'right' })
+  await window.getByRole('menuitem', { name: 'Follow' }).click()
+
+  const editor = window.getByTestId('editor')
+  const statusbar = window.locator('.statusbar')
+  const typed = window.getByLabel('Number of lines')
+  await expect(editor).toContainText('INFO line 50')
+  await expect(window.getByRole('radio', { name: '10K' })).toBeChecked()
+
+  await typed.fill('5')
+  await typed.press('Enter')
+  await expect(editor).toContainText('INFO line 46')
+  await expect(editor).not.toContainText('INFO line 45')
+  await expect(statusbar).toContainText('5 lines')
+  await expect(window.getByRole('button', { name: 'Follow', exact: true })).toHaveAttribute('aria-pressed', 'true')
+
+  // Still following, it keeps only the last 5 as new ones come.
+  await appendFile(logFile, 'INFO line 51\n')
+  await expect(editor).toContainText('INFO line 51')
+  await expect(editor).not.toContainText('INFO line 46')
+  await expect(statusbar).toContainText('5 lines')
+
+  const wrap = window.getByRole('button', { name: 'Wrap', exact: true })
+  await wrap.click()
+  await expect(wrap).toHaveAttribute('aria-pressed', 'true')
+
+  // Followed again after closing its tab, it starts from the Source's remembered 5 lines.
+  await window.getByRole('tab', { name: 'many.log' }).click({ button: 'middle' })
+  await expect(window.getByRole('tab')).toHaveCount(0)
+  await window.getByRole('treeitem', { name: 'many.log' }).click({ button: 'right' })
+  await window.getByRole('menuitem', { name: 'Follow' }).click()
+  await expect(editor).toContainText('INFO line 51')
+  await expect(editor).not.toContainText('INFO line 46')
+  await expect(typed).toHaveValue('5')
+})
+
+/** Lowers the Large File threshold and "open anyway" limit, in MB, so a test needn't write a huge file. */
+async function setLargeFileLimits(window: Page, threshold: number, openAnyway: number) {
+  await window.getByRole('button', { name: 'Settings' }).click()
+  const dialog = window.getByRole('dialog', { name: 'Settings' })
+  await dialog.getByLabel('Large File threshold (MB)').fill(String(threshold))
+  await dialog.getByLabel('“Open anyway” limit (MB)').fill(String(openAnyway))
+  await dialog.getByRole('button', { name: 'Save' }).click()
+  await expect(dialog).toBeHidden()
+}
+
+/** `size` bytes of numbered log lines, 100 bytes each. */
+const numberedLines = (size: number) =>
+  Array.from({ length: Math.ceil(size / 100) }, (_, n) => `${String(n).padStart(10, '0')} INFO ${'x'.repeat(83)}\n`).join('')
+
+test('open a Large File over a lowered threshold, and in the editor anyway only when within the limit', async () => {
+  const MB = 1024 * 1024
+  await writeFile(join(dir, 'root', 'logs', 'mid.log'), numberedLines(1.5 * MB))
+  await writeFile(join(dir, 'root', 'logs', 'big.log'), numberedLines(3 * MB))
+  const window = await app.firstWindow()
+  await setLargeFileLimits(window, 1, 2)
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+
+  const view = window.getByTestId('large-file')
+  const editor = window.getByTestId('editor')
+  const openAnyway = window.getByRole('button', { name: 'Open anyway in editor' })
+  await window.getByRole('treeitem', { name: /^big\.log/ }).click()
+  await expect(view).toContainText('0000031457 INFO')
+  await expect(editor).toBeHidden()
+  // 3 MB is over the 2 MB limit.
+  await expect(openAnyway).toHaveCount(0)
+
+  await window.getByRole('treeitem', { name: /^mid\.log/ }).click()
+  await expect(view).toContainText('0000015728 INFO')
+  await openAnyway.click()
+  await expect(editor).toBeVisible()
+  await expect(view).toBeHidden()
+  await expect(editor).toContainText('0000000000 INFO')
+  await expect(window.getByRole('tab', { name: 'mid.log' })).not.toHaveClass(/is-preview/)
+})
+
+test('ask for a followed file’s whole log over the Large File threshold, warned first, then shown anyway', async () => {
+  await writeFile(join(dir, 'root', 'logs', 'mid.log'), numberedLines(1.5 * 1024 * 1024))
+  const window = await app.firstWindow()
+  await setLargeFileLimits(window, 1, 2)
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  await window.getByRole('treeitem', { name: /^mid\.log/ }).click({ button: 'right' })
+  await window.getByRole('menuitem', { name: 'Follow' }).click()
+
+  const editor = window.getByTestId('editor')
+  await expect(editor).toContainText('0000015728 INFO')
+  await window.getByText('All', { exact: true }).click()
+  const warning = window.getByRole('alert').filter({ hasText: 'The whole log is larger than the Large File threshold (1 MB)' })
+  await expect(warning).toBeVisible()
+  await expect(editor).toBeHidden()
+
+  await warning.getByRole('button', { name: 'Show all anyway' }).click()
+  await expect(warning).toBeHidden()
+  await expect(editor).toBeVisible()
+  await expect(window.getByRole('radio', { name: 'All' })).toBeChecked()
+  await expect(window.locator('.statusbar')).toContainText('15,729 lines')
+})
+
 test('wrap a file’s long lines, and hide the minimap for good', async () => {
   // One long line and one short one, with no newline after it, so there are two lines until wrapped.
   await writeFile(join(dir, 'root', 'logs', 'long.txt'), `${'word '.repeat(400)}\nshort`)
