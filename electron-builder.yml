@@ -1,4 +1,4 @@
-# Packages the built app (`npm run build`, into out/) as each platform's installers, into dist/.
+# Packages the built app (`npm run build`, into out/) as each platform's installers (and Windows' portable downloads), into dist/.
 # `npm run dist` builds this platform's; the release workflow builds all three and publishes them.
 appId: com.ducttapeworks.polyscope
 productName: Polyscope
@@ -27,9 +27,18 @@ win:
   target:
     - target: nsis
       arch: [x64]
+    # Portable Copies, for running Polyscope without installing it (ADR 0004).
+    - target: portable
+      arch: [x64]
+    - target: zip
+      arch: [x64]
+  # Both portable downloads' names; the installer sets its own.
+  artifactName: ${productName}-${version}-${arch}-portable.${ext}
 
 # NSIS, not MSI, as electron-updater can update only NSIS installs on Windows (ADR 0003).
 nsis:
+  # Kept as it was before Portable Copies, as releases link to it.
+  artifactName: ${productName}-${version}-${arch}.${ext}
   # An ordinary install for the current user, with no administrator rights needed.
   oneClick: true
   perMachine: false

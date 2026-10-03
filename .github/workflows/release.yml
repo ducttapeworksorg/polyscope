@@ -59,7 +59,7 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=4096
 
-      # Uploads the installers, and the latest*.yml files electron-updater reads, to the draft.
+      # Uploads the installers, Windows' portable downloads, and the latest*.yml files electron-updater reads, to the draft.
       - run: npx electron-builder --publish always
         env:
           GH_TOKEN: ${{ github.token }}
