@@ -1,0 +1,19 @@
+/* The webviews fill their VS Code view or tab, which already has its own border and resizer, and none of the padding VS Code gives webviews. */
+body {
+  padding: 0;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+#root > .sidebar {
+  flex: 1;
+  border-right: none;
+}
+
+/* A viewer tab is the desktop app's workbench for one tab, filling its VS Code tab. */
+#root > .workbench {
+  flex: 1;
+}

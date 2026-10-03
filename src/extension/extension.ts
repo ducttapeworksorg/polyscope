@@ -8,22 +8,14 @@ import type { OpenRequest } from './bridge/protocol'
 import { createFileProvider } from './file-provider'
 import { polyscopeScheme, polyscopeUri } from './polyscope-uri'
 import { registerSidebarView } from './sidebar-view'
+import { openViewerTab } from './viewer-tab'
+import type { WebviewOptions } from './webview-page'
 
 /** What the extension hands its integration tests, and nothing else. */
 export interface TestApi {
   core: Core
   /** Opens what the sidebar asks for, as it does. */
   open(request: OpenRequest): Promise<void>
-}
-
-/** Opens a sidebar request: for now every file goes to VS Code's editor, read through the `polyscope` file system. */
-async function open({ kind, sourceId, path, pinned }: OpenRequest) {
-  if (kind !== 'file') {
-    void window.showInformationMessage('Polyscope can’t open Log Streams or Follow files in VS Code yet.')
-    return
-  }
-  // Like opening a file from VS Code's Explorer: the preview tab unless pinned, and its binary or error editor if need be.
-  await commands.executeCommand('vscode.open', polyscopeUri(sourceId, path), { preview: !pinned })
 }
 
 export async function activate(context: ExtensionContext): Promise<TestApi | undefined> {
@@ -54,10 +46,28 @@ export async function activate(context: ExtensionContext): Promise<TestApi | und
     appVersion: async () => context.extension.packageJSON.version as string,
     open
   }
+  const webviewOptions: WebviewOptions = { core, log, shell, webviewRoot: Uri.joinPath(context.extensionUri, 'dist', 'webview') }
+
+  /** Whether a file is a Large File; if that can't be told, VS Code's editor shows why it can't be read either. */
+  const isLargeFile = ({ sourceId, path }: OpenRequest) => core.isLargeFile(sourceId, path).catch(() => false)
+
+  /**
+   * Opens what a webview asks for where it belongs (ADR 0005): a file in VS Code's editor, read through the
+   * `polyscope` file system, unless it's a Large File; Large Files, Log Streams and Follows in a viewer tab.
+   */
+  async function open(request: OpenRequest) {
+    const { kind, sourceId, path, pinned, inEditor } = request
+    if (kind === 'file' && (inEditor || !(await isLargeFile(request)))) {
+      // Like opening a file from VS Code's Explorer: the preview tab unless pinned, and its binary or error editor if need be.
+      await commands.executeCommand('vscode.open', polyscopeUri(sourceId, path), { preview: !pinned })
+      return
+    }
+    openViewerTab(webviewOptions, request)
+  }
 
   context.subscriptions.push(
     workspace.registerFileSystemProvider(polyscopeScheme, createFileProvider(core), { isReadonly: true, isCaseSensitive: true }),
-    registerSidebarView({ core, log, shell, webviewRoot: Uri.joinPath(context.extensionUri, 'dist', 'webview') })
+    registerSidebarView(webviewOptions)
   )
 
   return context.extensionMode === ExtensionMode.Test ? { core, open } : undefined

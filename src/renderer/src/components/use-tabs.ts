@@ -147,7 +147,7 @@ export function useTabs({ onSourcesChanged }: Options) {
     }
   }
 
-  const openFile = (source: SourceInfo, node: EntryNode, options?: { pinned: boolean }) =>
+  const openFile = (source: SourceInfo, node: Pick<EntryNode, 'path' | 'name'>, options?: { pinned: boolean }) =>
     openInTab(source, node, options, () => core.openFile(source.id, node.path))
 
   /** Opens a container's log Following it, as it's live; a Previous Log has ended, so there's nothing to follow. */

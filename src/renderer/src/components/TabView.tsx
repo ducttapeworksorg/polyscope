@@ -20,6 +20,8 @@ interface Props {
   onReconnect(): void
   /** The viewer's id, for the tabs it's the panel of. */
   panelId: string
+  /** Opens a Large File in an editor anyway; by default, in the tab's own. */
+  onOpenAnyway?(key: string): void
   /** Shown in the viewer when no tab is active. */
   children?: ReactNode
 }
@@ -28,7 +30,7 @@ interface Props {
  * What the active tab shows: any error opening it, banners for a Disconnected Source or a pod that's gone,
  * its toolbar, and the viewer.
  */
-export function TabView({ viewerRef, model, settings, connection, onReconnect, panelId, children }: Props) {
+export function TabView({ viewerRef, model, settings, connection, onReconnect, panelId, onOpenAnyway, children }: Props) {
   const { tabs, activeTab, openError } = model
   return (
     <>
@@ -81,7 +83,7 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
           onShowWholeLog={(key) => void model.reopenLog(key, { lastNLines: 'all', allowLarge: true })}
           largeFileThreshold={settings.largeFileThreshold}
           openAnywayLimit={settings.openAnywayLimit}
-          onOpenAnyway={(key) => void model.reopenTabAs(key, { inEditor: true })}
+          onOpenAnyway={onOpenAnyway ?? ((key) => void model.reopenTabAs(key, { inEditor: true }))}
           followFeed={model.followFeed}
           onLineCount={model.noteLineCount}
           minimap={settings.showMinimap}
