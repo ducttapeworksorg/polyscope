@@ -25,6 +25,11 @@ function hasNsisUninstaller(): boolean {
   return existsSync(join(dirname(process.execPath), 'Uninstall Polyscope.exe'))
 }
 
+/** Whether this is ChromeOS's Linux (Crostini), whose container ChromeOS marks with its milestone. */
+function isChromeOs(): boolean {
+  return existsSync('/dev/.cros_milestone')
+}
+
 /** electron-updater: downloads a newer release in the background, then restarts into it when asked. */
 function installEngine(log: AppLog): UpdateEngine {
   const prefixed = (message: unknown) => `Updater: ${summarizeUpdateError(message)}`
@@ -56,7 +61,18 @@ function installEngine(log: AppLog): UpdateEngine {
       }
       report({ state: 'ready', version })
     },
-    apply: () => autoUpdater.quitAndInstall()
+    // electron-updater reports a failed install (say, a refused password) as an error event, and doesn't quit.
+    apply: () => {
+      let failed: unknown
+      const onError = (error: unknown) => (failed = error)
+      autoUpdater.on('error', onError)
+      try {
+        autoUpdater.quitAndInstall()
+      } finally {
+        autoUpdater.off('error', onError)
+      }
+      if (failed !== undefined) throw new Error(summarizeUpdateError(failed))
+    }
   }
 }
 
@@ -83,7 +99,8 @@ export function createUpdateEngine(log: AppLog): UpdateEngine {
     platform: process.platform,
     hasNsisUninstaller: process.platform === 'win32' && hasNsisUninstaller(),
     appImage: process.env['APPIMAGE'],
-    packageType: packageType()
+    packageType: packageType(),
+    chromeOs: process.platform === 'linux' && isChromeOs()
   })
   log.info(`Updates: ${mode === 'install' ? 'installed automatically' : 'offered as a download'}`)
   return mode === 'install' ? installEngine(log) : offerEngine()

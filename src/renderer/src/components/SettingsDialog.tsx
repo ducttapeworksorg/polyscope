@@ -190,9 +190,15 @@ export function SettingsDialog(props: Props) {
                   {t('settings.checkForUpdates')}
                 </button>
               )}
-              <span role="status" className={update.state === 'error' ? 'field__problem' : 'field__hint'}>
-                {t(`settings.update.${update.state}`, { ...update })}
-              </span>
+              {update.state === 'ready' && update.installFailed ? (
+                <span role="status" className="field__problem">
+                  {t('settings.update.installFailed', { ...update })}
+                </span>
+              ) : (
+                <span role="status" className={update.state === 'error' ? 'field__problem' : 'field__hint'}>
+                  {t(`settings.update.${update.state}`, { ...update })}
+                </span>
+              )}
             </div>
           </fieldset>
         )}

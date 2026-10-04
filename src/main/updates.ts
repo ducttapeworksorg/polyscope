@@ -4,7 +4,8 @@ import { canApply, type UpdateStatus } from '@shared/updates'
  * How an install gets a newer release: `install` downloads and applies it (electron-updater), `offer` only says
  * one is out and opens its download page. macOS won't let electron-updater replace an unsigned app, it can replace
  * only NSIS installs on Windows, so not a Portable Copy, and it knows only the AppImage, .deb and .rpm among Linux
- * packages, so the others are told rather than updated (ADR 0003).
+ * packages, so the others are told rather than updated (ADR 0003). On ChromeOS a .deb or .rpm is told too: its
+ * Linux has pkexec but no agent to ask for the password, and electron-updater picks pkexec over sudo.
  */
 export type UpdateMode = 'install' | 'offer'
 
@@ -16,12 +17,16 @@ interface Install {
   appImage?: string
   /** The Linux package it came from, as electron-builder records it in `resources/package-type`. */
   packageType?: string
+  /** Whether it runs in ChromeOS's Linux (Crostini). */
+  chromeOs?: boolean
 }
 
-export function updateMode({ platform, hasNsisUninstaller, appImage, packageType }: Install): UpdateMode {
+export function updateMode({ platform, hasNsisUninstaller, appImage, packageType, chromeOs }: Install): UpdateMode {
   if (platform === 'win32') return hasNsisUninstaller ? 'install' : 'offer'
   if (platform !== 'linux') return 'offer'
-  return appImage || packageType === 'deb' || packageType === 'rpm' ? 'install' : 'offer'
+  // An AppImage replaces itself, needing no password.
+  if (appImage) return 'install'
+  return !chromeOs && (packageType === 'deb' || packageType === 'rpm') ? 'install' : 'offer'
 }
 
 /** `1.2.3` or `v1.2.3-beta.1` as numbers and a pre-release tag, or null for anything else. */
@@ -90,7 +95,7 @@ export function summarizeUpdateError(error: unknown): string {
 export interface UpdateEngine {
   /** Looks for a newer release, reporting what it finds; resolves once done, having reported nothing if none. */
   check(report: (status: UpdateStatus) => void): Promise<void>
-  /** Restarts into the update, or opens its download page. */
+  /** Restarts into the update, or opens its download page; throws if installing the update failed. */
   apply(): void
 }
 
@@ -146,7 +151,13 @@ export function createUpdater({ engine, log, firstCheckDelay = 10_000, checkInte
     status: () => current,
     check,
     apply: () => {
-      if (canApply(current)) engine.apply()
+      if (!canApply(current)) return
+      try {
+        engine.apply()
+      } catch (error) {
+        log?.warn('Update install failed', error)
+        if (current.state === 'ready') set({ ...current, installFailed: error instanceof Error ? error.message : String(error) })
+      }
     },
     onStatus: (listener) => {
       listeners.add(listener)

@@ -3,7 +3,8 @@
  *
  * - `off`: this build doesn't update itself (a development build, run from source).
  * - `available`: a newer release that this install can't apply itself; updating opens its download page.
- * - `downloading` then `ready`: a newer release this install applies itself; updating restarts into it.
+ * - `downloading` then `ready`: a newer release this install applies itself; updating restarts into it. If
+ *   installing it failed instead, `installFailed` says why, and it can be tried again.
  */
 export type UpdateStatus =
   | { state: 'off' }
@@ -12,7 +13,7 @@ export type UpdateStatus =
   | { state: 'upToDate' }
   | { state: 'available'; version: string }
   | { state: 'downloading'; version: string; percent: number }
-  | { state: 'ready'; version: string }
+  | { state: 'ready'; version: string; installFailed?: string }
   | { state: 'error'; message: string }
 
 /** Whether there's an update to act on: a download page to open, or a restart into one downloaded. */

@@ -44,6 +44,7 @@ The downloads aren't signed yet, so each system warns you the first time you ope
 Polyscope checks GitHub Releases for a newer version when it starts, and every few hours after that. When one is out, the status bar says so. You can also check from **Settings → Updates**.
 
 - On **Windows**, when Polyscope was installed, and from the **AppImage**, **`.deb`** and **`.rpm`**, the update downloads in the background. Choose **Restart to update** to install it. The `.deb` and `.rpm` ask for your password.
+- On **ChromeOS**, from the `.deb`, choosing **Update available** opens the release's page. Download the new `.deb` and open it from the Files app to install it. (Its Linux can't ask for the password the update needs.)
 - From a Windows **portable** download, choosing **Update available** opens the release's page. Download the new portable `.exe` or `.zip` and use it in place of the old one.
 - On **macOS**, choosing **Update available** opens the release's page. Download the new `.dmg` and drag Polyscope into Applications over the old one.
 
