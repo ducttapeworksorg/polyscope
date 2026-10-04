@@ -4,7 +4,7 @@ import { formatDiagnostics } from './diagnostics'
 const environment = {
   appVersion: '0.1.0',
   os: 'Windows 10.0.26200 (x64)',
-  versions: { electron: '44.4.5', chrome: '140.0.1', node: '24.1.0' },
+  versions: { Electron: '44.4.5', Chromium: '140.0.1', 'Node.js': '24.1.0' },
   homeDir: 'C:\\Users\\alice'
 }
 
@@ -28,6 +28,19 @@ describe('formatDiagnostics', () => {
         '```',
         '',
         '</details>',
+        ''
+      ].join('\n')
+    )
+  })
+
+  it('lists whichever versions it’s given, in order, e.g. an Extension Copy’s', () => {
+    const versions = { 'VS Code': '1.140.0 (Visual Studio Code)', 'Extension host': 'Node.js 22.15.1, remote (wsl)' }
+    expect(formatDiagnostics({ ...environment, versions, log: '' })).toContain(
+      [
+        '- Polyscope: 0.1.0',
+        '- OS: Windows 10.0.26200 (x64)',
+        '- VS Code: 1.140.0 (Visual Studio Code)',
+        '- Extension host: Node.js 22.15.1, remote (wsl)',
         ''
       ].join('\n')
     )

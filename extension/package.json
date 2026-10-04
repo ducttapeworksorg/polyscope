@@ -50,6 +50,117 @@
           "name": "Sources"
         }
       ]
-    }
+    },
+    "colors": [
+      {
+        "id": "polyscope.environment.purple",
+        "description": "Tints the tabs of files from a Source labelled with a purple Environment.",
+        "defaults": {
+          "dark": "#8e4ec6",
+          "light": "#8e4ec6",
+          "highContrast": "#8e4ec6",
+          "highContrastLight": "#8e4ec6"
+        }
+      },
+      {
+        "id": "polyscope.environment.blue",
+        "description": "Tints the tabs of files from a Source labelled with a blue Environment.",
+        "defaults": {
+          "dark": "#0090ff",
+          "light": "#0090ff",
+          "highContrast": "#0090ff",
+          "highContrastLight": "#0090ff"
+        }
+      },
+      {
+        "id": "polyscope.environment.teal",
+        "description": "Tints the tabs of files from a Source labelled with a teal Environment.",
+        "defaults": {
+          "dark": "#12a594",
+          "light": "#12a594",
+          "highContrast": "#12a594",
+          "highContrastLight": "#12a594"
+        }
+      },
+      {
+        "id": "polyscope.environment.pink",
+        "description": "Tints the tabs of files from a Source labelled with a pink Environment.",
+        "defaults": {
+          "dark": "#d6409f",
+          "light": "#d6409f",
+          "highContrast": "#d6409f",
+          "highContrastLight": "#d6409f"
+        }
+      },
+      {
+        "id": "polyscope.environment.brown",
+        "description": "Tints the tabs of files from a Source labelled with a brown Environment.",
+        "defaults": {
+          "dark": "#978365",
+          "light": "#978365",
+          "highContrast": "#978365",
+          "highContrastLight": "#978365"
+        }
+      },
+      {
+        "id": "polyscope.environment.red",
+        "description": "Tints the tabs of files from a Source labelled with a red Environment.",
+        "defaults": {
+          "dark": "#e5484d",
+          "light": "#e5484d",
+          "highContrast": "#e5484d",
+          "highContrastLight": "#e5484d"
+        }
+      },
+      {
+        "id": "polyscope.environment.orange",
+        "description": "Tints the tabs of files from a Source labelled with an orange Environment.",
+        "defaults": {
+          "dark": "#f76b15",
+          "light": "#f76b15",
+          "highContrast": "#f76b15",
+          "highContrastLight": "#f76b15"
+        }
+      },
+      {
+        "id": "polyscope.environment.yellow",
+        "description": "Tints the tabs of files from a Source labelled with a yellow Environment.",
+        "defaults": {
+          "dark": "#ffc53d",
+          "light": "#ffc53d",
+          "highContrast": "#ffc53d",
+          "highContrastLight": "#ffc53d"
+        }
+      },
+      {
+        "id": "polyscope.environment.green",
+        "description": "Tints the tabs of files from a Source labelled with a green Environment.",
+        "defaults": {
+          "dark": "#30a46c",
+          "light": "#30a46c",
+          "highContrast": "#30a46c",
+          "highContrastLight": "#30a46c"
+        }
+      },
+      {
+        "id": "polyscope.environment.gray",
+        "description": "Tints the tabs of files from a Source labelled with a gray Environment.",
+        "defaults": {
+          "dark": "#8b8d98",
+          "light": "#8b8d98",
+          "highContrast": "#8b8d98",
+          "highContrastLight": "#8b8d98"
+        }
+      }
+    ],
+    "resourceLabelFormatters": [
+      {
+        "scheme": "polyscope",
+        "formatting": {
+          "label": "${query.source}: ${path}",
+          "separator": "/"
+        }
+      }
+    ]
   }
 }

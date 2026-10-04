@@ -1,9 +1,11 @@
 import { mkdir } from 'node:fs/promises'
+import { homedir, release } from 'node:os'
 import { join } from 'node:path'
-import { commands, ConfigurationTarget, EventEmitter, ExtensionMode, Uri, version, window, workspace, type ExtensionContext } from 'vscode'
+import { commands, ConfigurationTarget, env, EventEmitter, ExtensionMode, Uri, version, window, workspace, type ExtensionContext } from 'vscode'
 import { createAppLog } from '../main/app-log'
 import { createCore, type Core } from '../main/core/core'
 import type { SecretStore } from '../main/core/secret-store'
+import { formatDiagnostics, osDescription } from '../main/diagnostics'
 import { t } from '../renderer/src/i18n'
 import { formatSize } from '../renderer/src/i18n/format'
 import type { HostShell } from './bridge/host'
@@ -12,6 +14,7 @@ import { createFileProvider } from './file-provider'
 import { polyscopeLogUri, polyscopeScheme, polyscopeUri } from './polyscope-uri'
 import { createVsCodeSecretStore } from './secret-storage'
 import { registerSidebarView } from './sidebar-view'
+import { createTabDecorations, type TabDecorations } from './tab-decorations'
 import { openViewerTab } from './viewer-tab'
 import type { WebviewOptions } from './webview-page'
 
@@ -24,6 +27,10 @@ export interface TestApi {
   startCore(): Core
   /** Opens what the sidebar asks for, as it does. */
   open(request: OpenRequest): Promise<void>
+  /** What the webviews' bridges ask of VS Code, e.g. copying diagnostics. */
+  shell: HostShell
+  /** How `polyscope` tabs are decorated. */
+  tabDecorations: TabDecorations
   /** Answers the notifications the extension shows from now on in the user's place, with one of their actions or none. */
   answerNotifications(answer: (message: string, actions: string[]) => string | undefined): void
 }
@@ -52,7 +59,9 @@ export async function activate(context: ExtensionContext): Promise<TestApi | und
 
   let notify = async (message: string, ...actions: string[]) => window.showWarningMessage(message, ...actions)
   const ownViewerChanged = new EventEmitter<boolean>()
+  const tabDecorations = createTabDecorations(core)
   context.subscriptions.push(
+    tabDecorations,
     ownViewerChanged,
     workspace.onDidChangeConfiguration((event) => event.affectsConfiguration('polyscope.ownViewer') && ownViewerChanged.fire(ownViewer()))
   )
@@ -71,11 +80,26 @@ export async function activate(context: ExtensionContext): Promise<TestApi | und
         })) ?? []
       return picked?.fsPath ?? null
     },
+    // The same report as the desktop app's, naming VS Code (or the editor it is) and its extension host instead.
     async copyDiagnostics() {
-      void window.showInformationMessage('Copy diagnostics isn’t available in VS Code yet.')
+      const report = formatDiagnostics({
+        appVersion: context.extension.packageJSON.version as string,
+        os: osDescription(release()),
+        versions: {
+          'VS Code': `${version} (${env.appName})`,
+          'Extension host': `Node.js ${process.versions.node}${env.remoteName ? `, remote (${env.remoteName})` : ''}`
+        },
+        homeDir: homedir(),
+        log: await log.recent()
+      })
+      await env.clipboard.writeText(report)
     },
     appVersion: async () => context.extension.packageJSON.version as string,
+    async openExtensionSettings() {
+      await commands.executeCommand('workbench.action.openSettings', `@ext:${context.extension.id}`)
+    },
     open,
+    sourcesChanged: () => tabDecorations.refresh(),
     ownViewer: async () => ownViewer(),
     onOwnViewerChanged(listener) {
       const subscription = ownViewerChanged.event(listener)
@@ -83,6 +107,9 @@ export async function activate(context: ExtensionContext): Promise<TestApi | und
     }
   }
   const webviewOptions: WebviewOptions = { core, log, shell, webviewRoot: Uri.joinPath(context.extensionUri, 'dist', 'webview') }
+
+  /** The Source's name, to label its tabs by; none if it's gone, which VS Code's editor then shows. */
+  const sourceNameOf = async (sourceId: string) => (await core.listSources()).find(({ id }) => id === sourceId)?.name
 
   /** Whether a file is a Large File; if that can't be told, VS Code's editor shows why it can't be read either. */
   const isLargeFile = ({ sourceId, path }: OpenRequest) => core.isLargeFile(sourceId, path).catch(() => false)
@@ -107,10 +134,10 @@ export async function activate(context: ExtensionContext): Promise<TestApi | und
       // Refused before VS Code's editor reads it, as it would hold all of it in memory. Only a compressed file's
       // content has to be read (up to the limit) to tell.
       if (large && (await isOverOpenAnywayLimit(request))) return void refuseTooLarge(request)
-      return inVsCodeEditor(polyscopeUri(sourceId, path))
+      return inVsCodeEditor(polyscopeUri(sourceId, path, await sourceNameOf(sourceId)))
     }
     if (ownViewer()) return openViewerTab(webviewOptions, request)
-    if (kind === 'log') return inVsCodeEditor(polyscopeLogUri(sourceId, path))
+    if (kind === 'log') return inVsCodeEditor(polyscopeLogUri(sourceId, path, await sourceNameOf(sourceId)))
     // A Follow isn't offered with ownViewer off: VS Code's editor can't append to what it shows.
   }
 
@@ -126,13 +153,16 @@ export async function activate(context: ExtensionContext): Promise<TestApi | und
 
   context.subscriptions.push(
     workspace.registerFileSystemProvider(polyscopeScheme, createFileProvider(core), { isReadonly: true, isCaseSensitive: true }),
+    window.registerFileDecorationProvider(tabDecorations),
     registerSidebarView(webviewOptions)
   )
 
   const answerNotifications: TestApi['answerNotifications'] = (answer) => {
     notify = async (message, ...actions) => answer(message, actions)
   }
-  return context.extensionMode === ExtensionMode.Test ? { core, secrets, startCore: () => startCore(createVsCodeSecretStore(context.secrets)), open, answerNotifications } : undefined
+  return context.extensionMode === ExtensionMode.Test
+    ? { core, secrets, startCore: () => startCore(createVsCodeSecretStore(context.secrets)), open, shell, tabDecorations, answerNotifications }
+    : undefined
 }
 
 export function deactivate(): void {}

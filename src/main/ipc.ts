@@ -4,7 +4,7 @@ import type { CoreApi, CoreEvents } from '@shared/core-api'
 import type { UpdateStatus } from '@shared/updates'
 import type { AppLog } from './app-log'
 import { callCore } from './core-call'
-import { formatDiagnostics } from './diagnostics'
+import { formatDiagnostics, osDescription } from './diagnostics'
 import type { Updater } from './updates'
 
 /** Exposes the core API to the renderer. */
@@ -40,15 +40,13 @@ export function registerShellIpc(getWindow: () => BrowserWindow | null, { secret
   ipcMain.handle('shell:secretStorageIsWeak', () => secretStorageIsWeak)
 }
 
-const osNames: Partial<Record<NodeJS.Platform, string>> = { win32: 'Windows', darwin: 'macOS', linux: 'Linux' }
-
 /** "Copy diagnostics": puts the versions, OS and recent app log, redacted, on the clipboard for a GitHub issue. */
 export function registerDiagnosticsIpc(log: AppLog): void {
   ipcMain.handle('diagnostics:copy', async () => {
     const report = formatDiagnostics({
       appVersion: app.getVersion(),
-      os: `${osNames[process.platform] ?? process.platform} ${process.getSystemVersion()} (${process.arch})`,
-      versions: { electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node },
+      os: osDescription(process.getSystemVersion()),
+      versions: { Electron: process.versions.electron, Chromium: process.versions.chrome, 'Node.js': process.versions.node },
       homeDir: homedir(),
       log: await log.recent()
     })

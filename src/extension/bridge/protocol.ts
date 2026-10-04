@@ -24,6 +24,8 @@ export interface OpenRequest {
 
 /** `window.polyscope` in a webview: the desktop app's bridge, plus asking the extension host to open things. */
 export interface ExtensionBridge extends PolyscopeBridge {
+  /** Opens the extension's VS Code settings, such as `polyscope.ownViewer`. */
+  openExtensionSettings(): Promise<void>
   /** Opens a file, Log Stream or Follow wherever the extension host decides. */
   open(request: OpenRequest): Promise<void>
   /** Whether `polyscope.ownViewer` is on: Follows, Log Streams and Large Files open in Polyscope's viewer tabs. */
@@ -32,8 +34,8 @@ export interface ExtensionBridge extends PolyscopeBridge {
   onOwnViewerChanged(listener: (on: boolean) => void): () => void
 }
 
-/** The bridge's calls: everything but its subscriptions. */
-export type BridgeCall = Exclude<keyof ExtensionBridge, `on${string}`>
+/** The bridge's calls: everything but its subscriptions and what it says about itself. */
+export type BridgeCall = Exclude<keyof ExtensionBridge, `on${string}` | 'copy'>
 
 /** What each of the bridge's events carries. */
 export interface BridgeEvents {

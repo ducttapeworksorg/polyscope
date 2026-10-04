@@ -6,7 +6,7 @@ export const environmentOf = (environments: Environment[], { environmentId }: Pi
   environments.find((e) => e.id === environmentId)
 
 /** Colours offered for a new Environment, picked in order skipping those already used. */
-const suggestedColors = ['#8e4ec6', '#0090ff', '#12a594', '#d6409f', '#978365', '#e5484d', '#f76b15', '#ffc53d', '#30a46c']
+export const suggestedColors = ['#8e4ec6', '#0090ff', '#12a594', '#d6409f', '#978365', '#e5484d', '#f76b15', '#ffc53d', '#30a46c']
 
 export const nextColor = (environments: Environment[]) =>
   suggestedColors.find((color) => !environments.some((e) => e.color === color)) ?? suggestedColors[0]!

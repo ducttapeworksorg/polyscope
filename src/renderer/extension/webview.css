@@ -17,3 +17,76 @@ body {
 #root > .workbench {
   flex: 1;
 }
+
+/*
+ * VS Code's colours: the chrome's colour variables (styles/app.css) take those of VS Code's theme, which VS Code sets on
+ * the page and changes with its theme. The colours that carry meaning (--danger, --caution, Pod Status, log levels and
+ * Environments) stay Polyscope's own, light or dark as VS Code's theme is (see theme.ts).
+ */
+:root,
+:root[data-theme] {
+  --slate-900: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  --slate-850: var(--vscode-editor-background);
+  --slate-800: var(--vscode-editorWidget-background);
+  --slate-700: var(--vscode-list-inactiveSelectionBackground, var(--vscode-list-hoverBackground));
+  --slate-600: var(--vscode-dropdown-border, var(--vscode-contrastBorder, transparent));
+  --line: var(--vscode-panel-border, var(--vscode-contrastBorder, transparent));
+  --guide: var(--vscode-tree-indentGuidesStroke);
+
+  --text: var(--vscode-foreground);
+  --text-dim: var(--vscode-descriptionForeground);
+  --text-faint: var(--vscode-descriptionForeground);
+  --glint: var(--vscode-focusBorder);
+  --hover-tint: var(--vscode-list-hoverBackground);
+  --shadow: var(--vscode-widget-shadow, transparent);
+  --search-match: var(--vscode-editor-findMatchHighlightBackground);
+}
+
+/* The sidebar's raised parts take the colours VS Code gives the same parts of its own views. */
+.button--primary,
+.add-source {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+.button--primary:hover,
+.add-source:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.field__input {
+  border-color: var(--vscode-input-border, var(--slate-600));
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+}
+
+.field__input:focus {
+  border-color: var(--vscode-focusBorder);
+}
+
+.field__input::placeholder {
+  color: var(--vscode-input-placeholderForeground);
+}
+
+.context-menu {
+  border-color: var(--vscode-menu-border, var(--slate-600));
+  background: var(--vscode-menu-background);
+  color: var(--vscode-menu-foreground);
+}
+
+.context-menu__item:hover,
+.context-menu__item:focus {
+  background: var(--vscode-menu-selectionBackground);
+  color: var(--vscode-menu-selectionForeground);
+}
+
+/* A high-contrast theme outlines what's selected or hovered rather than filling it. */
+body[data-vscode-theme-kind^='vscode-high-contrast'] .tree-row:hover:not(:focus-visible) {
+  outline: 1px dashed var(--vscode-contrastActiveBorder);
+  outline-offset: -1px;
+}
+
+body[data-vscode-theme-kind^='vscode-high-contrast'] .tree-row[aria-selected='true']:not(:focus-visible) {
+  outline: 1px solid var(--vscode-contrastActiveBorder);
+  outline-offset: -1px;
+}

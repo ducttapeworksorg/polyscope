@@ -4,6 +4,7 @@ import CssWorker from 'monaco-editor/languages/features/css/css.worker?worker'
 import HtmlWorker from 'monaco-editor/languages/features/html/html.worker?worker'
 import JsonWorker from 'monaco-editor/languages/features/json/json.worker?worker'
 import TsWorker from 'monaco-editor/languages/features/typescript/ts.worker?worker'
+import type { Theme } from '@shared/settings'
 import { t } from './i18n'
 import { logRules } from './line-highlights'
 import { markerPattern } from './log-lines'
@@ -30,11 +31,9 @@ self.MonacoEnvironment = {
   }
 }
 
-// Each theme mirrors the slate tokens of its app theme in styles/app.css, so the editor well is continuous with the chrome.
-monaco.editor.defineTheme('polyscope-dark', {
-  base: 'vs-dark',
-  inherit: true,
-  rules: [
+/** How each app theme colours the log language's tokens, as the --log-* colours in styles/app.css. */
+export const logTokenRules: Record<Theme, monaco.editor.ITokenThemeRule[]> = {
+  dark: [
     { token: 'log.error', foreground: 'f28b82', fontStyle: 'bold' },
     { token: 'log.warning', foreground: 'e8c170' },
     { token: 'log.info', foreground: '8ab4f8' },
@@ -42,6 +41,21 @@ monaco.editor.defineTheme('polyscope-dark', {
     { token: 'log.date', foreground: '7fb8a4' },
     { token: 'log.marker', foreground: 'b69cf0', fontStyle: 'italic' }
   ],
+  light: [
+    { token: 'log.error', foreground: 'c5221f', fontStyle: 'bold' },
+    { token: 'log.warning', foreground: '9a6700' },
+    { token: 'log.info', foreground: '1a5fb4' },
+    { token: 'log.debug', foreground: '6b7688' },
+    { token: 'log.date', foreground: '2f7d63' },
+    { token: 'log.marker', foreground: '6f4fb8', fontStyle: 'italic' }
+  ]
+}
+
+// Each theme mirrors the slate tokens of its app theme in styles/app.css, so the editor well is continuous with the chrome.
+monaco.editor.defineTheme('polyscope-dark', {
+  base: 'vs-dark',
+  inherit: true,
+  rules: logTokenRules.dark,
   colors: {
     'editor.background': '#1b2230',
     'editor.foreground': '#d5dce8',
@@ -65,14 +79,7 @@ monaco.editor.defineTheme('polyscope-dark', {
 monaco.editor.defineTheme('polyscope-light', {
   base: 'vs',
   inherit: true,
-  rules: [
-    { token: 'log.error', foreground: 'c5221f', fontStyle: 'bold' },
-    { token: 'log.warning', foreground: '9a6700' },
-    { token: 'log.info', foreground: '1a5fb4' },
-    { token: 'log.debug', foreground: '6b7688' },
-    { token: 'log.date', foreground: '2f7d63' },
-    { token: 'log.marker', foreground: '6f4fb8', fontStyle: 'italic' }
-  ],
+  rules: logTokenRules.light,
   colors: {
     'editor.background': '#fbfcfd',
     'editor.foreground': '#1f2735',

@@ -10,6 +10,7 @@
     "src/main/**/*",
     "src/shared/**/*",
     "src/preload/bridge.ts",
+    "src/renderer/src/environments.ts",
     "src/renderer/src/i18n/index.ts",
     "src/renderer/src/i18n/en.ts",
     "src/renderer/src/i18n/format.ts",

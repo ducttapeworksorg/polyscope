@@ -2,7 +2,7 @@
 
 Browse and read files and logs from many systems without leaving VS Code.
 
-The Polyscope icon in the activity bar opens the Polyscope sidebar, with the same Sources tree as the [Polyscope desktop app](https://github.com/ducttapeworksorg/polyscope). Files open read-only in VS Code's own editor, compressed ones (`.gz`, `.zst`) decompressed.
+The Polyscope icon in the activity bar opens the Polyscope sidebar, with the same Sources tree as the [Polyscope desktop app](https://github.com/ducttapeworksorg/polyscope). Files open read-only in VS Code's own editor, compressed ones (`.gz`, `.zst`) decompressed. Their tabs are labelled with their Source and tinted with its Environment's colour, so a file from prod stands out. The sidebar and viewer tabs take the colours of your VS Code theme.
 
 Followed files, Kubernetes Log Streams and Large Files open in a Polyscope viewer tab, which appends live lines and shows a multi-gigabyte file without downloading all of it. Turn off the `polyscope.ownViewer` setting to open everything in VS Code's editor instead: Log Streams as a snapshot of their Last N lines, Large Files only up to the "open anyway" limit in Polyscope's Settings, and no Follow.
 

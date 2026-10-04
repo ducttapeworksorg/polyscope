@@ -51,6 +51,7 @@ export function createWebviewBridge({ post, listen }: Channel): ExtensionBridge 
     }
 
   return {
+    copy: 'extension',
     invokeCore: call('invokeCore'),
     pickFolder: call('pickFolder'),
     pickFile: call('pickFile'),
@@ -60,6 +61,7 @@ export function createWebviewBridge({ post, listen }: Channel): ExtensionBridge 
     getUpdateStatus: call('getUpdateStatus'),
     checkForUpdates: call('checkForUpdates'),
     applyUpdate: call('applyUpdate'),
+    openExtensionSettings: call('openExtensionSettings'),
     open: call('open'),
     ownViewer: call('ownViewer'),
     onOwnViewerChanged: on('ownViewerChanged'),

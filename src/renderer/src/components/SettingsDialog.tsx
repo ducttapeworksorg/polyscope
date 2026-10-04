@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { MB, settingProblems, themes, type NumberSetting, type Settings, type Theme } from '@shared/settings'
 import { canApply, type UpdateStatus } from '@shared/updates'
+import { isExtensionCopy } from '../copy'
 import { core, describeError } from '../core-client'
 import { t } from '../i18n'
 import { useModalDialog } from './use-modal-dialog'
@@ -11,6 +12,8 @@ interface Props {
   /** Shows a theme while it is being chosen, or null to go back to the saved one. */
   onPreviewTheme(theme: Theme | null): void
   onManageEnvironments(): void
+  /** Opens the extension's VS Code settings, in an Extension Copy. */
+  onOpenExtensionSettings?(): void
   onSaved(settings: Settings): void
   onClose(): void
 }
@@ -29,8 +32,13 @@ const parseWhole = (text: string) => (/^\s*\d+\s*$/.test(text) ? Number(text) : 
 const issuesUrl = 'https://github.com/ducttapeworksorg/polyscope/issues'
 const licenseUrl = 'https://github.com/ducttapeworksorg/polyscope/blob/main/LICENSE'
 
-/** Edits the app-wide settings. The theme is previewed as soon as it's picked; nothing is saved until Save. */
-export function SettingsDialog({ settings, update, onPreviewTheme, onManageEnvironments, onSaved, onClose }: Props) {
+/**
+ * Edits the app-wide settings. The theme is previewed as soon as it's picked; nothing is saved until Save. An Extension
+ * Copy has no theme or updates of its own, but points to its VS Code settings.
+ */
+export function SettingsDialog(props: Props) {
+  const { settings, update, onPreviewTheme, onManageEnvironments, onOpenExtensionSettings, onSaved, onClose } = props
+  const extension = isExtensionCopy()
   const close = () => {
     onPreviewTheme(null)
     onClose()
@@ -112,23 +120,25 @@ export function SettingsDialog({ settings, update, onPreviewTheme, onManageEnvir
       <form className="dialog__form" onSubmit={submit} noValidate>
         <h2 className="dialog__title">{t('settings.title')}</h2>
 
-        <fieldset className="settings-section">
-          <legend className="settings-section__title">{t('settings.appearance')}</legend>
-          <div className="segmented" role="radiogroup" aria-label={t('settings.theme')}>
-            {themes.map((option) => (
-              <label key={option} className="segmented__option">
-                <input
-                  type="radio"
-                  name="theme"
-                  value={option}
-                  checked={theme === option}
-                  onChange={() => pickTheme(option)}
-                />
-                {t(`settings.theme.${option}`)}
-              </label>
-            ))}
-          </div>
-        </fieldset>
+        {!extension && (
+          <fieldset className="settings-section">
+            <legend className="settings-section__title">{t('settings.appearance')}</legend>
+            <div className="segmented" role="radiogroup" aria-label={t('settings.theme')}>
+              {themes.map((option) => (
+                <label key={option} className="segmented__option">
+                  <input
+                    type="radio"
+                    name="theme"
+                    value={option}
+                    checked={theme === option}
+                    onChange={() => pickTheme(option)}
+                  />
+                  {t(`settings.theme.${option}`)}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        )}
 
         <fieldset className="settings-section">
           <legend className="settings-section__title">{t('settings.environments')}</legend>
@@ -150,29 +160,42 @@ export function SettingsDialog({ settings, update, onPreviewTheme, onManageEnvir
           {fields.filter((f) => f.section === 'logs').map(numberField)}
         </fieldset>
 
-        <fieldset className="settings-section">
-          <legend className="settings-section__title">{t('settings.updates')}</legend>
-          {version && <p className="field__hint">{t('settings.version', { version })}</p>}
-          <div className="settings-action">
-            {canApply(update) ? (
-              <button type="button" className="button button--quiet" onClick={() => void window.polyscope.applyUpdate()}>
-                {t(update.state === 'available' ? 'settings.downloadUpdate' : 'settings.restartToUpdate')}
+        {extension ? (
+          <fieldset className="settings-section">
+            <legend className="settings-section__title">{t('settings.vsCode')}</legend>
+            {version && <p className="field__hint">{t('settings.version', { version })}</p>}
+            <p className="field__hint">{t('settings.vsCode.hint')}</p>
+            <div>
+              <button type="button" className="button button--quiet" onClick={onOpenExtensionSettings}>
+                {t('settings.openExtensionSettings')}
               </button>
-            ) : (
-              <button
-                type="button"
-                className="button button--quiet"
-                disabled={update.state === 'off' || update.state === 'checking' || update.state === 'downloading'}
-                onClick={() => void window.polyscope.checkForUpdates()}
-              >
-                {t('settings.checkForUpdates')}
-              </button>
-            )}
-            <span role="status" className={update.state === 'error' ? 'field__problem' : 'field__hint'}>
-              {t(`settings.update.${update.state}`, { ...update })}
-            </span>
-          </div>
-        </fieldset>
+            </div>
+          </fieldset>
+        ) : (
+          <fieldset className="settings-section">
+            <legend className="settings-section__title">{t('settings.updates')}</legend>
+            {version && <p className="field__hint">{t('settings.version', { version })}</p>}
+            <div className="settings-action">
+              {canApply(update) ? (
+                <button type="button" className="button button--quiet" onClick={() => void window.polyscope.applyUpdate()}>
+                  {t(update.state === 'available' ? 'settings.downloadUpdate' : 'settings.restartToUpdate')}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="button button--quiet"
+                  disabled={update.state === 'off' || update.state === 'checking' || update.state === 'downloading'}
+                  onClick={() => void window.polyscope.checkForUpdates()}
+                >
+                  {t('settings.checkForUpdates')}
+                </button>
+              )}
+              <span role="status" className={update.state === 'error' ? 'field__problem' : 'field__hint'}>
+                {t(`settings.update.${update.state}`, { ...update })}
+              </span>
+            </div>
+          </fieldset>
+        )}
 
         <fieldset className="settings-section">
           <legend className="settings-section__title">{t('settings.help')}</legend>
