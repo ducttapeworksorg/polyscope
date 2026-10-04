@@ -37,8 +37,8 @@ interface Props {
   showDetails: boolean
   onToggleDetails(): void
   theme: Theme
-  /** Switches between the dark and light themes. */
-  onToggleTheme(): void
+  /** Switches between the dark and light themes; without it, as in an Extension Copy showing VS Code's, there's no toggle. */
+  onToggleTheme?(): void
 }
 
 interface Group {
@@ -227,15 +227,17 @@ export function Sidebar(props: Props) {
               <DetailsIcon />
             </button>
           )}
-          <button
-            type="button"
-            className="icon-button"
-            aria-label={t(theme === 'dark' ? 'sidebar.lightTheme' : 'sidebar.darkTheme')}
-            title={t(theme === 'dark' ? 'sidebar.lightTheme' : 'sidebar.darkTheme')}
-            onClick={onToggleTheme}
-          >
-            <ThemeIcon />
-          </button>
+          {onToggleTheme && (
+            <button
+              type="button"
+              className="icon-button"
+              aria-label={t(theme === 'dark' ? 'sidebar.lightTheme' : 'sidebar.darkTheme')}
+              title={t(theme === 'dark' ? 'sidebar.lightTheme' : 'sidebar.darkTheme')}
+              onClick={onToggleTheme}
+            >
+              <ThemeIcon />
+            </button>
+          )}
           <button
             type="button"
             className="icon-button"

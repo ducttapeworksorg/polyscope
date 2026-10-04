@@ -4,6 +4,8 @@ import type { UpdateStatus } from '@shared/updates'
 
 /** What the preload script exposes to the renderer as `window.polyscope`. */
 export interface PolyscopeBridge {
+  /** Which copy of Polyscope this is: the desktop app, or an Extension Copy, which leaves out what VS Code does itself. */
+  copy: 'desktop' | 'extension'
   invokeCore(method: CoreMethod, args: unknown[]): Promise<CoreResult<unknown>>
   pickFolder(): Promise<string | null>
   /** Asks for a file, offering to show those matching each filter in turn (`*` for any); null if none was picked. */

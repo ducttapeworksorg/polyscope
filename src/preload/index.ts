@@ -5,6 +5,7 @@ import type { UpdateStatus } from '@shared/updates'
 import type { PolyscopeBridge } from './bridge'
 
 const bridge: PolyscopeBridge = {
+  copy: 'desktop',
   invokeCore: (method, args) => ipcRenderer.invoke('core', method, args),
   pickFolder: () => ipcRenderer.invoke('shell:pickFolder'),
   pickFile: (filters) => ipcRenderer.invoke('shell:pickFile', filters),

@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict'
 import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import * as vscode from 'vscode'
@@ -248,7 +248,7 @@ const firstRunS3: [string, () => Promise<void>][] = [
       assert.deepEqual((await core.connect(source.id)).map((node) => ('name' in node ? node.name : node.kind)).sort(), ['a.log', 'logs'])
       await readsObject(source.id)
       await open({ kind: 'file', sourceId: source.id, path: 'a.log', name: 'a.log', pinned: true })
-      await eventually(() => assert.equal(activeTextTab().uri.toString(), uriOf(source.id, 'a.log').toString()))
+      await eventually(() => assert.equal(activeTextTab().uri.toString(), uriOf(source.id, 'a.log', source.name).toString()))
     }
   ],
   [
@@ -438,7 +438,7 @@ const firstRunKubernetes: [string, () => Promise<void>][] = [
 
         await withOwnViewer(false, async () => {
           await open(request)
-          assert.equal(await shownInTextTab(logUriOf(source.id, previous)), 'crashing')
+          assert.equal(await shownInTextTab(logUriOf(source.id, previous, source.name)), 'crashing')
         })
       } finally {
         await core.deleteSource(source.id)
@@ -467,7 +467,7 @@ const firstRunKubernetes: [string, () => Promise<void>][] = [
         assert.equal(text(await vscode.workspace.fs.readFile(uriOf(source.id, file))), 'one\ntwo\n')
 
         await open({ kind: 'file', sourceId: source.id, path: file, name: 'app.log', pinned: true })
-        assert.equal(await shownInTextTab(uriOf(source.id, file)), 'one\ntwo\n')
+        assert.equal(await shownInTextTab(uriOf(source.id, file, source.name)), 'one\ntwo\n')
 
         await open({ kind: 'follow', sourceId: source.id, path: file, name: 'app.log', pinned: true })
         const tab = await eventually(activeViewerTab)
@@ -532,14 +532,74 @@ const firstRun: [string, () => Promise<void>][] = [
     }
   ],
   [
-    'opening a file from the sidebar opens it in a text editor tab',
+    'opening a file from the sidebar opens it in a text editor tab, named after the file and labelled with its Source',
     async () => {
       const { core, open } = await extension()
       const [source] = await core.listSources()
 
       await open({ kind: 'file', sourceId: source!.id, path: 'hello.txt', name: 'hello.txt', pinned: true })
 
-      await eventually(() => assert.equal(activeTextTab().uri.toString(), uriOf(source!.id, 'hello.txt').toString()))
+      // The manifest's label formatter describes it by its query's Source name and its path: `Files: /hello.txt`.
+      await eventually(() => assert.equal(activeTextTab().uri.toString(), uriOf(source!.id, 'hello.txt', 'Files').toString()))
+      assert.equal(JSON.parse(activeTextTab().uri.query).source, 'Files')
+      assert.equal(vscode.window.tabGroups.activeTabGroup.activeTab?.label, 'hello.txt')
+    }
+  ],
+  [
+    'a polyscope tab of a Source labelled with an Environment, like the Protected prod, is tinted with its colour, and again when it changes',
+    async () => {
+      const { core, tabDecorations, shell } = await extension()
+      const [source] = await core.listSources()
+      const environments = await core.listEnvironments()
+      const prod = environments.find(({ name }) => name === 'prod')!
+      const uri = uriOf(source!.id, 'hello.txt', source!.name)
+      const decorationOf = async () => {
+        const decoration = await tabDecorations.provideFileDecoration(uri, new vscode.CancellationTokenSource().token)
+        return decoration && { color: decoration.color?.id, tooltip: decoration.tooltip }
+      }
+      const changed: unknown[] = []
+      const listening = tabDecorations.onDidChangeFileDecorations?.((event) => changed.push(event))
+      assert.equal(prod.protected, true)
+      assert.equal(await decorationOf(), undefined, 'An unlabelled Source’s tabs aren’t tinted')
+
+      try {
+        await core.editSource(source!.id, { type: 'local', name: 'Files', rootPath: files, environmentId: prod.id })
+        shell.sourcesChanged()
+
+        assert.deepEqual(await decorationOf(), { color: 'polyscope.environment.red', tooltip: 'prod' })
+        assert.equal(changed.length, 1, 'VS Code is told to decorate polyscope tabs again')
+      } finally {
+        listening?.dispose()
+        await core.editSource(source!.id, { type: 'local', name: 'Files', rootPath: files })
+      }
+    }
+  ],
+  [
+    'Settings show the extension’s version and open its VS Code settings',
+    async () => {
+      const { shell } = await extension()
+      const polyscope = vscode.extensions.getExtension('ducttapeworks.polyscope')!
+
+      assert.equal(await shell.appVersion(), polyscope.packageJSON.version)
+      await shell.openExtensionSettings()
+
+      await eventually(() => assert.equal(vscode.window.tabGroups.activeTabGroup.activeTab?.label, 'Settings'))
+      await vscode.commands.executeCommand('workbench.action.closeActiveEditor')
+    }
+  ],
+  [
+    'Copy diagnostics puts a redacted report with the VS Code version on VS Code’s clipboard',
+    async () => {
+      const { shell } = await extension()
+
+      await shell.copyDiagnostics()
+
+      const report = await vscode.env.clipboard.readText()
+      assert.match(report, /^### Polyscope diagnostics\n/)
+      assert.ok(report.includes(`- VS Code: ${vscode.version} (${vscode.env.appName})\n`), report)
+      assert.ok(report.includes(`- Extension host: Node.js ${process.versions.node}\n`), report)
+      assert.ok(report.includes('started (VS Code'), 'The recent log is in it')
+      assert.ok(!report.includes(homedir()), 'The home folder is redacted')
     }
   ],
   [
@@ -597,7 +657,7 @@ const firstRun: [string, () => Promise<void>][] = [
         await eventually(() => assert.ok(opened.length, 'The viewer tab opened the Large File'), 30_000)
 
         await open({ ...request, inEditor: true })
-        await eventually(() => assert.equal(activeTextTab().uri.toString(), uriOf(source!.id, 'big.log').toString()))
+        await eventually(() => assert.equal(activeTextTab().uri.toString(), uriOf(source!.id, 'big.log', 'Files').toString()))
       } finally {
         unsubscribe()
         const { largeFileThreshold, openAnywayLimit, cacheSizeCap } = before
@@ -636,7 +696,7 @@ const firstRun: [string, () => Promise<void>][] = [
 
           await open({ ...counterLog, sourceId })
 
-          assert.equal(await shownInTextTab(logUriOf(sourceId, counterLog.path)), 'line 2\nline 3')
+          assert.equal(await shownInTextTab(logUriOf(sourceId, counterLog.path, 'Cluster')), 'line 2\nline 3')
         })
       )
     }
@@ -665,7 +725,7 @@ const firstRun: [string, () => Promise<void>][] = [
       const { core, open } = await extension()
       const [source] = await core.listSources()
       await writeFile(join(files, 'big.log'), 'a line of a Large File\n'.repeat(50_000))
-      const big = uriOf(source!.id, 'big.log').toString()
+      const big = uriOf(source!.id, 'big.log', 'Files').toString()
 
       await withOwnViewer(false, () =>
         withSmallLimits(core, async () => {

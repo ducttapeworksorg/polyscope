@@ -1,6 +1,7 @@
 import type { Ref } from 'react'
 import type { ContainerNode, EntryNode, PreviousLogNode, SourceInfo } from '@shared/core-api'
 import type { UpdateStatus } from '@shared/updates'
+import { isExtensionCopy } from '../copy'
 import { EnvironmentsDialog } from './EnvironmentsDialog'
 import { SettingsDialog } from './SettingsDialog'
 import { Sidebar } from './Sidebar'
@@ -17,10 +18,12 @@ interface Props {
   onOpenLog(source: SourceInfo, node: ContainerNode | PreviousLogNode, options?: { pinned: boolean }): void
   /** Follows a file of a Local or Kubernetes Files Source in a log view; without it, files offer no Follow. */
   onFollowFile?(source: SourceInfo, node: EntryNode): void
+  /** Opens the extension's VS Code settings, from the Settings dialog of an Extension Copy. */
+  onOpenExtensionSettings?(): void
 }
 
 /** The Sources sidebar, with the Settings and Environments dialogs it opens. */
-export function SourcesPane({ ref, model, update, onOpenFile, onOpenLog, onFollowFile }: Props) {
+export function SourcesPane({ ref, model, update, onOpenFile, onOpenLog, onFollowFile, onOpenExtensionSettings }: Props) {
   const { settings, sources, environments } = model
   return (
     <>
@@ -40,7 +43,8 @@ export function SourcesPane({ ref, model, update, onOpenFile, onOpenLog, onFollo
         showDetails={settings.showTreeDetails}
         onToggleDetails={() => void model.toggleTreeDetails()}
         theme={model.theme ?? settings.theme}
-        onToggleTheme={() => void model.toggleTheme()}
+        // An Extension Copy shows VS Code's theme.
+        onToggleTheme={isExtensionCopy() ? undefined : () => void model.toggleTheme()}
       />
 
       {model.settingsOpen && (
@@ -49,6 +53,7 @@ export function SourcesPane({ ref, model, update, onOpenFile, onOpenLog, onFollo
           update={update}
           onPreviewTheme={model.setPreviewTheme}
           onManageEnvironments={() => model.setEnvironmentsOpen(true)}
+          onOpenExtensionSettings={onOpenExtensionSettings}
           onSaved={model.settingsSaved}
           onClose={() => model.setSettingsOpen(false)}
         />

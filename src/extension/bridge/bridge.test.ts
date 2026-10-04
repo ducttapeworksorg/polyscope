@@ -67,7 +67,9 @@ beforeEach(async () => {
     pickFile: async (filters) => `/picked/${filters[0]?.extensions[0] ?? 'nothing'}`,
     copyDiagnostics: async () => {},
     appVersion: async () => '1.2.3',
+    openExtensionSettings: async () => {},
     open: async () => {},
+    sourcesChanged: () => {},
     ownViewer: async () => true,
     onOwnViewerChanged: (listener) => {
       ownViewerChanged = listener
@@ -140,10 +142,50 @@ describe('the host’s own calls over the bridge', () => {
     await expect(bridge.pickFolder()).rejects.toThrow('No dialog today')
   })
 
-  it('say what the extension is: its version, secrets never weak, and no updates of its own', async () => {
+  it('open the extension’s VS Code settings with the host', async () => {
+    const opened = vi.fn(async () => {})
+    shell.openExtensionSettings = opened
+
+    await bridge.openExtensionSettings()
+
+    expect(opened).toHaveBeenCalledOnce()
+  })
+
+  it('say what the extension is: an Extension Copy, its version, secrets never weak, and no updates of its own', async () => {
+    expect(bridge.copy).toBe('extension')
     expect(await bridge.appVersion()).toBe('1.2.3')
     expect(await bridge.secretStorageIsWeak()).toBe(false)
     expect(await bridge.getUpdateStatus()).toEqual({ state: 'off' })
+  })
+})
+
+describe('changes to what labels tabs', () => {
+  it('reach the host once a Source or an Environment is added, edited or deleted, not when they’re only read', async () => {
+    const changed = vi.fn()
+    shell.sourcesChanged = changed
+
+    await invoke('listSources')
+    await invoke('listEnvironments')
+    expect(changed).not.toHaveBeenCalled()
+
+    const source = await addLocalSource()
+    const environment = await invoke<{ id: string }>('addEnvironment', { name: 'live', color: '#e5484d', protected: true })
+    if (!environment.ok) throw new Error(environment.message)
+    await invoke('editSource', source.id, { type: 'local', name: 'Logs', rootPath: root, environmentId: environment.value.id })
+    await invoke('editEnvironment', environment.value.id, { name: 'live', color: '#0090ff', protected: true })
+    await invoke('deleteEnvironment', environment.value.id)
+    await invoke('deleteSource', source.id)
+
+    expect(changed).toHaveBeenCalledTimes(6)
+  })
+
+  it('don’t reach the host when they fail', async () => {
+    const changed = vi.fn()
+    shell.sourcesChanged = changed
+
+    await invoke('deleteSource', 'no-such-source')
+
+    expect(changed).not.toHaveBeenCalled()
   })
 })
 

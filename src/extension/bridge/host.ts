@@ -1,4 +1,4 @@
-import type { CoreApi, CoreEvents } from '@shared/core-api'
+import type { CoreApi, CoreEvents, CoreMethod } from '@shared/core-api'
 import { isRecord } from '@shared/settings'
 import type { AppLog } from '../../main/app-log'
 import { callCore } from '../../main/core-call'
@@ -10,7 +10,10 @@ export interface HostShell {
   pickFile(filters: { name: string; extensions: string[] }[]): Promise<string | null>
   copyDiagnostics(): Promise<void>
   appVersion(): Promise<string>
+  openExtensionSettings(): Promise<void>
   open(request: OpenRequest): Promise<void>
+  /** A Source or an Environment was added, edited or deleted, changing what labels and tints its tabs. */
+  sourcesChanged(): void
   /** Whether `polyscope.ownViewer` is on. */
   ownViewer(): Promise<boolean>
   /** Tells `listener` whenever `polyscope.ownViewer` changes; returns what unsubscribes it. */
@@ -24,6 +27,17 @@ interface Options {
   /** Sends a message to the webview. */
   post(message: ToWebview): void
 }
+
+/** The core calls that change Sources or their Environments. */
+const changingSources: ReadonlySet<string> = new Set<CoreMethod>([
+  'addSource',
+  'editSource',
+  'duplicateSource',
+  'deleteSource',
+  'addEnvironment',
+  'editEnvironment',
+  'deleteEnvironment'
+])
 
 const isCall = (value: unknown): value is CallMessage =>
   typeof value === 'object' &&
@@ -48,13 +62,15 @@ export function serveBridge({ core, log, shell, post }: Options) {
 
   /**
    * Calls the core, noting the Follows (whichever call starts one) and Large Files the webview starts, and forgetting
-   * those it stops or closes itself. One that starts after the webview is gone is let go of at once.
+   * those it stops or closes itself. One that starts after the webview is gone is let go of at once. Tells the host
+   * when Sources or Environments changed.
    */
   const invokeCore = async (...[method, args]: Parameters<ExtensionBridge['invokeCore']>) => {
     const result = await callCore(core, log, method, args)
     const [id] = args
     if (method === 'stopFollow') follows.delete(String(id))
     if (method === 'closeLargeFile') largeFiles.delete(String(id))
+    if (result.ok && changingSources.has(method)) shell.sourcesChanged()
     if (!result.ok || !isRecord(result.value)) return result
     const { followId, largeFileId } = result.value
     if (typeof followId === 'string') {
@@ -76,6 +92,7 @@ export function serveBridge({ core, log, shell, post }: Options) {
     secretStorageIsWeak: async () => false,
     copyDiagnostics: () => shell.copyDiagnostics(),
     appVersion: () => shell.appVersion(),
+    openExtensionSettings: () => shell.openExtensionSettings(),
     // The editor's marketplace updates an Extension Copy.
     getUpdateStatus: async () => ({ state: 'off' }),
     checkForUpdates: async () => {},

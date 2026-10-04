@@ -42,6 +42,7 @@ function Sidebar() {
       onOpenFile={opener('file')}
       onOpenLog={opener('log')}
       onFollowFile={ownViewer ? opener('follow') : undefined}
+      onOpenExtensionSettings={() => void bridge.openExtensionSettings()}
     />
   )
 }
