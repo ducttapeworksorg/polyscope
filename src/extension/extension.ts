@@ -3,12 +3,14 @@ import { join } from 'node:path'
 import { commands, ConfigurationTarget, EventEmitter, ExtensionMode, Uri, version, window, workspace, type ExtensionContext } from 'vscode'
 import { createAppLog } from '../main/app-log'
 import { createCore, type Core } from '../main/core/core'
+import type { SecretStore } from '../main/core/secret-store'
 import { t } from '../renderer/src/i18n'
 import { formatSize } from '../renderer/src/i18n/format'
 import type { HostShell } from './bridge/host'
 import type { OpenRequest } from './bridge/protocol'
 import { createFileProvider } from './file-provider'
 import { polyscopeLogUri, polyscopeScheme, polyscopeUri } from './polyscope-uri'
+import { createVsCodeSecretStore } from './secret-storage'
 import { registerSidebarView } from './sidebar-view'
 import { openViewerTab } from './viewer-tab'
 import type { WebviewOptions } from './webview-page'
@@ -16,6 +18,10 @@ import type { WebviewOptions } from './webview-page'
 /** What the extension hands its integration tests, and nothing else. */
 export interface TestApi {
   core: Core
+  /** The core's secret store, to tell what became of a Source's secrets. */
+  secrets: SecretStore
+  /** Starts another core over the extension's data and SecretStorage, as reloading the window does. */
+  startCore(): Core
   /** Opens what the sidebar asks for, as it does. */
   open(request: OpenRequest): Promise<void>
   /** Answers the notifications the extension shows from now on in the user's place, with one of their actions or none. */
@@ -38,7 +44,9 @@ export async function activate(context: ExtensionContext): Promise<TestApi | und
   await mkdir(dataDir, { recursive: true })
   const log = createAppLog({ dir: join(dataDir, 'logs') })
   log.info(`Polyscope ${context.extension.packageJSON.version} started (VS Code ${version}, ${process.platform} ${process.arch})`)
-  const core = createCore({ dataDir })
+  const startCore = (secrets: SecretStore) => createCore({ dataDir, secrets })
+  const secrets = createVsCodeSecretStore(context.secrets)
+  const core = startCore(secrets)
 
   let notify = async (message: string, ...actions: string[]) => window.showWarningMessage(message, ...actions)
   const ownViewerChanged = new EventEmitter<boolean>()
@@ -122,7 +130,7 @@ export async function activate(context: ExtensionContext): Promise<TestApi | und
   const answerNotifications: TestApi['answerNotifications'] = (answer) => {
     notify = async (message, ...actions) => answer(message, actions)
   }
-  return context.extensionMode === ExtensionMode.Test ? { core, open, answerNotifications } : undefined
+  return context.extensionMode === ExtensionMode.Test ? { core, secrets, startCore: () => startCore(createVsCodeSecretStore(context.secrets)), open, answerNotifications } : undefined
 }
 
 export function deactivate(): void {}
