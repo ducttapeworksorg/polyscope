@@ -127,6 +127,8 @@ export function Tabs(props: Props) {
               style={environment && environmentStyle(environment)}
               onClick={() => onActivate(tab.key)}
               onDoubleClick={() => onPin(tab.key)}
+              // A middle press on the scrolling tab list would start autoscrolling instead, and never click.
+              onMouseDown={(e) => e.button === 1 && e.preventDefault()}
               onAuxClick={(e) => e.button === 1 && onClose(tab.key)}
               onContextMenu={(e) => openMenu(e, { tab })}
               onKeyDown={(e) => onTabKeyDown(e, tab)}
