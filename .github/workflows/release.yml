@@ -1,7 +1,7 @@
 name: Release
 
 # Pushing a version tag (v1.2.3, matching package.json) builds every platform's installers and the Extension Copy's
-# .vsix, and publishes them to GitHub Releases, where the app looks for updates.
+# .vsix, and publishes them to GitHub Releases, where the app looks for updates, and the .vsix to Open VSX.
 on:
   push:
     tags: ['v*.*.*']
@@ -102,3 +102,28 @@ jobs:
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false "${kind[@]}"
         env:
           GH_TOKEN: ${{ github.token }}
+
+  # The released .vsix, on Open VSX, the marketplace of VSCodium, Cursor, Windsurf and others. Only once the release is
+  # out, so a failed build can't leave a version there that GitHub doesn't have. Not a pre-release: the editors would
+  # update every Extension Copy to it, where Installed Copies are only offered releases.
+  open-vsx:
+    needs: publish
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Download the .vsix from the release
+        run: gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern "polyscope-${GITHUB_REF_NAME#v}.vsix"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # --skip-duplicate, so a rerun after the upload went through doesn't fail on the version being there already.
+      - name: Publish to Open VSX
+        run: npx --yes ovsx@1.2.0 publish "polyscope-${GITHUB_REF_NAME#v}.vsix" --skip-duplicate
+        env:
+          OVSX_PAT: ${{ secrets.OPEN_VSX_TOKEN }}

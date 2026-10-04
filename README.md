@@ -56,7 +56,7 @@ There's a light theme too, a click away at the top of the sidebar.
 
 ## In VS Code
 
-Polyscope also comes as an extension for VS Code and editors built on it (VSCodium, Cursor, Windsurf). Each release has it as `polyscope-<version>.vsix`, at the same version as the app. Install it with **Extensions → … → Install from VSIX…**, or `code --install-extension polyscope-<version>.vsix`.
+Polyscope also comes as an extension for VS Code and editors built on it (VSCodium, Cursor, Windsurf). Those that use Open VSX install it from their **Extensions** view, as [Polyscope on Open VSX](https://open-vsx.org/extension/ducttapeworks/polyscope). In VS Code, install the release's `polyscope-<version>.vsix` with **Extensions → … → Install from VSIX…**, or `code --install-extension polyscope-<version>.vsix`.
 
 The Polyscope icon in the activity bar opens the same Sources sidebar as the app. Files open read-only in VS Code's own editor, labelled with their Source and tinted with its Environment's colour. Followed files, Kubernetes Log Streams and Large Files open in a Polyscope viewer tab, which can append live lines and page through a multi-gigabyte file. Turn off the `polyscope.ownViewer` setting to open everything in VS Code's editor instead.
 
