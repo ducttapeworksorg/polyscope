@@ -72,6 +72,20 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=4096
 
+      # The Extension Copy's .vsix, as the release workflow packages it, so packaging breakage shows before a release.
+      - name: Package the Extension Copy (Linux)
+        if: runner.os == 'Linux'
+        run: npm run extension:vsix
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Linux'
+        with:
+          name: polyscope-vsix
+          path: extension/*.vsix
+          if-no-files-found: error
+
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
