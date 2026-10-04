@@ -1,10 +1,11 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 import { MB, settingProblems, themes, type NumberSetting, type Settings, type Theme } from '@shared/settings'
 import { canApply, type UpdateStatus } from '@shared/updates'
 import { isExtensionCopy } from '../copy'
 import { core, describeError } from '../core-client'
 import { t } from '../i18n'
 import { useModalDialog } from './use-modal-dialog'
+import { useAppVersion } from './use-update-status'
 
 interface Props {
   settings: Settings
@@ -51,11 +52,7 @@ export function SettingsDialog(props: Props) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [diagnostics, setDiagnostics] = useState<'copied' | 'failed' | null>(null)
-  const [version, setVersion] = useState<string | null>(null)
-
-  useEffect(() => {
-    void window.polyscope.appVersion().then(setVersion)
-  }, [])
+  const version = useAppVersion()
 
   // Settings this dialog doesn't edit, like the sidebar's details toggle, are kept as they are.
   const edited: Settings = {

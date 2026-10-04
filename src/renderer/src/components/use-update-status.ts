@@ -11,3 +11,12 @@ export function useUpdateStatus(): UpdateStatus {
   }, [])
   return status
 }
+
+/** The running app's version, once known. */
+export function useAppVersion(): string | null {
+  const [version, setVersion] = useState<string | null>(null)
+  useEffect(() => {
+    void window.polyscope.appVersion().then(setVersion)
+  }, [])
+  return version
+}

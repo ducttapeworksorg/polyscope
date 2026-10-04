@@ -8,7 +8,7 @@ import { Tabs } from './components/Tabs'
 import { TabView } from './components/TabView'
 import { useSources } from './components/use-sources'
 import { useTabs } from './components/use-tabs'
-import { useUpdateStatus } from './components/use-update-status'
+import { useAppVersion, useUpdateStatus } from './components/use-update-status'
 import { environmentOf } from './environments'
 import { t } from './i18n'
 import { activateTab, closeAllTabs, closeOtherTabs, closeTab, cycleTab, pinTab, setLanguage } from './workspace'
@@ -21,6 +21,7 @@ export function App() {
   const { settings, sources, environments, connections, setSettingsOpen } = sourcesModel
   const { tabs, activeTab, setWorkspace } = tabsModel
   const update = useUpdateStatus()
+  const version = useAppVersion()
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth()
   const sidebarRef = useRef<HTMLElement>(null)
   const viewerRef = useRef<HTMLDivElement>(null)
@@ -122,6 +123,7 @@ export function App() {
         onPickLanguage={(language) => activeTab && setWorkspace((ws) => setLanguage(ws, activeTab.key, language))}
         logLineCount={activeTab?.follow ? tabsModel.followedLineCounts.get(activeTab.follow.followId) : undefined}
         update={update}
+        version={version}
       />
     </div>
   )
