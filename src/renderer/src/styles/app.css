@@ -583,6 +583,18 @@ body.is-resizing {
   grid-column: 2;
 }
 
+/* A short field with its label beside it and any hint beneath both, like Settings' numbers. */
+.field--inline {
+  grid-template-columns: 1fr auto;
+  column-gap: 12px;
+  align-items: center;
+}
+
+.field--inline .field__hint,
+.field--inline .field__problem {
+  grid-column: 1 / -1;
+}
+
 .field__input[aria-invalid='true'] {
   border-color: var(--danger);
 }
@@ -720,6 +732,40 @@ body.is-resizing {
 
 /* ---------- Settings ---------- */
 
+/*
+ * Two columns where there's room, so the dialog fits a short screen without scrolling. It goes by its own width, not
+ * the window's: an Extension Copy shows it in VS Code's sidebar, which is narrower still.
+ */
+.dialog--settings {
+  width: min(780px, calc(100vw - 48px));
+  container-type: inline-size;
+}
+
+.settings-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 32px;
+  align-items: start;
+}
+
+.settings-column {
+  display: grid;
+  gap: 14px;
+}
+
+@container (max-width: 640px) {
+  .settings-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Too narrow for a label beside its number, it goes above it again. */
+@container (max-width: 320px) {
+  .field--inline {
+    grid-template-columns: 1fr;
+  }
+}
+
 .settings-section {
   display: grid;
   gap: 12px;
@@ -735,8 +781,9 @@ body.is-resizing {
 
 .settings-action {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 8px 12px;
 }
 
 .settings-section__title {
