@@ -56,8 +56,6 @@ jobs:
 
       # Bundling Monaco peaks near the ~2 GB heap Node defaults to on the smaller runners private repos get.
       - run: npm run build
-        # env:
-        #   NODE_OPTIONS: --max-old-space-size=4096
 
       # Uploads the installers, Windows' portable downloads, and the latest*.yml files electron-updater reads, to the draft.
       - run: npx electron-builder --publish always
@@ -79,8 +77,6 @@ jobs:
       - run: npm ci
 
       - run: npm run extension:vsix
-        # env:
-        #   NODE_OPTIONS: --max-old-space-size=4096
 
       # --clobber, so a rerun replaces what an earlier attempt uploaded.
       - name: Attach the .vsix to the draft
