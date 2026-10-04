@@ -44,6 +44,8 @@ export async function activate(context: ExtensionContext): Promise<TestApi | und
   await mkdir(dataDir, { recursive: true })
   const log = createAppLog({ dir: join(dataDir, 'logs') })
   log.info(`Polyscope ${context.extension.packageJSON.version} started (VS Code ${version}, ${process.platform} ${process.arch})`)
+  // Unlike the desktop app (see login-shell-path.ts), the login shell's PATH isn't loaded for kubeconfig exec auth
+  // plugins: VS Code starts its extension host, local or remote, with the environment its login shell sets up.
   const startCore = (secrets: SecretStore) => createCore({ dataDir, secrets })
   const secrets = createVsCodeSecretStore(context.secrets)
   const core = startCore(secrets)

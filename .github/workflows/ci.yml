@@ -172,6 +172,12 @@ jobs:
 
       - run: npx vitest run src/main/core/kubernetes
 
+      # The Extension Copy's Kubernetes tests, which the build job skips without a cluster.
+      - name: VS Code integration test
+        run: xvfb-run --auto-servernum npm run test:extension
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+
       - name: Show the seeded namespace
         if: failure()
         run: |

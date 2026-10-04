@@ -1,6 +1,7 @@
 // Test support: a stand-in for a Kubernetes API server, just enough of one to connect a Kubernetes Logs Source to
 // and read and follow its one log, over TLS with a certificate from the private test CA. Its namespace `shop` holds
-// an ownerless pod `counter`; in `locked`, listing pods is denied the way RBAC denies it.
+// an ownerless pod `counter`; in `locked`, listing pods is denied the way RBAC denies it. Given a token, it turns away
+// requests that don't bear it.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { startTlsFront } from './test-network'
@@ -20,7 +21,10 @@ const counter = {
 const json = (response: ServerResponse, status: number, body: unknown) =>
   response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
 
-function respond(request: IncomingMessage, response: ServerResponse) {
+function respond(request: IncomingMessage, response: ServerResponse, token: string | undefined) {
+  if (token !== undefined && request.headers.authorization !== `Bearer ${token}`) {
+    return json(response, 401, { kind: 'Status', status: 'Failure', reason: 'Unauthorized', code: 401, message: 'Unauthorized' })
+  }
   const url = new URL(request.url ?? '/', 'http://api')
   const namespaced = /^\/apis?\/(?:[^/]+\/)?v1\/namespaces\/([^/]+)(\/.*)?$/.exec(url.pathname)
   if (!namespaced) return json(response, 404, { kind: 'Status', code: 404, message: 'not found' })
@@ -44,9 +48,12 @@ function respond(request: IncomingMessage, response: ServerResponse) {
   return json(response, 200, { kind: 'List', apiVersion: 'v1', metadata: {}, items: [] })
 }
 
-/** Starts the stand-in; `url` is its https address on 127.0.0.1, and `caPath` a PEM file of the CA that trusts it. */
-export async function startTestApiServer() {
-  const server = createServer(respond)
+/**
+ * Starts the stand-in; `url` is its https address on 127.0.0.1, and `caPath` a PEM file of the CA that trusts it.
+ * With a `token`, only requests bearing it are answered.
+ */
+export async function startTestApiServer({ token }: { token?: string } = {}) {
+  const server = createServer((request, response) => respond(request, response, token))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as { port: number }
   const front = await startTlsFront(`http://127.0.0.1:${port}`)

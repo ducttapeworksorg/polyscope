@@ -27,7 +27,7 @@ A build run from source (`npm run dev` or `npm start`) keeps its Sources, settin
 Some tests run against real backends, and are skipped unless they're configured:
 
 - **S3**: set `POLYSCOPE_TEST_S3_ENDPOINT`, `POLYSCOPE_TEST_S3_ACCESS_KEY` and `POLYSCOPE_TEST_S3_SECRET_KEY` to an S3-compatible store (CI uses [RustFS](https://github.com/rustfs/rustfs)), then `npx vitest run src/main/core/s3`. `npm run test:extension` also runs the Extension Copy's S3 tests then.
-- **Kubernetes**: apply `tests/kind/seed.yaml` to a cluster (CI uses [kind](https://kind.sigs.k8s.io/)), set `POLYSCOPE_TEST_KUBE_CONTEXT`, `POLYSCOPE_TEST_KUBE_RESTRICTED_CONTEXT`, `POLYSCOPE_TEST_KUBE_NAMESPACE` and `POLYSCOPE_TEST_KUBE_FILES_NAMESPACE`, then `npx vitest run src/main/core/kubernetes`. `.github/workflows/ci.yml` shows the full setup.
+- **Kubernetes**: apply `tests/kind/seed.yaml` to a cluster (CI uses [kind](https://kind.sigs.k8s.io/)), set `POLYSCOPE_TEST_KUBE_CONTEXT`, `POLYSCOPE_TEST_KUBE_RESTRICTED_CONTEXT`, `POLYSCOPE_TEST_KUBE_NAMESPACE` and `POLYSCOPE_TEST_KUBE_FILES_NAMESPACE`, then `npx vitest run src/main/core/kubernetes`. `npm run test:extension` also runs the Extension Copy's Kubernetes tests then. `.github/workflows/ci.yml` shows the full setup.
 
 ## Screenshots
 
