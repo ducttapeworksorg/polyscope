@@ -342,7 +342,9 @@ test.beforeAll(async () => {
   await seedFolder(join(dir, 'logs'))
   const kubeconfig = await startCluster()
   app = await electron.launch({
-    args: [join(__dirname, '..', '..', 'out', 'main', 'index.js'), `--user-data-dir=${join(dir, 'user-data')}`],
+    // The project itself, rather than its built main script, so the app reads its version from package.json for the
+    // status bar, rather than reporting Electron's.
+    args: [join(__dirname, '..', '..'), `--user-data-dir=${join(dir, 'user-data')}`],
     env: { ...process.env, KUBECONFIG: kubeconfig }
   })
   window = await app.firstWindow()
@@ -376,6 +378,15 @@ test('screenshots', async () => {
 
   await addKubernetesLogs('shop', 'prod')
   await addLocal('Staging logs', join(dir, 'logs'), 'staging')
+
+  // The Settings, at their defaults: before the Large File threshold is lowered for the Large File Viewer below.
+  await window.getByRole('button', { name: 'Settings', exact: true }).click()
+  const settings = window.getByRole('dialog', { name: 'Settings' })
+  await expect(settings.getByText('A development build doesn’t update itself.')).toBeVisible()
+  await shot('settings')
+  await settings.getByRole('button', { name: 'Cancel' }).click()
+  await expect(settings).toBeHidden()
+
   await setLargeFileThreshold('1')
 
   // Kubernetes Logs: the namespace's Workloads, a crashing pod, and a log followed live.

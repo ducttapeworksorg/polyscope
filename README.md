@@ -50,6 +50,10 @@ There's a light theme too, a click away at the top of the sidebar.
 
 ![Polyscope in its light theme](docs/images/light-theme.png)
 
+**Settings**, behind the gear at the top of the sidebar or <kbd>Ctrl</kbd>+<kbd>,</kbd>, hold the theme, your Environments, the Large File limits and how many lines a log keeps. They're also where you check for updates and copy diagnostics for a bug report.
+
+![The Settings dialog](docs/images/settings.png)
+
 ## In VS Code
 
 Polyscope also comes as an extension for VS Code and editors built on it (VSCodium, Cursor, Windsurf). Each release has it as `polyscope-<version>.vsix`, at the same version as the app. Install it with **Extensions → … → Install from VSIX…**, or `code --install-extension polyscope-<version>.vsix`.
