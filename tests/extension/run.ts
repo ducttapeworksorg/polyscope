@@ -1,6 +1,7 @@
 // Runs the Extension Copy's integration tests (suite.ts) in real VS Code, downloaded into .vscode-test the first
 // time: once, then again with the same profile and workspace, as if the window had been reloaded.
 // Needs the extension and the suite built first: `npm run test:extension` does both.
+// A test run keeps VS Code's own storage in memory, SecretStorage included, so the second run starts without secrets.
 
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'

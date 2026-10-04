@@ -10,6 +10,7 @@ import * as vscode from 'vscode'
 import type { FollowEvent } from '@shared/core-api'
 import { MB } from '@shared/settings'
 import { startTestApiServer } from '../../src/main/core/kubernetes-test-api-server'
+import { hasTestStore, seedPrefix, testS3Source } from '../../src/main/core/s3-test-store'
 import type { TestApi } from '../../src/extension/extension'
 import { polyscopeLogUri as logUriOf, polyscopeUri as uriOf } from '../../src/extension/polyscope-uri'
 import { viewerViewType } from '../../src/extension/viewer-tab'
@@ -136,6 +137,159 @@ async function withLogsSource(core: TestApi['core'], test: (sourceId: string) =>
 }
 
 const counterLog = { kind: 'log', path: 'pods/counter/counter', name: 'counter', pinned: true } as const
+
+/** The S3 Source signing in with keys that the S3 tests share, and its seeded prefix; the last of them deletes both. */
+let sharedSource: { sourceId: string; prefix: string; remove: () => Promise<void> } | undefined
+const sharedS3Source = () => {
+  assert.ok(sharedSource, 'The S3 Source was added')
+  return sharedSource
+}
+
+const objectText = 'an object in S3\n'
+
+/** Checks that the S3 object `a.log` reads through VS Code's file system, which needs the Source to sign in. */
+async function readsObject(sourceId: string) {
+  assert.equal(text(await vscode.workspace.fs.readFile(uriOf(sourceId, 'a.log'))), objectText)
+}
+
+/** Runs `test` with the AWS SDK reading a credentials file of its own, holding the test store's keys as `polyscope`. */
+async function withAwsProfile(test: () => Promise<void>) {
+  const { accessKeyId, secretAccessKey } = testS3Source('', '')
+  const credentials = join(tmpdir(), `polyscope-aws-credentials-${process.pid}`)
+  const config = join(tmpdir(), `polyscope-aws-config-${process.pid}`)
+  await writeFile(credentials, `[polyscope]\naws_access_key_id = ${accessKeyId}\naws_secret_access_key = ${secretAccessKey}\n`)
+  await writeFile(config, '')
+  // The extension host is this process, so its core reads these files, as with the kubeconfig above.
+  const names = ['AWS_SHARED_CREDENTIALS_FILE', 'AWS_CONFIG_FILE', 'AWS_PROFILE', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY']
+  const before = Object.fromEntries(names.map((name) => [name, process.env[name]]))
+  for (const name of names) delete process.env[name]
+  process.env['AWS_SHARED_CREDENTIALS_FILE'] = credentials
+  process.env['AWS_CONFIG_FILE'] = config
+  try {
+    await test()
+  } finally {
+    for (const [name, value] of Object.entries(before)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+    await rm(credentials, { force: true })
+    await rm(config, { force: true })
+  }
+}
+
+// Against the test S3 store, as the core's S3 tests; skipped without one.
+const firstRunS3: [string, () => Promise<void>][] = [
+  [
+    'an S3 Source signing in with keys connects, and its objects read through VS Code’s file system',
+    async () => {
+      const { core, open } = await extension()
+      const { prefix, remove } = await seedPrefix({ 'a.log': objectText, 'logs/b.log': 'b\n' })
+      const source = await core.addSource(testS3Source('Bucket', prefix))
+      sharedSource = { sourceId: source.id, prefix, remove }
+
+      assert.deepEqual((await core.connect(source.id)).map((node) => ('name' in node ? node.name : node.kind)).sort(), ['a.log', 'logs'])
+      await readsObject(source.id)
+      await open({ kind: 'file', sourceId: source.id, path: 'a.log', name: 'a.log', pinned: true })
+      await eventually(() => assert.equal(activeTextTab().uri.toString(), uriOf(source.id, 'a.log').toString()))
+    }
+  ],
+  [
+    'an S3 Source keeps its secret key when edited without retyping it',
+    async () => {
+      const { core } = await extension()
+      const { sourceId, prefix } = sharedS3Source()
+      const { secretAccessKey: _, ...settings } = testS3Source('Bucket', prefix)
+
+      const edited = await core.editSource(sourceId, settings)
+      await core.disconnect(sourceId)
+
+      assert.equal(edited.type === 's3' && edited.secretKeySet, true)
+      await readsObject(sourceId)
+    }
+  ],
+  [
+    'duplicating an S3 Source copies its secret key, and deleting the copy forgets the copy’s alone',
+    async () => {
+      const { core, secrets } = await extension()
+      const { sourceId } = sharedS3Source()
+
+      const copy = await core.duplicateSource(sourceId)
+      assert.equal(copy.type === 's3' && copy.secretKeySet, true)
+      await readsObject(copy.id)
+
+      await core.deleteSource(copy.id)
+      assert.equal(await secrets.get(copy.id, 'secretKey'), undefined)
+      assert.ok(await secrets.get(sourceId, 'secretKey'), 'The original keeps its secret key')
+    }
+  ],
+  [
+    // VS Code keeps SecretStorage in memory in a test run, so the reloaded window can't check this (see run.ts): a core
+    // started afresh stands in for the reloaded window's, knowing only what the extension's data and SecretStorage hold.
+    'an S3 Source’s secret key survives a reload, signing in a core started afresh',
+    async () => {
+      const { startCore } = await extension()
+      const { sourceId } = sharedS3Source()
+      const reloaded = startCore()
+
+      const source = (await reloaded.listSources()).find(({ id }) => id === sourceId)
+      assert.equal(source?.type === 's3' && source.secretKeySet, true)
+      assert.ok((await reloaded.connect(sourceId)).some((node) => 'name' in node && node.name === 'a.log'))
+      await reloaded.disconnect(sourceId)
+    }
+  ],
+  [
+    'deleting an S3 Source forgets its secret key',
+    async () => {
+      const { core, secrets } = await extension()
+      const { sourceId, remove } = sharedS3Source()
+
+      try {
+        await core.deleteSource(sourceId)
+        assert.equal(await secrets.get(sourceId, 'secretKey'), undefined)
+      } finally {
+        await remove()
+      }
+    }
+  ],
+  [
+    'a Large S3 object opens in a viewer tab',
+    async () => {
+      const { core, open } = await extension()
+      const { prefix, remove } = await seedPrefix({ 'big.log': 'a line of a Large File\n'.repeat(50_000) })
+      const source = await core.addSource(testS3Source('Large', prefix))
+
+      try {
+        // As expanding it in the sidebar does, before any of its files can be opened.
+        await core.connect(source.id)
+        await withSmallLimits(core, async () => {
+          await open({ kind: 'file', sourceId: source.id, path: 'big.log', name: 'big.log', pinned: true })
+          await eventually(activeViewerTab)
+        })
+      } finally {
+        await core.deleteSource(source.id)
+        await remove()
+      }
+    }
+  ],
+  [
+    'an S3 Source signing in with an AWS profile connects',
+    async () => {
+      const { core } = await extension()
+      const { prefix, remove } = await seedPrefix({ 'a.log': objectText })
+      const { accessKeyId: _, secretAccessKey: __, ...settings } = testS3Source('Profile', prefix)
+
+      await withAwsProfile(async () => {
+        const source = await core.addSource({ ...settings, auth: 'profile', profile: 'polyscope' })
+        try {
+          await readsObject(source.id)
+        } finally {
+          await core.deleteSource(source.id)
+          await remove()
+        }
+      })
+    }
+  ]
+]
 
 const firstRun: [string, () => Promise<void>][] = [
   [
@@ -382,7 +536,8 @@ const reloaded: [string, () => Promise<void>][] = [
 
 /** Runs this phase's tests in order, as VS Code's test runner calls it; failing if any of them fails. */
 export async function run(): Promise<void> {
-  const tests = phase === 'reloaded' ? reloaded : firstRun
+  const tests = phase === 'reloaded' ? reloaded : [...firstRun, ...(hasTestStore ? firstRunS3 : [])]
+  if (phase !== 'reloaded' && !hasTestStore) console.log(`  - ${firstRunS3.length} S3 tests skipped: POLYSCOPE_TEST_S3_ENDPOINT isn’t set`)
   const failures: string[] = []
   for (const [name, test] of tests) {
     try {

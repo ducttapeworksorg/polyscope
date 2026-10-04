@@ -119,6 +119,12 @@ jobs:
       # The rest of the suite already runs in the build job; only the S3 tests need the store.
       - run: npx vitest run src/main/core/s3
 
+      # The Extension Copy's S3 tests, which the build job skips without a store.
+      - name: VS Code integration test
+        run: xvfb-run --auto-servernum npm run test:extension
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+
   # Kubernetes Logs and Files against a kind cluster, seeded with the Workloads the tests expect (tests/kind/seed.yaml).
   integration-kubernetes:
     name: integration (Kubernetes)
