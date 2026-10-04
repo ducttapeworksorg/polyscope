@@ -94,7 +94,7 @@ export function SettingsDialog(props: Props) {
   const numberField = ({ key }: (typeof fields)[number]) => {
     const problem = problems[key]
     return (
-      <label key={key} className="field">
+      <label key={key} className="field field--inline">
         <span className="field__label">{t(`settings.${key}`)}</span>
         <input
           className="field__input field__input--number"
@@ -113,117 +113,124 @@ export function SettingsDialog(props: Props) {
   }
 
   return (
-    <dialog {...modal} className="dialog" aria-label={t('settings.title')}>
+    <dialog {...modal} className="dialog dialog--settings" aria-label={t('settings.title')}>
       <form className="dialog__form" onSubmit={submit} noValidate>
         <h2 className="dialog__title">{t('settings.title')}</h2>
 
-        {!extension && (
-          <fieldset className="settings-section">
-            <legend className="settings-section__title">{t('settings.appearance')}</legend>
-            <div className="segmented" role="radiogroup" aria-label={t('settings.theme')}>
-              {themes.map((option) => (
-                <label key={option} className="segmented__option">
-                  <input
-                    type="radio"
-                    name="theme"
-                    value={option}
-                    checked={theme === option}
-                    onChange={() => pickTheme(option)}
-                  />
-                  {t(`settings.theme.${option}`)}
-                </label>
-              ))}
-            </div>
-          </fieldset>
-        )}
+        {/* What Save changes on the left; Environments, the app itself and help on the right. */}
+        <div className="settings-columns">
+          <div className="settings-column">
+            {!extension && (
+              <fieldset className="settings-section">
+                <legend className="settings-section__title">{t('settings.appearance')}</legend>
+                <div className="segmented" role="radiogroup" aria-label={t('settings.theme')}>
+                  {themes.map((option) => (
+                    <label key={option} className="segmented__option">
+                      <input
+                        type="radio"
+                        name="theme"
+                        value={option}
+                        checked={theme === option}
+                        onChange={() => pickTheme(option)}
+                      />
+                      {t(`settings.theme.${option}`)}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            )}
 
-        <fieldset className="settings-section">
-          <legend className="settings-section__title">{t('settings.environments')}</legend>
-          <p className="field__hint">{t('environments.intro')}</p>
-          <div>
-            <button type="button" className="button button--quiet" onClick={onManageEnvironments}>
-              {t('settings.manageEnvironments')}
-            </button>
+            <fieldset className="settings-section">
+              <legend className="settings-section__title">{t('settings.files')}</legend>
+              {fields.filter((f) => f.section === 'files').map(numberField)}
+            </fieldset>
+
+            <fieldset className="settings-section">
+              <legend className="settings-section__title">{t('settings.logs')}</legend>
+              {fields.filter((f) => f.section === 'logs').map(numberField)}
+            </fieldset>
           </div>
-        </fieldset>
 
-        <fieldset className="settings-section">
-          <legend className="settings-section__title">{t('settings.files')}</legend>
-          {fields.filter((f) => f.section === 'files').map(numberField)}
-        </fieldset>
-
-        <fieldset className="settings-section">
-          <legend className="settings-section__title">{t('settings.logs')}</legend>
-          {fields.filter((f) => f.section === 'logs').map(numberField)}
-        </fieldset>
-
-        {extension ? (
-          <fieldset className="settings-section">
-            <legend className="settings-section__title">{t('settings.vsCode')}</legend>
-            {version && <p className="field__hint">{t('settings.version', { version })}</p>}
-            <p className="field__hint">{t('settings.vsCode.hint')}</p>
-            <div>
-              <button type="button" className="button button--quiet" onClick={onOpenExtensionSettings}>
-                {t('settings.openExtensionSettings')}
-              </button>
-            </div>
-          </fieldset>
-        ) : (
-          <fieldset className="settings-section">
-            <legend className="settings-section__title">{t('settings.updates')}</legend>
-            {version && <p className="field__hint">{t('settings.version', { version })}</p>}
-            <div className="settings-action">
-              {canApply(update) ? (
-                <button type="button" className="button button--quiet" onClick={() => void window.polyscope.applyUpdate()}>
-                  {t(update.state === 'available' ? 'settings.downloadUpdate' : 'settings.restartToUpdate')}
+          <div className="settings-column">
+            <fieldset className="settings-section">
+              <legend className="settings-section__title">{t('settings.environments')}</legend>
+              <p className="field__hint">{t('environments.intro')}</p>
+              <div>
+                <button type="button" className="button button--quiet" onClick={onManageEnvironments}>
+                  {t('settings.manageEnvironments')}
                 </button>
-              ) : (
-                <button
-                  type="button"
-                  className="button button--quiet"
-                  disabled={update.state === 'off' || update.state === 'checking' || update.state === 'downloading'}
-                  onClick={() => void window.polyscope.checkForUpdates()}
-                >
-                  {t('settings.checkForUpdates')}
-                </button>
-              )}
-              {update.state === 'ready' && update.installFailed ? (
-                <span role="status" className="field__problem">
-                  {t('settings.update.installFailed', { ...update })}
-                </span>
-              ) : (
-                <span role="status" className={update.state === 'error' ? 'field__problem' : 'field__hint'}>
-                  {t(`settings.update.${update.state}`, { ...update })}
-                </span>
-              )}
-            </div>
-          </fieldset>
-        )}
+              </div>
+            </fieldset>
 
-        <fieldset className="settings-section">
-          <legend className="settings-section__title">{t('settings.help')}</legend>
-          <p className="field__hint">
-            {t('settings.diagnostics.hint')}{' '}
-            <a href={issuesUrl} target="_blank" rel="noreferrer">
-              {t('settings.reportIssue')}
-            </a>
-          </p>
-          <div className="settings-action">
-            <button type="button" className="button button--quiet" onClick={copyDiagnostics}>
-              {t('settings.copyDiagnostics')}
-            </button>
-            <span role="status" className={diagnostics === 'failed' ? 'field__problem' : 'field__hint'}>
-              {diagnostics && t(`settings.diagnostics.${diagnostics}`)}
-            </span>
+            {extension ? (
+              <fieldset className="settings-section">
+                <legend className="settings-section__title">{t('settings.vsCode')}</legend>
+                {version && <p className="field__hint">{t('settings.version', { version })}</p>}
+                <p className="field__hint">{t('settings.vsCode.hint')}</p>
+                <div>
+                  <button type="button" className="button button--quiet" onClick={onOpenExtensionSettings}>
+                    {t('settings.openExtensionSettings')}
+                  </button>
+                </div>
+              </fieldset>
+            ) : (
+              <fieldset className="settings-section">
+                <legend className="settings-section__title">{t('settings.updates')}</legend>
+                {version && <p className="field__hint">{t('settings.version', { version })}</p>}
+                <div className="settings-action">
+                  {canApply(update) ? (
+                    <button type="button" className="button button--quiet" onClick={() => void window.polyscope.applyUpdate()}>
+                      {t(update.state === 'available' ? 'settings.downloadUpdate' : 'settings.restartToUpdate')}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="button button--quiet"
+                      disabled={update.state === 'off' || update.state === 'checking' || update.state === 'downloading'}
+                      onClick={() => void window.polyscope.checkForUpdates()}
+                    >
+                      {t('settings.checkForUpdates')}
+                    </button>
+                  )}
+                  {update.state === 'ready' && update.installFailed ? (
+                    <span role="status" className="field__problem">
+                      {t('settings.update.installFailed', { ...update })}
+                    </span>
+                  ) : (
+                    <span role="status" className={update.state === 'error' ? 'field__problem' : 'field__hint'}>
+                      {t(`settings.update.${update.state}`, { ...update })}
+                    </span>
+                  )}
+                </div>
+              </fieldset>
+            )}
+
+            <fieldset className="settings-section">
+              <legend className="settings-section__title">{t('settings.help')}</legend>
+              <p className="field__hint">
+                {t('settings.diagnostics.hint')}{' '}
+                <a href={issuesUrl} target="_blank" rel="noreferrer">
+                  {t('settings.reportIssue')}
+                </a>
+              </p>
+              <div className="settings-action">
+                <button type="button" className="button button--quiet" onClick={copyDiagnostics}>
+                  {t('settings.copyDiagnostics')}
+                </button>
+                <span role="status" className={diagnostics === 'failed' ? 'field__problem' : 'field__hint'}>
+                  {diagnostics && t(`settings.diagnostics.${diagnostics}`)}
+                </span>
+              </div>
+              <p className="field__hint">
+                {t('settings.disclaimer')}{' '}
+                <a href={licenseUrl} target="_blank" rel="noreferrer">
+                  {t('settings.license')}
+                </a>
+                .
+              </p>
+            </fieldset>
           </div>
-          <p className="field__hint">
-            {t('settings.disclaimer')}{' '}
-            <a href={licenseUrl} target="_blank" rel="noreferrer">
-              {t('settings.license')}
-            </a>
-            .
-          </p>
-        </fieldset>
+        </div>
 
         {error && (
           <p className="dialog__error" role="alert">
