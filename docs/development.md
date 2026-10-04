@@ -1,6 +1,6 @@
 # Development
 
-Polyscope is an Electron app written in TypeScript: React and Monaco in the renderer, and a core in the main process that talks to each Source's backend. Node 24 is what CI uses.
+Polyscope is an Electron app written in TypeScript: React and Monaco in the renderer, and a core in the main process that talks to each Source's backend. It also ships as a VS Code extension, the [Extension Copy](#the-extension-copy). Node 24 is what CI uses.
 
 ```sh
 npm install
@@ -10,6 +10,7 @@ npm run typecheck
 npm test             # unit and integration tests
 npm run build && npm run test:smoke   # end-to-end tests against the built app
 npm run dist         # this platform's installers (and Windows' portable downloads), in dist/
+npm run test:extension   # the Extension Copy's tests, in real VS Code
 ```
 
 A build run from source (`npm run dev` or `npm start`) keeps its Sources, settings and secrets in `Ducttapeworks/Polyscope Dev` in the OS's app-data folder (`%APPDATA%` on Windows, `~/Library/Application Support` on macOS, `~/.config` on Linux), apart from an installed copy's `Ducttapeworks/Polyscope`, so the two can run side by side. `--user-data-dir=<folder>` points either at another folder.
@@ -21,6 +22,39 @@ A build run from source (`npm run dev` or `npm start`) keeps its Sources, settin
 - `src/shared/`: the API between the two.
 - `tests/smoke/`: Playwright tests that drive the built app.
 - `CONTEXT.md`: the domain's language (Source, Source Type, Environment, Follow, Large File…). `docs/adr/` holds the architecture decisions.
+
+## The Extension Copy
+
+Polyscope for VS Code (ADR 0005) runs the same core in VS Code's extension host, and the same UI in its webviews. It has its own manifest and build, apart from the app's:
+
+- `src/extension/`: the extension host's side. Activation, the `polyscope` file system VS Code's editor reads files through, the sidebar view and viewer tabs, tab decorations, and secrets in VS Code's SecretStorage. `bridge/` carries the UI's `window.polyscope` calls and the core's events between the webviews and the core.
+- `src/renderer/extension/`: the sidebar's and viewer tabs' pages, built from the app's UI components.
+- `extension/`: the manifest (`package.json`), the README shown in VS Code's Extensions view, and the activity bar icon. Builds land in `extension/dist`. The manifest's version doesn't matter: packaging always uses the app's.
+- `scripts/build-extension.ts`: the build.
+- `tests/extension/`: the integration tests, which drive real VS Code.
+
+```sh
+npm run extension:build   # the extension and its webviews, into extension/dist
+npm run extension:vsix    # also packages them as extension/polyscope-<version>.vsix
+npm run test:extension    # the integration tests, in a VS Code downloaded into .vscode-test the first time
+```
+
+`npm run test:extension` runs the suite twice against one VS Code profile, the second time as if the window had been reloaded. Its tests switch `polyscope.ownViewer` as they go, so both modes are covered. Like the core's integration tests, its S3 and Kubernetes tests are skipped unless their backends are configured (see [Integration tests](#integration-tests)).
+
+To run the extension from source, build it, then start VS Code (or another editor built on it) with it loaded in place of any installed copy:
+
+```sh
+npm run extension:build
+code --extensionDevelopmentPath="$PWD/extension" --user-data-dir="$PWD/.scratch/vscode"
+```
+
+`--user-data-dir` is optional. It gives the run a VS Code profile of its own, so it keeps its Sources and secrets apart from your everyday VS Code's. Without it, a copy run from source and an installed one share them. There's no hot reload: after a change, build again and run **Developer: Reload Window** in that window.
+
+To debug:
+
+- **The extension host**: add `--inspect-extensions=9229` to the `code` command, then attach a Node debugger to port 9229, for example with VS Code's **Debug: Attach to Node Process**. The build has no source maps, so breakpoints go in `extension/dist/extension.js`, which isn't minified.
+- **The sidebar and viewer tabs**: run **Developer: Open Webview Developer Tools** with the webview focused.
+- **The log**: Polyscope's log is in `logs/` in the extension's global storage folder, `User/globalStorage/ducttapeworks.polyscope` in the user data folder. **Copy diagnostics** in Polyscope's Settings includes its recent lines.
 
 ## Integration tests
 
@@ -75,7 +109,7 @@ git switch main && git pull
 git tag v1.2.3 && git push origin v1.2.3
 ```
 
-The release workflow checks the tag matches `package.json`'s version, then builds the installers on each platform and publishes them to GitHub Releases, where installed copies find them. A tag with a pre-release part, like `v1.3.0-beta.1`, is published as a pre-release, which installed copies don't update to.
+The release workflow checks the tag matches `package.json`'s version, then builds the installers on each platform, and the Extension Copy's `polyscope-<version>.vsix` at that same version, and publishes them to GitHub Releases, where installed copies find them. A tag with a pre-release part, like `v1.3.0-beta.1`, is published as a pre-release, which installed copies don't update to.
 
 ### Pre-releases
 
