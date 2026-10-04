@@ -64,12 +64,13 @@ const activeTextTab = () => {
   return input
 }
 
-/** The active tab, once it's a Polyscope viewer tab. */
-const activeViewerTab = () => {
+/** The active tab, once it's the Polyscope viewer tab `label`led so: not one an earlier test left open. */
+const activeViewerTab = (label: string) => {
   const tab = vscode.window.tabGroups.activeTabGroup.activeTab
   assert.ok(tab?.input instanceof vscode.TabInputWebview, 'A webview tab is active')
   // VS Code prefixes the view type of the webview tabs it reports.
   assert.ok(tab.input.viewType.endsWith(viewerViewType), `A Polyscope viewer tab is active, not ${tab.input.viewType}`)
+  assert.equal(tab.label, label, 'The viewer tab just opened is active')
   return tab
 }
 
@@ -321,7 +322,7 @@ const firstRunS3: [string, () => Promise<void>][] = [
         await core.connect(source.id)
         await withSmallLimits(core, async () => {
           await open({ kind: 'file', sourceId: source.id, path: 'big.log', name: 'big.log', pinned: true })
-          await eventually(activeViewerTab)
+          await eventually(() => activeViewerTab('big.log'))
         })
       } finally {
         await core.deleteSource(source.id)
@@ -393,7 +394,7 @@ const firstRunKubernetes: [string, () => Promise<void>][] = [
         // As expanding it in the sidebar does, before any of its logs can be opened.
         await core.connect(source.id)
         await open({ kind: 'log', sourceId: source.id, path: 'pods/ticker/ticker', name: 'ticker', pinned: true })
-        const tab = await eventually(activeViewerTab)
+        const tab = await eventually(() => activeViewerTab('ticker'))
         const followId = await eventually(() => {
           assert.ok(lines[0], 'The viewer tab’s Follow got the lines logged')
           return lines[0].followId
@@ -432,8 +433,7 @@ const firstRunKubernetes: [string, () => Promise<void>][] = [
         assert.deepEqual((await core.expand(source.id, 'pods/restarted')).map(nameOf), ['restarted', 'previous'])
 
         await open(request)
-        const tab = await eventually(activeViewerTab)
-        assert.equal(tab.label, 'restarted (previous)')
+        const tab = await eventually(() => activeViewerTab('restarted (previous)'))
         await vscode.window.tabGroups.close(tab)
 
         await withOwnViewer(false, async () => {
@@ -470,7 +470,7 @@ const firstRunKubernetes: [string, () => Promise<void>][] = [
         assert.equal(await shownInTextTab(uriOf(source.id, file, source.name)), 'one\ntwo\n')
 
         await open({ kind: 'follow', sourceId: source.id, path: file, name: 'app.log', pinned: true })
-        const tab = await eventually(activeViewerTab)
+        const tab = await eventually(() => activeViewerTab('app.log'))
         // The tab follows once its page has loaded; until then, what's appended goes unseen.
         await eventually(async () => {
           await append()
@@ -614,7 +614,7 @@ const firstRun: [string, () => Promise<void>][] = [
 
       try {
         await open({ kind: 'follow', sourceId: source!.id, path: 'growing.log', name: 'growing.log', pinned: true })
-        const tab = await eventually(activeViewerTab)
+        const tab = await eventually(() => activeViewerTab('growing.log'))
         // The tab follows once its page has loaded; until then, what's appended goes unseen.
         await eventually(async () => {
           await appendFile(file, 'more\n')
@@ -653,7 +653,7 @@ const firstRun: [string, () => Promise<void>][] = [
 
       try {
         await open(request)
-        await eventually(activeViewerTab)
+        await eventually(() => activeViewerTab('big.log'))
         await eventually(() => assert.ok(opened.length, 'The viewer tab opened the Large File'), 30_000)
 
         await open({ ...request, inEditor: true })
@@ -681,7 +681,7 @@ const firstRun: [string, () => Promise<void>][] = [
       await withLogsSource(core, async (sourceId) => {
         await open({ ...counterLog, sourceId })
 
-        await eventually(activeViewerTab)
+        await eventually(() => activeViewerTab(counterLog.name))
       })
     }
   ],
@@ -763,7 +763,7 @@ const firstRun: [string, () => Promise<void>][] = [
           answerNotifications((_, [useOwnViewer]) => useOwnViewer)
           await open(request)
 
-          await eventually(activeViewerTab)
+          await eventually(() => activeViewerTab('huge.log'))
           assert.equal(ownViewerSetting()?.globalValue, true)
         })
       )
