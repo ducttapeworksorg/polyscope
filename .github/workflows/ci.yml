@@ -30,8 +30,8 @@ jobs:
 
       # Bundling Monaco peaks near the ~2 GB heap Node defaults to on the smaller runners private repos get.
       - run: npm run build
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
+        # env:
+        #   NODE_OPTIONS: --max-old-space-size=4096
 
       - run: npm test
 
@@ -63,21 +63,21 @@ jobs:
       - name: VS Code integration test (Linux)
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum npm run test:extension
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
+        # env:
+        #   NODE_OPTIONS: --max-old-space-size=4096
 
       - name: VS Code integration test
         if: runner.os != 'Linux'
         run: npm run test:extension
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
+        # env:
+        #   NODE_OPTIONS: --max-old-space-size=4096
 
       # The Extension Copy's .vsix, as the release workflow packages it, so packaging breakage shows before a release.
       - name: Package the Extension Copy (Linux)
         if: runner.os == 'Linux'
         run: npm run extension:vsix
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
+        # env:
+        #   NODE_OPTIONS: --max-old-space-size=4096
 
       - uses: actions/upload-artifact@v7
         if: runner.os == 'Linux'
@@ -136,8 +136,8 @@ jobs:
       # The Extension Copy's S3 tests, which the build job skips without a store.
       - name: VS Code integration test
         run: xvfb-run --auto-servernum npm run test:extension
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
+        # env:
+        #   NODE_OPTIONS: --max-old-space-size=4096
 
   # Kubernetes Logs and Files against a kind cluster, seeded with the Workloads the tests expect (tests/kind/seed.yaml).
   integration-kubernetes:
@@ -189,8 +189,8 @@ jobs:
       # The Extension Copy's Kubernetes tests, which the build job skips without a cluster.
       - name: VS Code integration test
         run: xvfb-run --auto-servernum npm run test:extension
-        env:
-          NODE_OPTIONS: --max-old-space-size=4096
+        # env:
+        #   NODE_OPTIONS: --max-old-space-size=4096
 
       - name: Show the seeded namespace
         if: failure()
