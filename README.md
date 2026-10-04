@@ -17,7 +17,7 @@ Polyscope puts them all in one tree, read the same way:
 - **Always know where you are.** Label Sources with an **Environment** like *prod* or *staging*. Its colour follows you onto every tab and the status bar.
 - **Read-only and private.** Polyscope never writes to what it reads, collects no telemetry, and encrypts your secrets with your operating system's secure storage.
 
-It runs on Windows, macOS and Linux.
+It runs on Windows, macOS and Linux, and [inside VS Code](#in-vs-code).
 
 ## What it reads
 
@@ -50,9 +50,17 @@ There's a light theme too, a click away at the top of the sidebar.
 
 ![Polyscope in its light theme](docs/images/light-theme.png)
 
+## In VS Code
+
+Polyscope also comes as an extension for VS Code and editors built on it (VSCodium, Cursor, Windsurf). Each release has it as `polyscope-<version>.vsix`, at the same version as the app. Install it with **Extensions → … → Install from VSIX…**, or `code --install-extension polyscope-<version>.vsix`.
+
+The Polyscope icon in the activity bar opens the same Sources sidebar as the app. Files open read-only in VS Code's own editor, labelled with their Source and tinted with its Environment's colour. Followed files, Kubernetes Log Streams and Large Files open in a Polyscope viewer tab, which can append live lines and page through a multi-gigabyte file. Turn off the `polyscope.ownViewer` setting to open everything in VS Code's editor instead.
+
+The extension keeps its own Sources, Environments and settings, apart from the app's, so add your Sources again there. Under Remote-SSH, WSL and Dev Containers it runs on the remote machine. See [Polyscope for VS Code](docs/installing.md#polyscope-for-vs-code) for more.
+
 ## Documentation
 
-- [Installing and updating](docs/installing.md): downloads, first-run warnings on each system, and how updates work
+- [Installing and updating](docs/installing.md): downloads, first-run warnings on each system, how updates work, and Polyscope for VS Code
 - [Sources](docs/sources.md): setting up each Source Type, and labelling Sources with Environments
 - [Reading files and logs](docs/reading.md): tabs, following logs, Large Files, encodings, settings and keyboard shortcuts
 - [Privacy](docs/privacy.md): what Polyscope connects to and what it stores
@@ -60,7 +68,7 @@ There's a light theme too, a click away at the top of the sidebar.
 
 ## Reporting a bug
 
-Please [open an issue on GitHub](https://github.com/ducttapeworksorg/polyscope/issues). To help us reproduce it, open **Settings → Help → Copy diagnostics** and paste the result into the issue. It contains the Polyscope, OS and Electron versions and the recent app log. Secret keys, tokens, passwords, credential-bearing URLs and your home folder's path are removed first, but read it over before you post it.
+Please [open an issue on GitHub](https://github.com/ducttapeworksorg/polyscope/issues). To help us reproduce it, open **Settings → Help → Copy diagnostics** and paste the result into the issue. It contains the Polyscope, OS and Electron versions (VS Code's, in the extension) and the recent app log. Secret keys, tokens, passwords, credential-bearing URLs and your home folder's path are removed first, but read it over before you post it.
 
 To report a security problem, please email [ducttapeworks@proton.me](mailto:ducttapeworks@proton.me) rather than opening a public issue.
 
