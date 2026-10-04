@@ -2,14 +2,26 @@
 // Run twice against the same VS Code profile, the second time as if the window had been reloaded.
 
 import assert from 'node:assert/strict'
-import { appendFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import * as vscode from 'vscode'
 import type { FollowEvent } from '@shared/core-api'
 import { MB } from '@shared/settings'
+import { kubeConfigFor } from '../../src/main/core/kubeconfig'
+import { execInPod } from '../../src/main/core/kubernetes-exec'
 import { startTestApiServer } from '../../src/main/core/kubernetes-test-api-server'
+import {
+  hasTestCluster,
+  podsNamed,
+  restartedOnceNamespace,
+  seedContainerFolder,
+  testFilesNamespace,
+  testKubernetesFilesSource,
+  testKubernetesLogsSource,
+  tickerNamespace
+} from '../../src/main/core/kubernetes-test-cluster'
 import { hasTestStore, seedPrefix, testS3Source } from '../../src/main/core/s3-test-store'
 import type { TestApi } from '../../src/extension/extension'
 import { polyscopeLogUri as logUriOf, polyscopeUri as uriOf } from '../../src/extension/polyscope-uri'
@@ -67,6 +79,17 @@ const activeTab = () => {
   return input instanceof vscode.TabInputText ? input.uri.toString() : input?.constructor.name
 }
 
+/** What `uri` shows, once it's open in the active text editor tab. */
+async function shownInTextTab(uri: vscode.Uri) {
+  await eventually(() => assert.equal(activeTextTab().uri.toString(), uri.toString()))
+  const document = await eventually(() => {
+    const found = vscode.workspace.textDocuments.find((opened) => opened.uri.toString() === uri.toString())
+    assert.ok(found, `${uri.toString()} is open`)
+    return found
+  })
+  return document.getText()
+}
+
 const ownViewerSetting = () => vscode.workspace.getConfiguration('polyscope').inspect<boolean>('ownViewer')
 
 /** Runs `test` with `polyscope.ownViewer` set as the user would in their settings, then leaves it unset again. */
@@ -90,12 +113,19 @@ async function withSmallLimits(core: TestApi['core'], test: () => Promise<void>)
   }
 }
 
+/** The kubeconfig user of withLogsSource's context by default: a token, which the stand-in takes without checking. */
+const tokenUser = ['    token: not-a-real-token']
+
 /**
  * Runs `test` with a Kubernetes Logs Source of a stand-in API server, whose pod `counter` logs `line 1` to `line 3`,
- * then deletes the Source.
+ * then deletes the Source. `user` is the kubeconfig user's settings; given a `token`, the stand-in asks for it.
  */
-async function withLogsSource(core: TestApi['core'], test: (sourceId: string) => Promise<void>) {
-  const server = await startTestApiServer()
+async function withLogsSource(
+  core: TestApi['core'],
+  test: (sourceId: string) => Promise<void>,
+  { user = tokenUser, token }: { user?: string[]; token?: string } = {}
+) {
+  const server = await startTestApiServer({ token })
   const kubeconfig = join(tmpdir(), `polyscope-kubeconfig-${process.pid}`)
   await writeFile(
     kubeconfig,
@@ -113,7 +143,7 @@ async function withLogsSource(core: TestApi['core'], test: (sourceId: string) =>
       'users:',
       '- name: fake',
       '  user:',
-      '    token: not-a-real-token',
+      ...user,
       'contexts:',
       '- name: fake',
       '  context:',
@@ -137,6 +167,34 @@ async function withLogsSource(core: TestApi['core'], test: (sourceId: string) =>
 }
 
 const counterLog = { kind: 'log', path: 'pods/counter/counter', name: 'counter', pinned: true } as const
+
+/**
+ * Runs `test` with an exec auth plugin standing in for `aws`, `gke-gcloud-auth-plugin` or `kubelogin`, given the
+ * kubeconfig user that runs it and the token it prints, as withLogsSource takes them. Elsewhere it's a script found on
+ * PATH, as they are; Windows runs only executables without a shell, so there it's VS Code's own, running as Node.
+ */
+async function withExecPlugin(test: (signIn: { user: string[]; token: string }) => Promise<void>) {
+  const token = 'from-the-plugin'
+  const credential = JSON.stringify({ apiVersion: 'client.authentication.k8s.io/v1', kind: 'ExecCredential', status: { token } })
+  const exec = ['    exec:', '      apiVersion: client.authentication.k8s.io/v1']
+  if (process.platform === 'win32') {
+    const print = `process.stdout.write(${JSON.stringify(credential)})`
+    const args = ['      args:', '      - -e', `      - ${JSON.stringify(print)}`]
+    const env = ['      env:', '      - name: ELECTRON_RUN_AS_NODE', '        value: "1"']
+    return test({ user: [...exec, `      command: ${JSON.stringify(process.execPath)}`, ...args, ...env], token })
+  }
+  const dir = await mkdtemp(join(tmpdir(), 'polyscope-auth-plugin-'))
+  await writeFile(join(dir, 'polyscope-test-auth'), `#!/bin/sh\nprintf '%s' '${credential}'\n`, { mode: 0o755 })
+  // The extension host is this process, so its core runs the plugin with this PATH.
+  const before = process.env['PATH'] ?? ''
+  process.env['PATH'] = [dir, before].filter(Boolean).join(delimiter)
+  try {
+    await test({ user: [...exec, '      command: polyscope-test-auth'], token })
+  } finally {
+    process.env['PATH'] = before
+    await rm(dir, { recursive: true, force: true })
+  }
+}
 
 /** The S3 Source signing in with keys that the S3 tests share, and its seeded prefix; the last of them deletes both. */
 let sharedSource: { sourceId: string; prefix: string; remove: () => Promise<void> } | undefined
@@ -291,6 +349,144 @@ const firstRunS3: [string, () => Promise<void>][] = [
   ]
 ]
 
+/** A tree node's name, or its kind if it has none (an error's). */
+const nameOf = (node: { kind: string; name?: string }) => node.name ?? node.kind
+
+/** Collects the lines every Follow gets from now on, until `unsubscribe`. */
+function followedLines(core: TestApi['core']) {
+  const lines: FollowEvent[] = []
+  const unsubscribe = core.onFollowEvent((event) => event.kind === 'lines' && lines.push(event))
+  return { lines, unsubscribe }
+}
+
+// Against the test cluster, as the core's Kubernetes tests; skipped without one.
+const firstRunKubernetes: [string, () => Promise<void>][] = [
+  [
+    'a Kubernetes Logs Source lists Workloads with their Ready Count, and their pods with their Pod Status',
+    async () => {
+      const { core } = await extension()
+      const source = await core.addSource(testKubernetesLogsSource())
+
+      try {
+        await core.connect(source.id)
+
+        const web = (await core.expand(source.id, 'deployments')).find((node) => nameOf(node) === 'web')
+        assert.deepEqual(web, { kind: 'workload', workloadKind: 'Deployment', name: 'web', path: 'deployments/web', readyCount: { ready: 1, desired: 1 } })
+        const [pod] = await core.expand(source.id, 'deployments/web')
+        assert.deepEqual(pod?.kind === 'pod' && pod.status, { reason: 'Running', health: 'healthy', restarts: 0 })
+      } finally {
+        await core.deleteSource(source.id)
+      }
+    }
+  ],
+  [
+    'a Kubernetes Log Stream opens in a viewer tab, whose Follow gets what the container logs until the tab is closed',
+    async () => {
+      const { core, open } = await extension()
+      const namespace = `polyscope-vscode-follow-${process.pid}`
+      // Logs a line a second, for longer than the test takes.
+      const { remove } = await tickerNamespace(namespace, 3_600)
+      const source = await core.addSource(testKubernetesLogsSource('Ticker', namespace))
+      const { lines, unsubscribe } = followedLines(core)
+
+      try {
+        // As expanding it in the sidebar does, before any of its logs can be opened.
+        await core.connect(source.id)
+        await open({ kind: 'log', sourceId: source.id, path: 'pods/ticker/ticker', name: 'ticker', pinned: true })
+        const tab = await eventually(activeViewerTab)
+        const followId = await eventually(() => {
+          assert.ok(lines[0], 'The viewer tab’s Follow got the lines logged')
+          return lines[0].followId
+        }, 30_000)
+
+        await vscode.window.tabGroups.close(tab)
+        await sleep(1_000)
+        lines.length = 0
+        await sleep(3_000)
+
+        assert.deepEqual(
+          lines.filter((event) => event.followId === followId),
+          [],
+          'The closed tab’s Follow was stopped'
+        )
+      } finally {
+        unsubscribe()
+        await core.deleteSource(source.id)
+        await remove()
+      }
+    }
+  ],
+  [
+    'a restarted container’s Previous Log opens in a viewer tab, and with ownViewer off in a text editor tab',
+    async () => {
+      const { core, open } = await extension()
+      const namespace = `polyscope-vscode-previous-${process.pid}`
+      // Crashed on its first run, logging "crashing", then kept running.
+      const { remove } = await restartedOnceNamespace(namespace)
+      const source = await core.addSource(testKubernetesLogsSource('Restarted', namespace))
+      const previous = 'pods/restarted/restarted/previous'
+      const request = { kind: 'log', sourceId: source.id, path: previous, name: 'restarted', previous: true, pinned: true } as const
+
+      try {
+        await core.connect(source.id)
+        assert.deepEqual((await core.expand(source.id, 'pods/restarted')).map(nameOf), ['restarted', 'previous'])
+
+        await open(request)
+        const tab = await eventually(activeViewerTab)
+        assert.equal(tab.label, 'restarted (previous)')
+        await vscode.window.tabGroups.close(tab)
+
+        await withOwnViewer(false, async () => {
+          await open(request)
+          assert.equal(await shownInTextTab(logUriOf(source.id, previous)), 'crashing')
+        })
+      } finally {
+        await core.deleteSource(source.id)
+        await remove()
+      }
+    }
+  ],
+  [
+    'a Kubernetes Files Source shows a folder for each pod, whose files read and open in a text editor tab, and Follow in a viewer tab',
+    async () => {
+      const { core, open } = await extension()
+      const pods = await podsNamed('files-busybox')
+      const pod = pods[0]!
+      const seeded = await seedContainerFolder(pod, { 'app.log': 'one\ntwo\n' })
+      const source = await core.addSource(testKubernetesFilesSource({ path: seeded.path }))
+      const file = `${pod}/app.log`
+      const config = kubeConfigFor(testKubernetesFilesSource().context)
+      const target = { namespace: testFilesNamespace, pod, container: 'app' }
+      const append = () => execInPod(config, target, ['sh', '-c', 'echo more >> "$1"', 'sh', `${seeded.path}/app.log`])
+      const { lines, unsubscribe } = followedLines(core)
+
+      try {
+        // Read while Disconnected, which connects it, as for a tab VS Code restores.
+        const folders = await vscode.workspace.fs.readDirectory(uriOf(source.id, ''))
+        assert.deepEqual(folders.sort(), pods.map((name) => [name, vscode.FileType.Directory]))
+        assert.equal(text(await vscode.workspace.fs.readFile(uriOf(source.id, file))), 'one\ntwo\n')
+
+        await open({ kind: 'file', sourceId: source.id, path: file, name: 'app.log', pinned: true })
+        assert.equal(await shownInTextTab(uriOf(source.id, file)), 'one\ntwo\n')
+
+        await open({ kind: 'follow', sourceId: source.id, path: file, name: 'app.log', pinned: true })
+        const tab = await eventually(activeViewerTab)
+        // The tab follows once its page has loaded; until then, what's appended goes unseen.
+        await eventually(async () => {
+          await append()
+          await sleep(1_000)
+          assert.ok(lines.length, 'The viewer tab’s Follow got the appended lines')
+        }, 60_000)
+        await vscode.window.tabGroups.close(tab)
+      } finally {
+        unsubscribe()
+        await core.deleteSource(source.id)
+        await seeded.remove()
+      }
+    }
+  ]
+]
+
 const firstRun: [string, () => Promise<void>][] = [
   [
     'the activity bar opens the Polyscope sidebar',
@@ -440,15 +636,26 @@ const firstRun: [string, () => Promise<void>][] = [
 
           await open({ ...counterLog, sourceId })
 
-          const uri = logUriOf(sourceId, counterLog.path).toString()
-          await eventually(() => assert.equal(activeTextTab().uri.toString(), uri))
-          const document = await eventually(() => {
-            const found = vscode.workspace.textDocuments.find((opened) => opened.uri.toString() === uri)
-            assert.ok(found, 'The snapshot is open')
-            return found
-          })
-          assert.equal(document.getText(), 'line 2\nline 3')
+          assert.equal(await shownInTextTab(logUriOf(sourceId, counterLog.path)), 'line 2\nline 3')
         })
+      )
+    }
+  ],
+  [
+    'a kubeconfig context signing in with an exec auth plugin connects',
+    async () => {
+      const { core } = await extension()
+
+      await withExecPlugin((signIn) =>
+        withLogsSource(
+          core,
+          async (sourceId) => {
+            await core.connect(sourceId)
+
+            assert.deepEqual((await core.expand(sourceId, 'pods')).map(nameOf), ['counter'])
+          },
+          signIn
+        )
       )
     }
   ],
@@ -536,7 +743,10 @@ const reloaded: [string, () => Promise<void>][] = [
 
 /** Runs this phase's tests in order, as VS Code's test runner calls it; failing if any of them fails. */
 export async function run(): Promise<void> {
-  const tests = phase === 'reloaded' ? reloaded : [...firstRun, ...(hasTestStore ? firstRunS3 : [])]
+  const tests = phase === 'reloaded' ? reloaded : [...firstRun, ...(hasTestCluster ? firstRunKubernetes : []), ...(hasTestStore ? firstRunS3 : [])]
+  if (phase !== 'reloaded' && !hasTestCluster) {
+    console.log(`  - ${firstRunKubernetes.length} Kubernetes tests skipped: POLYSCOPE_TEST_KUBE_CONTEXT isn’t set`)
+  }
   if (phase !== 'reloaded' && !hasTestStore) console.log(`  - ${firstRunS3.length} S3 tests skipped: POLYSCOPE_TEST_S3_ENDPOINT isn’t set`)
   const failures: string[] = []
   for (const [name, test] of tests) {
