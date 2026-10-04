@@ -76,3 +76,17 @@ git tag v1.2.3 && git push origin v1.2.3
 ```
 
 The release workflow checks the tag matches `package.json`'s version, then builds the installers on each platform and publishes them to GitHub Releases, where installed copies find them. A tag with a pre-release part, like `v1.3.0-beta.1`, is published as a pre-release, which installed copies don't update to.
+
+### Pre-releases
+
+Name pre-releases `alpha` or `beta` (`v1.3.0-alpha.1`, `v1.3.0-beta.2`), and nothing else. electron-updater ranks just these two below a release, and a copy on a pre-release updates to anything at least as stable as itself:
+
+| Installed | Updates to |
+| --- | --- |
+| a release | later releases |
+| a beta | later betas and releases |
+| an alpha | later alphas, betas and releases |
+
+Any other name, like `rc`, `nightly` or `canary`, is a *custom channel* to electron-updater: a copy on it only ever updates to later versions with the same name, never to a release. A `v1.3.0-rc.1` install would keep saying it's up to date after `v1.3.0` is out, until someone installs a release over it by hand. So a release candidate is a beta here: tag it `v1.3.0-beta.3`, not `v1.3.0-rc.1`.
+
+This is only how copies that update themselves behave. On macOS and in Windows Portable Copies the app asks GitHub for the latest release itself (ADR 0003), so whatever a pre-release is called, those copies are offered the next release and never a later pre-release.

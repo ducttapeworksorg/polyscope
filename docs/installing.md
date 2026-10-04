@@ -45,4 +45,10 @@ Polyscope checks GitHub Releases for a newer version when it starts, and every f
 - From a Windows **portable** download, choosing **Update available** opens the release's page. Download the new portable `.exe` or `.zip` and use it in place of the old one.
 - On **macOS**, choosing **Update available** opens the release's page. Download the new `.dmg` and drag Polyscope into Applications over the old one.
 
-Pre-releases (versions like `1.3.0-beta.1`) are never offered as updates. To try one, download it from the [releases page](https://github.com/ducttapeworksorg/polyscope/releases).
+Pre-releases (versions like `1.3.0-beta.1`) are never offered as updates to a release. To try one, download it from the [releases page](https://github.com/ducttapeworksorg/polyscope/releases).
+
+Once you're on a pre-release, which updates you get depends on how far along it is:
+
+- A **beta** (`1.3.0-beta.1`) updates to later betas and to releases, so it moves on to `1.3.0` when that's out.
+- An **alpha** (`1.3.0-alpha.1`) updates to later alphas, to betas and to releases.
+- On **macOS** and from a Windows **portable** download, a pre-release is only offered the next release, not later pre-releases. Download those from the releases page.
