@@ -25,7 +25,8 @@ const readOnly = () => {
 
 /**
  * The read-only `polyscope` file system, through which VS Code's editor shows the files of File Sources, delivered
- * decompressed. Reading a file of a Disconnected Source connects it, so the tabs VS Code restores after a reload work.
+ * decompressed, and snapshots of Log Streams and Previous Logs. Reading a file of a Disconnected Source connects it,
+ * so the tabs VS Code restores after a reload work.
  */
 export function createFileProvider(core: Core): FileSystemProvider {
   const connecting = new Map<string, Promise<unknown>>()
@@ -45,12 +46,12 @@ export function createFileProvider(core: Core): FileSystemProvider {
     await connecting.get(sourceId)
   }
 
-  /** Runs `read` on the Source and path `uri` names, connecting the Source first if needed. */
-  async function reading<T>(uri: Uri, read: (sourceId: string, path: string) => Promise<T>): Promise<T> {
-    const { sourceId, path } = locationOf(uri)
+  /** Runs `read` on the Source and path `uri` names, and whether it's a log's, connecting the Source first if needed. */
+  async function reading<T>(uri: Uri, read: (sourceId: string, path: string, log: boolean) => Promise<T>): Promise<T> {
+    const { sourceId, path, log } = locationOf(uri)
     try {
       await connected(sourceId)
-      return await read(sourceId, path)
+      return await read(sourceId, path, log)
     } catch (error) {
       throw asFileSystemError(error, uri)
     }
@@ -62,7 +63,9 @@ export function createFileProvider(core: Core): FileSystemProvider {
     watch: () => new Disposable(() => {}),
 
     stat: (uri) =>
-      reading(uri, async (sourceId, path) => {
+      reading(uri, async (sourceId, path, log) => {
+        // A log's snapshot is only read once asked for; its size isn't known until then, and needn't be.
+        if (log) return { type: FileType.File, ctime: 0, mtime: 0, size: 0, permissions: FilePermission.Readonly }
         const info = await core.statPath(sourceId, path)
         const modified = info.modifiedTime ?? 0
         const common = { ctime: modified, mtime: modified, permissions: FilePermission.Readonly }
@@ -77,7 +80,11 @@ export function createFileProvider(core: Core): FileSystemProvider {
         )
       }),
 
-    readFile: (uri) => reading(uri, (sourceId, path) => core.readFile(sourceId, path)),
+    // A log's snapshot holds its Source's Last N lines, as a log view first shows.
+    readFile: (uri) =>
+      reading(uri, async (sourceId, path, log) =>
+        log ? Buffer.from((await core.openLog(sourceId, path)).content) : core.readFile(sourceId, path)
+      ),
 
     writeFile: readOnly,
     createDirectory: readOnly,

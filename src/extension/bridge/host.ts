@@ -11,6 +11,10 @@ export interface HostShell {
   copyDiagnostics(): Promise<void>
   appVersion(): Promise<string>
   open(request: OpenRequest): Promise<void>
+  /** Whether `polyscope.ownViewer` is on. */
+  ownViewer(): Promise<boolean>
+  /** Tells `listener` whenever `polyscope.ownViewer` changes; returns what unsubscribes it. */
+  onOwnViewerChanged(listener: (on: boolean) => void): () => void
 }
 
 interface Options {
@@ -30,7 +34,8 @@ const isCall = (value: unknown): value is CallMessage =>
 
 /**
  * Serves one webview's bridge: answers its calls with the core and the host's shell, and forwards every core
- * event to it until disposed. Like the desktop app's IPC, a core call's errors come back as values with their code.
+ * event, and `polyscope.ownViewer` changing, to it until disposed. Like the desktop app's IPC, a core call's errors
+ * come back as values with their code.
  */
 export function serveBridge({ core, log, shell, post }: Options) {
   // The Follows and Large Files the webview started, to let go of with it: it can't, once it's gone.
@@ -75,7 +80,8 @@ export function serveBridge({ core, log, shell, post }: Options) {
     getUpdateStatus: async () => ({ state: 'off' }),
     checkForUpdates: async () => {},
     applyUpdate: async () => {},
-    open: (request) => shell.open(request)
+    open: (request) => shell.open(request),
+    ownViewer: () => shell.ownViewer()
   }
 
   const send = <E extends BridgeEvent>(event: E) => (payload: BridgeEvents[E]) => post({ kind: 'event', event, payload } as ToWebview)
@@ -83,7 +89,8 @@ export function serveBridge({ core, log, shell, post }: Options) {
     core.onSettingsChanged(send('settingsChanged')),
     core.onFollowEvent(send('followEvent')),
     core.onLargeFileEvent(send('largeFileEvent')),
-    core.onLargeFileSearchEvent(send('largeFileSearchEvent'))
+    core.onLargeFileSearchEvent(send('largeFileSearchEvent')),
+    shell.onOwnViewerChanged(send('ownViewerChanged'))
   ]
 
   return {

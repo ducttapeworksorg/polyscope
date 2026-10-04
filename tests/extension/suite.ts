@@ -2,14 +2,16 @@
 // Run twice against the same VS Code profile, the second time as if the window had been reloaded.
 
 import assert from 'node:assert/strict'
-import { appendFile, writeFile } from 'node:fs/promises'
+import { appendFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import * as vscode from 'vscode'
 import type { FollowEvent } from '@shared/core-api'
 import { MB } from '@shared/settings'
+import { startTestApiServer } from '../../src/main/core/kubernetes-test-api-server'
 import type { TestApi } from '../../src/extension/extension'
-import { polyscopeUri as uriOf } from '../../src/extension/polyscope-uri'
+import { polyscopeLogUri as logUriOf, polyscopeUri as uriOf } from '../../src/extension/polyscope-uri'
 import { viewerViewType } from '../../src/extension/viewer-tab'
 
 const phase = process.env['POLYSCOPE_TEST_PHASE']
@@ -57,6 +59,83 @@ const activeViewerTab = () => {
   assert.ok(tab.input.viewType.endsWith(viewerViewType), `A Polyscope viewer tab is active, not ${tab.input.viewType}`)
   return tab
 }
+
+/** The active tab's URI, or its kind if it has none, to tell that nothing else opened. */
+const activeTab = () => {
+  const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input
+  return input instanceof vscode.TabInputText ? input.uri.toString() : input?.constructor.name
+}
+
+const ownViewerSetting = () => vscode.workspace.getConfiguration('polyscope').inspect<boolean>('ownViewer')
+
+/** Runs `test` with `polyscope.ownViewer` set as the user would in their settings, then leaves it unset again. */
+async function withOwnViewer(on: boolean, test: () => Promise<void>) {
+  await vscode.workspace.getConfiguration('polyscope').update('ownViewer', on, vscode.ConfigurationTarget.Global)
+  try {
+    await test()
+  } finally {
+    await vscode.workspace.getConfiguration('polyscope').update('ownViewer', undefined, vscode.ConfigurationTarget.Global)
+  }
+}
+
+/** Runs `test` with the Large File threshold at 1 MB and the "open anyway" limit at 2 MB, then puts them back. */
+async function withSmallLimits(core: TestApi['core'], test: () => Promise<void>) {
+  const { largeFileThreshold, openAnywayLimit, cacheSizeCap } = await core.getSettings()
+  await core.updateSettings({ largeFileThreshold: MB, openAnywayLimit: 2 * MB, cacheSizeCap: 4 * MB })
+  try {
+    await test()
+  } finally {
+    await core.updateSettings({ largeFileThreshold, openAnywayLimit, cacheSizeCap })
+  }
+}
+
+/**
+ * Runs `test` with a Kubernetes Logs Source of a stand-in API server, whose pod `counter` logs `line 1` to `line 3`,
+ * then deletes the Source.
+ */
+async function withLogsSource(core: TestApi['core'], test: (sourceId: string) => Promise<void>) {
+  const server = await startTestApiServer()
+  const kubeconfig = join(tmpdir(), `polyscope-kubeconfig-${process.pid}`)
+  await writeFile(
+    kubeconfig,
+    [
+      'apiVersion: v1',
+      'kind: Config',
+      'current-context: fake',
+      'clusters:',
+      '- name: fake',
+      '  cluster:',
+      `    server: ${server.url}`,
+      `    certificate-authority: ${JSON.stringify(server.caPath)}`,
+      // The stand-in's certificate is for localhost.
+      '    tls-server-name: localhost',
+      'users:',
+      '- name: fake',
+      '  user:',
+      '    token: not-a-real-token',
+      'contexts:',
+      '- name: fake',
+      '  context:',
+      '    cluster: fake',
+      '    user: fake'
+    ].join('\n')
+  )
+  // The extension host is this process, so its core reads this kubeconfig.
+  const before = process.env['KUBECONFIG']
+  process.env['KUBECONFIG'] = kubeconfig
+  const source = await core.addSource({ type: 'kubernetesLogs', name: 'Cluster', context: 'fake', namespace: 'shop' })
+  try {
+    await test(source.id)
+  } finally {
+    await core.deleteSource(source.id)
+    if (before === undefined) delete process.env['KUBECONFIG']
+    else process.env['KUBECONFIG'] = before
+    await server.close()
+    await rm(kubeconfig, { force: true })
+  }
+}
+
+const counterLog = { kind: 'log', path: 'pods/counter/counter', name: 'counter', pinned: true } as const
 
 const firstRun: [string, () => Promise<void>][] = [
   [
@@ -174,6 +253,99 @@ const firstRun: [string, () => Promise<void>][] = [
         const { largeFileThreshold, openAnywayLimit, cacheSizeCap } = before
         await core.updateSettings({ largeFileThreshold, openAnywayLimit, cacheSizeCap })
       }
+    }
+  ],
+  [
+    'polyscope.ownViewer is a setting of VS Code’s, on by default',
+    async () => {
+      await extension()
+
+      assert.equal(ownViewerSetting()?.defaultValue, true)
+    }
+  ],
+  [
+    'with ownViewer on, a Log Stream opens in a viewer tab',
+    async () => {
+      const { core, open } = await extension()
+
+      await withLogsSource(core, async (sourceId) => {
+        await open({ ...counterLog, sourceId })
+
+        await eventually(activeViewerTab)
+      })
+    }
+  ],
+  [
+    'with ownViewer off, a Log Stream opens in a text editor tab with its Source’s Last N lines',
+    async () => {
+      const { core, open } = await extension()
+
+      await withOwnViewer(false, () =>
+        withLogsSource(core, async (sourceId) => {
+          await core.rememberLastNLines(sourceId, 2)
+
+          await open({ ...counterLog, sourceId })
+
+          const uri = logUriOf(sourceId, counterLog.path).toString()
+          await eventually(() => assert.equal(activeTextTab().uri.toString(), uri))
+          const document = await eventually(() => {
+            const found = vscode.workspace.textDocuments.find((opened) => opened.uri.toString() === uri)
+            assert.ok(found, 'The snapshot is open')
+            return found
+          })
+          assert.equal(document.getText(), 'line 2\nline 3')
+        })
+      )
+    }
+  ],
+  [
+    'with ownViewer off, a Large File within the "open anyway" limit opens in a text editor tab, and no Follow opens',
+    async () => {
+      const { core, open } = await extension()
+      const [source] = await core.listSources()
+      await writeFile(join(files, 'big.log'), 'a line of a Large File\n'.repeat(50_000))
+      const big = uriOf(source!.id, 'big.log').toString()
+
+      await withOwnViewer(false, () =>
+        withSmallLimits(core, async () => {
+          await open({ kind: 'file', sourceId: source!.id, path: 'big.log', name: 'big.log', pinned: true })
+          await eventually(() => assert.equal(activeTextTab().uri.toString(), big))
+
+          await open({ kind: 'follow', sourceId: source!.id, path: 'growing.log', name: 'growing.log', pinned: true })
+          await sleep(1_000)
+          assert.equal(activeTab(), big, 'Nothing else opened')
+        })
+      )
+    }
+  ],
+  [
+    'with ownViewer off, a file over the "open anyway" limit is refused, the notification’s button turning ownViewer on and opening it in a viewer tab',
+    async () => {
+      const { core, open, answerNotifications } = await extension()
+      const [source] = await core.listSources()
+      await writeFile(join(files, 'huge.log'), 'a line of a huge file\n'.repeat(100_000))
+      const request = { kind: 'file', sourceId: source!.id, path: 'huge.log', name: 'huge.log', pinned: true } as const
+      const notified: { message: string; actions: string[] }[] = []
+
+      await withOwnViewer(false, () =>
+        withSmallLimits(core, async () => {
+          const before = activeTab()
+          answerNotifications((message, actions) => void notified.push({ message, actions }))
+          await open(request)
+          await eventually(() => assert.equal(notified.length, 1))
+          assert.match(notified[0]!.message, /huge\.log is too large for VS Code’s editor/)
+          await sleep(500)
+          assert.equal(activeTab(), before, 'Nothing opened')
+          assert.equal(ownViewerSetting()?.globalValue, false)
+
+          // Its button, which turns ownViewer on: the next open goes by it, without a reload.
+          answerNotifications((_, [useOwnViewer]) => useOwnViewer)
+          await open(request)
+
+          await eventually(activeViewerTab)
+          assert.equal(ownViewerSetting()?.globalValue, true)
+        })
+      )
     }
   ]
 ]

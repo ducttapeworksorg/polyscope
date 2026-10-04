@@ -16,6 +16,8 @@ let core: Core
 let bridge: ExtensionBridge
 let host: ReturnType<typeof serveBridge>
 let shell: HostShell
+/** Tells the host's subscribers that `polyscope.ownViewer` changed, as VS Code's configuration does. */
+let ownViewerChanged: (on: boolean) => void
 
 const quietLog = { warn: () => {}, error: () => {} }
 
@@ -65,7 +67,12 @@ beforeEach(async () => {
     pickFile: async (filters) => `/picked/${filters[0]?.extensions[0] ?? 'nothing'}`,
     copyDiagnostics: async () => {},
     appVersion: async () => '1.2.3',
-    open: async () => {}
+    open: async () => {},
+    ownViewer: async () => true,
+    onOwnViewerChanged: (listener) => {
+      ownViewerChanged = listener
+      return () => (ownViewerChanged = () => {})
+    }
   }
   connect()
 })
@@ -119,6 +126,10 @@ describe('the host’s own calls over the bridge', () => {
     await bridge.open(request)
 
     expect(opened).toEqual([request])
+  })
+
+  it('say whether the host opens what needs it in Polyscope’s own viewer', async () => {
+    expect(await bridge.ownViewer()).toBe(true)
   })
 
   it('reject with the host’s message when the host fails', async () => {
@@ -181,6 +192,15 @@ describe('core events over the bridge', () => {
     await invoke('closeLargeFile', largeFileId)
   })
 
+  it('include the host’s ownViewer setting changing', async () => {
+    const received: boolean[] = []
+    bridge.onOwnViewerChanged((on) => received.push(on))
+
+    ownViewerChanged(false)
+
+    await eventually(() => expect(received).toEqual([false]))
+  })
+
   it('stop arriving once unsubscribed, while other subscribers still get them', async () => {
     const unsubscribed: Settings[] = []
     const subscribed: Settings[] = []
@@ -198,11 +218,16 @@ describe('core events over the bridge', () => {
     const received: Settings[] = []
     bridge.onSettingsChanged((settings) => received.push(settings))
 
+    const ownViewer: boolean[] = []
+    bridge.onOwnViewerChanged((on) => ownViewer.push(on))
+
     host.dispose()
     await core.updateSettings({ showMinimap: false })
+    ownViewerChanged(false)
     await new Promise((resolve) => setTimeout(resolve, 50))
 
     expect(received).toEqual([])
+    expect(ownViewer).toEqual([])
   })
 })
 

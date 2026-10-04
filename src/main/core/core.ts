@@ -268,6 +268,8 @@ export interface CoreFiles {
   readFile(sourceId: string, path: SourcePath): Promise<Uint8Array>
   /** Whether a file's content, decompressed if it's compressed, is over the Large File threshold. */
   isLargeFile(sourceId: string, path: SourcePath): Promise<boolean>
+  /** Whether a file's content, decompressed if it's compressed, is over the "open anyway" limit, so readFile refuses it. */
+  isOverOpenAnywayLimit(sourceId: string, path: SourcePath): Promise<boolean>
 }
 
 export type Core = CoreApi & CoreEvents & CoreFiles
@@ -461,6 +463,15 @@ export function createCore(options: CoreOptions = {}): Core {
     const { compression } = compressionOf(name)
     await settingsLoaded
     return { fileSource, file: { path, name, size: info.size, ...(compression && { compression }) } }
+  }
+
+  /** Whether a file's content is over one of the size settings, telling without reading more than that much of it. */
+  const isOver = async (sourceId: string, path: SourcePath, limit: 'largeFileThreshold' | 'openAnywayLimit') => {
+    const { fileSource, file } = await fileToRead(sourceId, path)
+    const bytes = settings[limit]
+    // A compressed file's size says nothing of its content's, so that is decompressed up to the limit to tell.
+    if (!file.compression) return file.size > bytes
+    return !(await readUpTo(fileSource, file, bytes, 0)).whole
   }
 
   // Follows under way, by id, each with the Source it reads from.
@@ -918,13 +929,9 @@ export function createCore(options: CoreOptions = {}): Core {
       return bytes
     },
 
-    async isLargeFile(sourceId, path) {
-      const { fileSource, file } = await fileToRead(sourceId, path)
-      const threshold = settings.largeFileThreshold
-      // A compressed file's size says nothing of its content's, so that is decompressed up to the threshold to tell.
-      if (!file.compression) return file.size > threshold
-      return !(await readUpTo(fileSource, file, threshold, 0)).whole
-    },
+    isLargeFile: (sourceId, path) => isOver(sourceId, path, 'largeFileThreshold'),
+
+    isOverOpenAnywayLimit: (sourceId, path) => isOver(sourceId, path, 'openAnywayLimit'),
 
     async largeFileStatus(largeFileId) {
       return { ...largeFileFor(largeFileId).status() }

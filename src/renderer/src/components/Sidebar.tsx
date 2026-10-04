@@ -30,8 +30,8 @@ interface Props {
   onOpenFile(source: SourceInfo, node: EntryNode, options?: { pinned: boolean }): void
   /** Opens a container's Log Stream in the preview tab, or in a tab of its own when pinned. */
   onOpenLog(source: SourceInfo, node: ContainerNode, options?: { pinned: boolean }): void
-  /** Follows a file of a Local or Kubernetes Files Source in a log view. */
-  onFollowFile(source: SourceInfo, node: EntryNode): void
+  /** Follows a file of a Local or Kubernetes Files Source in a log view; without it, files offer no Follow. */
+  onFollowFile?(source: SourceInfo, node: EntryNode): void
   onOpenSettings(): void
   /** Whether tree rows show their size and modified time. */
   showDetails: boolean

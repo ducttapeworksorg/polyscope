@@ -26,6 +26,10 @@ export interface OpenRequest {
 export interface ExtensionBridge extends PolyscopeBridge {
   /** Opens a file, Log Stream or Follow wherever the extension host decides. */
   open(request: OpenRequest): Promise<void>
+  /** Whether `polyscope.ownViewer` is on: Follows, Log Streams and Large Files open in Polyscope's viewer tabs. */
+  ownViewer(): Promise<boolean>
+  /** Tells `listener` whenever `polyscope.ownViewer` changes; returns what unsubscribes it. */
+  onOwnViewerChanged(listener: (on: boolean) => void): () => void
 }
 
 /** The bridge's calls: everything but its subscriptions. */
@@ -38,6 +42,7 @@ export interface BridgeEvents {
   largeFileEvent: LargeFileEvent
   largeFileSearchEvent: LargeFileSearchEvent
   updateStatus: UpdateStatus
+  ownViewerChanged: boolean
 }
 
 export type BridgeEvent = keyof BridgeEvents

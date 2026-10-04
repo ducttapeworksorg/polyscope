@@ -53,8 +53,8 @@ interface Props {
   onOpenFile(source: SourceInfo, node: EntryNode, options?: { pinned: boolean }): void
   /** Opens a container's Log Stream (or its Previous Log) in the preview tab, or in a tab of its own when pinned. */
   onOpenLog(source: SourceInfo, node: ContainerNode | PreviousLogNode, options?: { pinned: boolean }): void
-  /** Follows a file of a Local or Kubernetes Files Source in a log view. */
-  onFollowFile(source: SourceInfo, node: EntryNode): void
+  /** Follows a file of a Local or Kubernetes Files Source in a log view; without it, files offer no Follow. */
+  onFollowFile?(source: SourceInfo, node: EntryNode): void
   /** Extra attributes for the Source's own row, e.g. for dragging it. */
   sourceRowProps?: HTMLAttributes<HTMLDivElement>
   /** Extra attributes for the whole tree, e.g. to make it a drop target. */
@@ -464,7 +464,7 @@ export function SourceTree(props: Props) {
         onDoubleActivate: isFolder ? undefined : () => onOpenFile(source, node, { pinned: true }),
         menuItems:
           isFolder ? [{ label: t('sourceActions.refresh'), onSelect: () => refreshNode(node.path) }]
-          : followsFiles(source) ? [{ label: t('tree.follow'), onSelect: () => onFollowFile(source, node) }]
+          : followsFiles(source) && onFollowFile ? [{ label: t('tree.follow'), onSelect: () => onFollowFile(source, node) }]
           : undefined,
         details: showDetails ? details(node) : undefined,
         extra: { title: tooltip(node) }

@@ -12,6 +12,7 @@
     "src/preload/bridge.ts",
     "src/renderer/src/i18n/index.ts",
     "src/renderer/src/i18n/en.ts",
+    "src/renderer/src/i18n/format.ts",
     "tests/extension/**/*",
     "scripts/build-extension.ts"
   ]
