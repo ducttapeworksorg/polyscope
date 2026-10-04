@@ -19,6 +19,8 @@ interface Props {
   /** How many lines a followed log's tab holds now, once lines have been added to it. */
   logLineCount?: number
   update: UpdateStatus
+  /** The running app's version, last on the bar, once known. */
+  version: string | null
 }
 
 /** Picked in the encoding list to go back to whatever the core detects. */
@@ -38,9 +40,9 @@ interface OpenPicker {
 
 /**
  * Facts about the active tab: its Environment and where it's from, then a file's size, modified time,
- * encoding and language, or how many lines of a Log Stream are shown.
+ * encoding and language, or how many lines of a Log Stream are shown. The app's own update and version end it.
  */
-export function StatusBar({ activeTab, environment, onPickEncoding, onPickLanguage, logLineCount, update }: Props) {
+export function StatusBar({ activeTab, environment, onPickEncoding, onPickLanguage, logLineCount, update, version }: Props) {
   const [picker, setPicker] = useState<OpenPicker | null>(null)
   const closePicker = () => {
     setPicker(null)
@@ -52,6 +54,7 @@ export function StatusBar({ activeTab, environment, onPickEncoding, onPickLangua
       <footer className="statusbar">
         <span className="statusbar__item statusbar__item--end">{t('status.readOnly')}</span>
         <UpdateItem status={update} />
+        <VersionItem version={version} />
       </footer>
     )
   }
@@ -132,6 +135,7 @@ export function StatusBar({ activeTab, environment, onPickEncoding, onPickLangua
       )}
       <span className="statusbar__item">{t('status.readOnly')}</span>
       <UpdateItem status={update} />
+      <VersionItem version={version} />
 
       {shownPicker?.kind === 'encoding' && (
         <QuickPick
@@ -185,6 +189,16 @@ function UpdateItem({ status }: { status: UpdateStatus }) {
     >
       {t(`status.update.${status.state}`)}
     </button>
+  )
+}
+
+/** The running app's version. */
+function VersionItem({ version }: { version: string | null }) {
+  if (!version) return null
+  return (
+    <span className="statusbar__item" title={t('status.version.tooltip', { version })}>
+      {t('status.version', { version })}
+    </span>
   )
 }
 

@@ -290,6 +290,8 @@ export const en = {
   'status.oneLine': '1 line',
 
   'status.readOnly': 'Read-only',
+  'status.version': 'v{version}',
+  'status.version.tooltip': 'This is Polyscope {version}',
   'status.update.available': 'Update available',
   'status.update.available.tooltip': 'Polyscope {version} is out: open its download page',
   'status.update.downloading': 'Downloading update… {percent}%',

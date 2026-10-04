@@ -101,9 +101,10 @@ test('copy diagnostics for a bug report', async () => {
 
 test('see the version, and that a build run from source does not update itself', async () => {
   const window = await app.firstWindow()
+  const version = await app.evaluate(({ app }) => app.getVersion())
+  await expect(window.locator('.statusbar').getByTitle(`This is Polyscope ${version}`)).toHaveText(`v${version}`)
   await window.getByRole('button', { name: 'Settings' }).click()
   const updates = window.getByRole('dialog', { name: 'Settings' }).getByRole('group', { name: 'Updates' })
-  const version = await app.evaluate(({ app }) => app.getVersion())
   await expect(updates.getByText(`This is Polyscope ${version}.`)).toBeVisible()
   await expect(updates.getByRole('status')).toHaveText('A development build doesn’t update itself.')
   await expect(updates.getByRole('button', { name: 'Check for updates' })).toBeDisabled()
