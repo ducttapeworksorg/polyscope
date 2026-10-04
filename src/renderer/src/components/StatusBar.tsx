@@ -176,7 +176,11 @@ function UpdateItem({ status }: { status: UpdateStatus }) {
     <button
       type="button"
       className="statusbar__item statusbar__button statusbar__update"
-      title={t(`status.update.${status.state}.tooltip`, { version: status.version })}
+      title={
+        status.state === 'ready' && status.installFailed
+          ? t('status.update.installFailed.tooltip', { ...status })
+          : t(`status.update.${status.state}.tooltip`, { version: status.version })
+      }
       onClick={() => void window.polyscope.applyUpdate()}
     >
       {t(`status.update.${status.state}`)}

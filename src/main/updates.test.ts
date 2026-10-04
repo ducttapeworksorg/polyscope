@@ -17,6 +17,12 @@ describe('updateMode', () => {
     expect(updateMode({ platform: 'linux', packageType: 'pacman' })).toBe('offer')
   })
 
+  it('only offers the download to a .deb or .rpm on ChromeOS, whose Linux has no agent for pkexec to ask the password with', () => {
+    expect(updateMode({ platform: 'linux', packageType: 'deb', chromeOs: true })).toBe('offer')
+    expect(updateMode({ platform: 'linux', packageType: 'rpm', chromeOs: true })).toBe('offer')
+    expect(updateMode({ platform: 'linux', appImage: '/home/alice/Polyscope.AppImage', packageType: 'AppImage', chromeOs: true })).toBe('install')
+  })
+
   it('only offers the download to a Portable Copy on Windows, which has no NSIS uninstaller beside it', () => {
     expect(updateMode({ platform: 'win32' })).toBe('offer')
     expect(updateMode({ platform: 'win32', hasNsisUninstaller: false })).toBe('offer')
@@ -215,6 +221,30 @@ describe('createUpdater', () => {
     await checked
     updater.apply()
     expect(engine.apply).toHaveBeenCalledOnce()
+  })
+
+  it('says why installing an update failed, logs it, and lets it be tried again', async () => {
+    const { engine, checks } = fakeEngine()
+    const log = { warn: vi.fn() }
+    const updater = createUpdater({ engine, log })
+    const checked = updater.check()
+    checks[0]!.report({ state: 'ready', version: '0.2.0' })
+    checks[0]!.resolve()
+    await checked
+    const seen: UpdateStatus[] = []
+    updater.onStatus((status) => seen.push(status))
+
+    engine.apply.mockImplementationOnce(() => {
+      throw new Error('Command failed: pkexec --disable-internal-agent /bin/bash -c dpkg -i polyscope.deb')
+    })
+    updater.apply()
+    const failed = { state: 'ready', version: '0.2.0', installFailed: 'Command failed: pkexec --disable-internal-agent /bin/bash -c dpkg -i polyscope.deb' }
+    expect(updater.status()).toEqual(failed)
+    expect(seen).toEqual([failed])
+    expect(log.warn).toHaveBeenCalledWith('Update install failed', expect.any(Error))
+
+    updater.apply()
+    expect(engine.apply).toHaveBeenCalledTimes(2)
   })
 
   it('checks soon after starting, then every few hours, until stopped', async () => {
