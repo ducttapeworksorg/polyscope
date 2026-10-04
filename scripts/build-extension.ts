@@ -66,7 +66,10 @@ if (options.has('--package')) {
   for (const [from, to] of Object.entries(copies)) copyFileSync(join(root, from), join(extensionDir, to))
   const vsce = join(root, 'node_modules', '@vscode', 'vsce', 'vsce')
   const out = join(extensionDir, `polyscope-${version}.vsix`)
-  execFileSync(process.execPath, [vsce, 'package', version, '--no-update-package-json', '--no-git-tag-version', '--no-dependencies', '--out', out], {
+  // A pre-release of the app (1.3.0-beta.1) is one of the extension too, so the editors only offer it to those who
+  // switched to pre-release versions.
+  const preRelease = version.includes('-') ? ['--pre-release'] : []
+  execFileSync(process.execPath, [vsce, 'package', version, ...preRelease, '--no-update-package-json', '--no-git-tag-version', '--no-dependencies', '--out', out], {
     cwd: extensionDir,
     stdio: 'inherit'
   })

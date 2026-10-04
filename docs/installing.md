@@ -60,7 +60,7 @@ Once you're on a pre-release, which updates you get depends on how far along it 
 
 Polyscope also comes as an extension for VS Code 1.100 or later and for editors built on it, like VSCodium, Cursor and Windsurf. Each release has it at the same version as the app.
 
-VSCodium, Cursor, Windsurf and other editors that use [Open VSX](https://open-vsx.org/extension/ducttapeworks/polyscope) install it from their **Extensions** view: search for **Polyscope**. They update it too. Pre-releases aren't on Open VSX: to try one, install its `.vsix` by hand, as below.
+VSCodium, Cursor, Windsurf and other editors that use [Open VSX](https://open-vsx.org/extension/ducttapeworks/polyscope) install it from their **Extensions** view: search for **Polyscope**. They update it too. To try pre-releases, choose **Switch to Pre-Release Version** on its page in the **Extensions** view.
 
 VS Code's own marketplace doesn't have it yet, so in VS Code you install the release's `polyscope-<version>.vsix` by hand, and again for each new release. The file is with each release's other downloads:
 

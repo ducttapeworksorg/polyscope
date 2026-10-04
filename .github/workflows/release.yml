@@ -104,11 +104,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
   # The released .vsix, on Open VSX, the marketplace of VSCodium, Cursor, Windsurf and others. Only once the release is
-  # out, so a failed build can't leave a version there that GitHub doesn't have. Not a pre-release: the editors would
-  # update every Extension Copy to it, where Installed Copies are only offered releases.
+  # out, so a failed build can't leave a version there that GitHub doesn't have. A pre-release's .vsix is marked as one,
+  # so the editors only offer it to those who switched to pre-release versions.
   open-vsx:
     needs: publish
-    if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
