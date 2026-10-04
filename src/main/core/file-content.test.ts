@@ -271,6 +271,22 @@ describe('reading a file whole, for an editor outside Polyscope', () => {
     await expect(core.isLargeFile(source.id, '')).rejects.toMatchObject({ code: 'NOT_A_FILE' })
   })
 
+  it('tells a file over the "open anyway" limit by its content, decompressed if it’s compressed', async () => {
+    const { core, source } = await withFiles({
+      'within.log': 'x'.repeat(2 * MB),
+      'over.log': 'x'.repeat(2 * MB + 1),
+      'within.log.gz': gzipSync('x'.repeat(2 * MB)),
+      'over.log.gz': gzipSync('x'.repeat(2 * MB + 1))
+    })
+    await core.updateSettings({ largeFileThreshold: MB, openAnywayLimit: 2 * MB, cacheSizeCap: 4 * MB })
+
+    expect(await core.isOverOpenAnywayLimit(source.id, 'within.log')).toBe(false)
+    expect(await core.isOverOpenAnywayLimit(source.id, 'over.log')).toBe(true)
+    expect(await core.isOverOpenAnywayLimit(source.id, 'within.log.gz')).toBe(false)
+    expect(await core.isOverOpenAnywayLimit(source.id, 'over.log.gz')).toBe(true)
+    await expect(core.isOverOpenAnywayLimit(source.id, '')).rejects.toMatchObject({ code: 'NOT_A_FILE' })
+  })
+
   it('refuses a folder', async () => {
     const { core, source } = await withFiles({})
 

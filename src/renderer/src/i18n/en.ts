@@ -251,6 +251,9 @@ export const en = {
   'largeFile.search.close': 'Close the search (Esc)',
   'largeFile.openAnyway': 'Open anyway in editor',
   'largeFile.openAnyway.tooltip': 'Open all {size} in the full editor anyway, which may be slow; files up to {limit} can be, as set in Settings',
+  'largeFile.tooLargeForEditor':
+    '{name} is too large for VS Code’s editor: files over {limit}, the "open anyway" limit in Settings, open only in Polyscope’s viewer, which is turned off.',
+  'largeFile.useOwnViewer': 'Use Polyscope’s viewer',
 
   'logView.lastNLines': 'Last N lines',
   'logView.choice.all': 'All',

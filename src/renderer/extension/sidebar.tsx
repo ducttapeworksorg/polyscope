@@ -2,7 +2,7 @@ import '@fontsource-variable/atkinson-hyperlegible-next'
 import '@fontsource-variable/red-hat-mono'
 import '../src/styles/app.css'
 import './webview.css'
-import { StrictMode } from 'react'
+import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { ContainerNode, EntryNode, PreviousLogNode, SourceInfo } from '@shared/core-api'
 import type { OpenRequest } from '../../extension/bridge/protocol'
@@ -21,10 +21,19 @@ const opener =
     void bridge.open({ kind, sourceId: source.id, path, ...named, pinned })
   }
 
-/** The Polyscope sidebar in VS Code: the desktop app's Sources pane, opening what's picked where the extension host decides. */
+/**
+ * The Polyscope sidebar in VS Code: the desktop app's Sources pane, opening what's picked where the extension host
+ * decides. Files offer Follow only while `polyscope.ownViewer` is on, as VS Code's editor can't follow.
+ */
 function Sidebar() {
   const model = useSources()
   const { settings } = model
+  const [ownViewer, setOwnViewer] = useState(true)
+  useEffect(() => {
+    const unsubscribe = bridge.onOwnViewerChanged(setOwnViewer)
+    void bridge.ownViewer().then(setOwnViewer)
+    return unsubscribe
+  }, [])
   if (!settings) return null
   return (
     <SourcesPane
@@ -32,7 +41,7 @@ function Sidebar() {
       update={{ state: 'off' }}
       onOpenFile={opener('file')}
       onOpenLog={opener('log')}
-      onFollowFile={opener('follow')}
+      onFollowFile={ownViewer ? opener('follow') : undefined}
     />
   )
 }

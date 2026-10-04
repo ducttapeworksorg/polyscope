@@ -16,7 +16,8 @@ export function createWebviewBridge({ post, listen }: Channel): ExtensionBridge 
     followEvent: new Set(),
     largeFileEvent: new Set(),
     largeFileSearchEvent: new Set(),
-    updateStatus: new Set()
+    updateStatus: new Set(),
+    ownViewerChanged: new Set()
   }
 
   listen((message) => {
@@ -60,6 +61,8 @@ export function createWebviewBridge({ post, listen }: Channel): ExtensionBridge 
     checkForUpdates: call('checkForUpdates'),
     applyUpdate: call('applyUpdate'),
     open: call('open'),
+    ownViewer: call('ownViewer'),
+    onOwnViewerChanged: on('ownViewerChanged'),
     onUpdateStatus: on('updateStatus'),
     onSettingsChanged: on('settingsChanged'),
     onFollowEvent: on('followEvent'),

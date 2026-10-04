@@ -23,6 +23,16 @@
   "extensionKind": ["workspace", "ui"],
   "activationEvents": ["onFileSystem:polyscope"],
   "contributes": {
+    "configuration": {
+      "title": "Polyscope",
+      "properties": {
+        "polyscope.ownViewer": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Open Follows, Log Streams and Large Files in Polyscope's own viewer tabs. When off, everything opens in VS Code's editor: Log Streams as a snapshot of their Last N lines, Large Files only up to the \"open anyway\" limit set in Polyscope's Settings, and files can't be followed."
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {
