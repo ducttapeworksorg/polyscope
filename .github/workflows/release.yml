@@ -105,8 +105,10 @@ jobs:
   open-vsx:
     needs: publish
     runs-on: ubuntu-latest
+    # id-token, for the OIDC token Open VSX trusts this workflow by, in place of an access token.
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/setup-node@v7
         with:
@@ -117,8 +119,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      # --skip-duplicate, so a rerun after the upload went through doesn't fail on the version being there already.
+      # --trusted-publishing, so it fails rather than falls back when there's no ID token. --skip-duplicate, so a rerun
+      # after the upload went through doesn't fail on the version being there already.
       - name: Publish to Open VSX
-        run: npx --yes ovsx@1.2.0 publish "polyscope-${GITHUB_REF_NAME#v}.vsix" --skip-duplicate
-        env:
-          OVSX_PAT: ${{ secrets.OPEN_VSX_TOKEN }}
+        run: npx --yes ovsx publish "polyscope-${GITHUB_REF_NAME#v}.vsix" --trusted-publishing --skip-duplicate
