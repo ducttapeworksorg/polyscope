@@ -1,7 +1,7 @@
 {
   "name": "polyscope",
   "displayName": "Polyscope",
-  "description": "Browse and read files and logs from many systems in VS Code.",
+  "description": "Read files and logs from local folders, S3 buckets, Kubernetes pods and container logs in one sidebar. Follow logs live, open multi-gigabyte files, and colour tabs by environment. Read-only.",
   "version": "0.1.1",
   "publisher": "ducttapeworks",
   "license": "Apache-2.0",
@@ -14,11 +14,41 @@
     "type": "git",
     "url": "https://github.com/ducttapeworksorg/polyscope.git"
   },
+  "bugs": {
+    "url": "https://github.com/ducttapeworksorg/polyscope/issues"
+  },
   "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#1e2533",
+    "theme": "dark"
+  },
+  "pricing": "Free",
   "engines": {
     "vscode": "^1.100.0"
   },
   "categories": ["Other"],
+  "keywords": [
+    "log",
+    "logs",
+    "log viewer",
+    "tail",
+    "follow",
+    "s3",
+    "aws",
+    "minio",
+    "bucket",
+    "kubernetes",
+    "k8s",
+    "kubectl",
+    "pod",
+    "container logs",
+    "large file",
+    "gzip",
+    "zstd",
+    "file browser",
+    "remote files",
+    "devops"
+  ],
   "main": "./dist/extension.js",
   "extensionKind": ["workspace", "ui"],
   "activationEvents": ["onFileSystem:polyscope"],
