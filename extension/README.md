@@ -4,6 +4,8 @@
 
 Chasing a problem across systems usually means a terminal per place: `tail -f` for a server's files, `aws s3 cp` for archived logs, `kubectl logs` and `kubectl exec … cat` for a cluster. Polyscope puts them in one tree, opens them in the editor you already know, and never writes to any of them.
 
+![The Polyscope sidebar in VS Code, following a container's log in a Kubernetes namespace](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vscode-kubernetes-logs.png)
+
 ## Features
 
 - **Every place in one sidebar.** Local folders, S3-compatible buckets, files inside pods, and pod logs, each configured once as a **Source**.
@@ -12,6 +14,8 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 - **Always know where you are.** Label Sources with an **Environment** like *prod* or *staging*. Its colour tints every tab from that Source, so a file from prod stands out.
 - **Feels like VS Code.** Files open read-only in VS Code's own editor, with its search, highlighting and keybindings. The sidebar and viewer tabs take the colours of your theme.
 - **Read-only and private.** Polyscope never writes to what it reads and collects no telemetry.
+
+![Local logs open in VS Code's editor, their tabs tinted with the staging Environment's colour](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vscode-local-files.png)
 
 ## What it reads
 
@@ -28,9 +32,13 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 2. Choose **+** next to **Sources**, pick a Source Type, fill in where it points, and choose **Test connection**, then **Add Source**.
 3. Expand the Source to connect to it, and click a file or a container to open it. Choose **Follow** to watch it grow.
 
+![The Add Source dialog in the Polyscope sidebar, for an S3 bucket](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vscode-add-source.png)
+
 ## Viewer tabs
 
 Followed files, Kubernetes Log Streams and Large Files open in a Polyscope viewer tab, which appends live lines and pages through a multi-gigabyte file. Turn off the `polyscope.ownViewer` setting to open everything in VS Code's editor instead: Log Streams as a snapshot of their Last N lines, Large Files only up to the "open anyway" limit in Polyscope's Settings, and no Follow.
+
+![A Large File in a Polyscope viewer tab, listing every line matching a search](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vvscode-large-file.png)
 
 ## Remote development
 
@@ -38,7 +46,9 @@ Under Remote-SSH, WSL and Dev Containers, Polyscope runs on the remote machine. 
 
 ## Secrets and settings
 
-S3 secret keys are kept in VS Code's secret storage, encrypted by your operating system's keychain where it has one. Polyscope for VS Code keeps its own Sources and settings, apart from the desktop app's.
+S3 secret keys are kept in VS Code's secret storage, encrypted by your operating system's keychain where it has one. Polyscope for VS Code keeps its own Sources and settings, apart from the desktop app's. The gear at the top of the sidebar opens them.
+
+![Polyscope's Settings in the VS Code sidebar](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vscode-settings.png)
 
 ## Also a desktop app
 

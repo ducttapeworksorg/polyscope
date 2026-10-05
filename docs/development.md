@@ -65,7 +65,9 @@ Some tests run against real backends, and are skipped unless they're configured:
 
 ## Screenshots
 
-The screenshots in `docs/images` are rendered from the built app by `npm run build && npm run screenshots`. The script (`scripts/screenshots/readme.spec.ts`) seeds a folder of sample logs and a stand-in Kubernetes API server, so it needs no cluster and shows nothing real. Rerun it after changing the UI.
+The screenshots in `docs/images` are rendered by `npm run build && npm run extension:vsix && npm run screenshots`: the desktop app's by `scripts/screenshots/readme.spec.ts`, from the built app, and Polyscope for VS Code's (`vscode-*.png`) by `scripts/screenshots/vscode.spec.ts`, which installs the packaged `.vsix` into a VS Code of its own, downloaded into `.vscode-test` the first time. Both use `scripts/screenshots/samples.ts`'s folder of sample logs and stand-in Kubernetes API server, so they need no cluster and show nothing real. To render only one set, name its spec: `npm run screenshots -- vscode`. Rerun them after changing the UI.
+
+The extension's README, which the Marketplace and Open VSX show, links its screenshots from `main` on GitHub, so a new screenshot appears there once it's pushed.
 
 ## Icons
 
