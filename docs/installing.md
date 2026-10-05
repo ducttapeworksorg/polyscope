@@ -31,6 +31,25 @@ If you can't install software on your computer but can run a program you've down
 
 A portable copy keeps your Sources, Environments, settings and secrets in the same place an installed copy does. If you use both on one computer, they share them.
 
+## Where it goes
+
+Polyscope itself goes in one place, and your Sources, Environments, settings, secrets and logs go in a user folder of their own. Uninstalling or replacing Polyscope leaves the user folder alone.
+
+| Download | Polyscope goes in | Your user folder |
+| --- | --- | --- |
+| Windows installer | `%LOCALAPPDATA%\Programs\Ducttapeworks\Polyscope` | `%APPDATA%\Ducttapeworks\Polyscope` |
+| Windows portable `.exe` | your temporary folder (`%TEMP%`), unpacked each time it starts | `%APPDATA%\Ducttapeworks\Polyscope` |
+| Windows portable `.zip` | the folder you extract it into | `%APPDATA%\Ducttapeworks\Polyscope` |
+| macOS `.dmg` | `/Applications` or `~/Applications`, wherever you drag it | `~/Library/Application Support/Ducttapeworks/Polyscope` |
+| Linux AppImage | wherever you put the `.AppImage` | `~/.config/Ducttapeworks/Polyscope` |
+| `.deb`, `.rpm` | `/opt/Polyscope`, run as `polyscope` | `~/.config/Ducttapeworks/Polyscope` |
+
+On Linux, the user folder is under `$XDG_CONFIG_HOME` instead of `~/.config` if you've set it. The app's log is in the user folder's `logs` folder. To use another user folder, start Polyscope with `--user-data-dir=<folder>`.
+
+The Windows installer keeps the folder it was first installed in when it updates, and installing with `/D=<folder>` puts it elsewhere.
+
+Polyscope for VS Code doesn't use the app's user folder: it keeps its own in VS Code's extension storage (see [Its own Sources](#its-own-sources)).
+
 ## The first time you open it
 
 The downloads aren't signed yet, so each system warns you the first time you open Polyscope.
@@ -60,6 +79,8 @@ Once you're on a pre-release, which updates you get depends on how far along it 
 
 Polyscope also comes as an extension for VS Code 1.100 or later and for editors built on it, like VSCodium, Cursor and Windsurf. Each release has it at the same version as the app.
 
+![The Polyscope sidebar in VS Code, following a container's log in a Kubernetes namespace](images/vscode-kubernetes-logs.png)
+
 VSCodium, Cursor, Windsurf and other editors that use [Open VSX](https://open-vsx.org/extension/ducttapeworks/polyscope) install it from their **Extensions** view: search for **Polyscope**. They update it too. To try pre-releases, choose **Switch to Pre-Release Version** on its page in the **Extensions** view.
 
 VS Code's own marketplace doesn't have it yet, so in VS Code you install the release's `polyscope-<version>.vsix` by hand, and again for each new release. The file is with each release's other downloads:
@@ -73,9 +94,17 @@ In a Remote-SSH, WSL or Dev Containers window, install it from that window, so i
 
 The Polyscope icon in the activity bar opens the Polyscope sidebar, with the same **Sources** tree as the app. Add Sources there just as in the app. The gear at the top of the sidebar opens Polyscope's **Settings**, where you manage Environments and set the Large File threshold, the "open anyway" limit and the default Last N lines.
 
+![The Add Source dialog in the Polyscope sidebar, for an S3 bucket](images/vscode-add-source.png)
+
+![Polyscope's Settings in the VS Code sidebar](images/vscode-settings.png)
+
 Files open in VS Code's own editor, read-only, so its tabs, search, highlighting, split views and **Reopen with Encoding** all work as they do for your own files. Compressed files open decompressed. A tab is labelled with its file's Source and path, and tinted with its Environment's colour.
 
+![Local logs open in VS Code's editor, their tabs tinted with the staging Environment's colour](images/vscode-local-files.png)
+
 What VS Code's editor can't do opens in a Polyscope viewer tab instead: a file you **Follow**, a Kubernetes **Log Stream** with its toolbar, and a **Large File**, which a viewer tab can page through without downloading all of it. Closing a viewer tab stops its Follow. VS Code reopens your editor tabs when it reloads, but not Polyscope's viewer tabs.
+
+![A Large File in a Polyscope viewer tab, listing every line matching a search](images/vscode-large-file.png)
 
 VS Code's **Polyscope: Own Viewer** setting (`polyscope.ownViewer`, on by default) chooses this. **Open VS Code settings** in Polyscope's Settings goes straight to it. Turn it off to open everything in VS Code's editor:
 
