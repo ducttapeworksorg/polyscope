@@ -75,6 +75,9 @@ export function createFileProvider(core: Core): FileSystemProvider {
     readDirectory: (uri) =>
       reading(uri, async (sourceId, path) => {
         const nodes = await core.expand(sourceId, path)
+        // Paths keep a folded level, so a directory holds it rather than what the tree shows in its place.
+        const folded = nodes.find((node) => node.kind === 'folded')
+        if (folded) return [[folded.name, FileType.Directory]]
         return nodes.flatMap((node): [string, FileType][] =>
           node.kind === 'file' ? [[node.name, FileType.File]] : node.kind === 'folder' ? [[node.name, FileType.Directory]] : []
         )

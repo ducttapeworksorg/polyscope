@@ -50,7 +50,7 @@ The files in one folder inside the pods of one Workload, read over `exec` the wa
 - **Workload**: a Deployment, StatefulSet or DaemonSet in that namespace.
 - **Path**: the absolute path of a folder in the containers, like `/var/log`. It suggests where the Workload's volumes are mounted.
 
-Each pod shows as a folder of its own, since each pod's volumes can differ. Pods with several containers get a folder per container. Files are listed and read with `sh` and basic tools like `stat`, so containers without them (distroless images, for example) can't be browsed.
+When the Workload has several pods, each shows as a folder of its own, since each pod's volumes can differ. With only one pod, the Source lists that pod's files directly, and hovering over the Source shows which pod it is and how it's doing. If that pod is replaced, say by a rollout, refreshing the Source lists its replacement. Pods with several containers get a folder per container. Files are listed and read with `sh` and basic tools like `stat`, so containers without them (distroless images, for example) can't be browsed.
 
 ## Kubernetes Logs
 

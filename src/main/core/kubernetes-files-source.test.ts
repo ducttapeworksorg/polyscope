@@ -3,11 +3,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CoreV1Api } from '@kubernetes/client-node'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { EntryNode, FollowEvent, NewKubernetesFilesSource, TreeNode } from '@shared/core-api'
+import type { EntryNode, FoldedNode, FollowEvent, NewKubernetesFilesSource, TreeNode } from '@shared/core-api'
 import { MB } from '@shared/settings'
 import { createCore, type Core } from './core'
 import { kubeConfigFor } from './kubeconfig'
 import { execInPod } from './kubernetes-exec'
+import { filesDeployments, ignoreAmbientProxy, standInCluster, startTestApiServer } from './kubernetes-test-api-server'
 import {
   hasRestrictedContext,
   hasTestCluster,
@@ -118,11 +119,74 @@ describe('connecting a Kubernetes Files Source', () => {
   })
 })
 
+// The stand-in can't exec into its pods, so only shows what the tree makes of them.
+describe('a Kubernetes Files Source’s pods, on a stand-in API server', () => {
+  let apiServer: Awaited<ReturnType<typeof startTestApiServer>>
+  let core: Core
+
+  beforeEach(async () => {
+    apiServer = await startTestApiServer()
+    ignoreAmbientProxy()
+    const file = join(dir, 'kubeconfig')
+    await writeFile(file, standInCluster(apiServer.url, apiServer.caPath))
+    vi.stubEnv('KUBECONFIG', file)
+    core = createCore()
+  })
+
+  afterEach(async () => {
+    await apiServer.close()
+  })
+
+  const connected = async (workloadName: keyof typeof filesDeployments) => {
+    const { id } = await core.addSource(offline({ context: 'fake', namespace: 'files', workloadName }))
+    return { id, root: await core.connect(id) }
+  }
+
+  it('shows a folder for each pod when there are several', async () => {
+    const { root } = await connected('duo')
+
+    expect(root).toEqual(
+      ['duo-6a2e-klmno', 'duo-6a2e-pqrst'].map((name) => ({
+        kind: 'folder',
+        name,
+        path: name,
+        icon: expect.any(String),
+        kubernetes: { kind: 'pod', status: { reason: 'Running', health: 'healthy', restarts: 0 }, containerCount: 1 }
+      }))
+    )
+  })
+
+  it('folds a single pod into the root, which lists its containers, their paths keeping the pod', async () => {
+    const { id, root } = await connected('pair')
+    const pod = 'pair-5c4b-fghij'
+
+    expect(root).toEqual([
+      { kind: 'folded', name: pod, path: pod, kubernetes: { kind: 'pod', status: { reason: 'Running', health: 'healthy', restarts: 0 }, containerCount: 2 } },
+      { kind: 'folder', name: 'app', path: `${pod}/app`, icon: expect.any(String), kubernetes: { kind: 'container' } },
+      { kind: 'folder', name: 'proxy', path: `${pod}/proxy`, icon: expect.any(String), kubernetes: { kind: 'container', role: 'sidecar' } }
+    ])
+    expect(await core.expand(id, '')).toEqual(root)
+  })
+
+  it('connects even when the single pod’s files can’t be listed, saying why at the root', async () => {
+    const { root } = await connected('solo')
+    const pod = 'solo-7d9f-abcde'
+
+    expect(root).toEqual([
+      { kind: 'folded', name: pod, path: pod, kubernetes: { kind: 'pod', status: expect.objectContaining({ reason: 'CrashLoopBackOff', restarts: 2 }), containerCount: 1 } },
+      { kind: 'error', path: '', code: 'CONTAINER_NOT_RUNNING', message: expect.stringContaining(pod) }
+    ])
+  })
+})
+
 /** What a listing shows, as `kind name`, in its order. */
 const described = (nodes: TreeNode[]) => nodes.map((node) => `${node.kind} ${'name' in node ? node.name : ''}`)
 
-/** The pod folders at the root of a connected Source. */
-const podFolders = async (core: Core, sourceId: string) => (await core.expand(sourceId, '')) as EntryNode[]
+/** The pod folded into a root listing: a Workload's only one. */
+const foldedPod = (root: TreeNode[]) => {
+  expect(root[0]).toMatchObject({ kind: 'folded' })
+  return root[0] as FoldedNode
+}
 
 describe.skipIf(!hasTestCluster)('Kubernetes Files against the test cluster', () => {
   let core: Core
@@ -172,49 +236,54 @@ describe.skipIf(!hasTestCluster)('Kubernetes Files against the test cluster', ()
       )
     })
 
-    it('shows the path’s contents right inside the pod when it has one container', async () => {
+    it('folds a single pod of one container into the root, which lists the path’s contents, their paths keeping the pod', async () => {
       const { id, root } = await connected()
-      const [pod] = root as EntryNode[]
+      const [pod] = await podsNamed('files-busybox')
 
-      expect(described(await core.expand(id, pod!.path))).toEqual(['folder empty', 'folder logs', 'file app.log'])
-      expect(described(await core.expand(id, `${pod!.path}/logs`))).toEqual(['file old.log'])
-      expect(await core.expand(id, `${pod!.path}/empty`)).toEqual([])
+      expect(foldedPod(root)).toEqual({
+        kind: 'folded',
+        name: pod,
+        path: pod,
+        kubernetes: { kind: 'pod', status: { reason: 'Running', health: 'healthy', restarts: 0 }, containerCount: 1 }
+      })
+      expect(described(root)).toEqual([`folded ${pod}`, 'folder empty', 'folder logs', 'file app.log'])
+      expect(await core.expand(id, '')).toEqual(root)
+      expect(described(await core.expand(id, `${pod}/logs`))).toEqual(['file old.log'])
+      expect(await core.expand(id, `${pod}/empty`)).toEqual([])
     })
 
     it('lists files with their size and modified time', async () => {
-      const { id, root } = await connected()
-      const [pod] = root as EntryNode[]
+      const { root } = await connected()
+      const pod = foldedPod(root)
 
-      const [, , file] = (await core.expand(id, pod!.path)) as EntryNode[]
-      expect(file).toMatchObject({ kind: 'file', name: 'app.log', path: `${pod!.path}/app.log`, size: 8, icon: 'log' })
+      const [, , , file] = root as EntryNode[]
+      expect(file).toMatchObject({ kind: 'file', name: 'app.log', path: `${pod.path}/app.log`, size: 8, icon: 'log' })
       expect(file!.modifiedTime).toBeLessThanOrEqual(Date.now())
     })
 
     it('shows a container level, sidecars labelled, when the pod has several containers', async () => {
       const { id, root } = await connected({ workloadName: 'files-pair' })
-      const [pod] = root as EntryNode[]
+      const pod = foldedPod(root)
 
       expect(pod).toMatchObject({ kubernetes: { kind: 'pod', containerCount: 2 } })
-      expect(await core.expand(id, pod!.path)).toEqual([
-        { kind: 'folder', name: 'app', path: `${pod!.path}/app`, icon: expect.any(String), kubernetes: { kind: 'container' } },
-        { kind: 'folder', name: 'proxy', path: `${pod!.path}/proxy`, icon: expect.any(String), kubernetes: { kind: 'container', role: 'sidecar' } }
+      expect(root.slice(1)).toEqual([
+        { kind: 'folder', name: 'app', path: `${pod.path}/app`, icon: expect.any(String), kubernetes: { kind: 'container' } },
+        { kind: 'folder', name: 'proxy', path: `${pod.path}/proxy`, icon: expect.any(String), kubernetes: { kind: 'container', role: 'sidecar' } }
       ])
-      expect(await core.openFile(id, `${pod!.path}/proxy/whoami`)).toMatchObject({ content: 'proxy\n' })
-      expect(await core.openFile(id, `${pod!.path}/app/whoami`)).toMatchObject({ content: 'app\n' })
+      expect(await core.openFile(id, `${pod.path}/proxy/whoami`)).toMatchObject({ content: 'proxy\n' })
+      expect(await core.openFile(id, `${pod.path}/app/whoami`)).toMatchObject({ content: 'app\n' })
     })
 
     it('shows an error node for a container with no shell', async () => {
-      const { id, root } = await connected({ workloadName: 'files-shellless' })
-      const [pod] = root as EntryNode[]
+      const { root } = await connected({ workloadName: 'files-shellless' })
 
-      expect(await core.expand(id, pod!.path)).toEqual([{ kind: 'error', path: pod!.path, code: 'NO_SHELL', message: expect.stringContaining('sh') }])
+      expect(root.slice(1)).toEqual([{ kind: 'error', path: '', code: 'NO_SHELL', message: expect.stringContaining('sh') }])
     })
 
     it('shows an error node for a path that is not there', async () => {
-      const { id, root } = await connected({ path: '/nowhere' })
-      const [pod] = root as EntryNode[]
+      const { root } = await connected({ path: '/nowhere' })
 
-      expect(await core.expand(id, pod!.path)).toEqual([expect.objectContaining({ kind: 'error', code: 'NOT_FOUND' })])
+      expect(root.slice(1)).toEqual([expect.objectContaining({ kind: 'error', path: '', code: 'NOT_FOUND' })])
     })
 
     it('fails to connect to a Workload that is not there', async () => {
@@ -230,12 +299,13 @@ describe.skipIf(!hasTestCluster)('Kubernetes Files against the test cluster', ()
       ['coreutils', { workloadKind: 'StatefulSet', workloadName: 'files-coreutils' }]
     ] as const)('reads it from a %s image', async (_image, changes) => {
       const { id, root } = await connected(changes)
-      const [pod] = root as EntryNode[]
+      // The StatefulSet's two pods each have a folder; the Deployment's one is folded into the root.
+      const [pod] = root as (EntryNode | FoldedNode)[]
 
       expect(await core.openFile(id, `${pod!.path}/logs/old.log`)).toMatchObject({ view: 'editor', content: 'one\ntwo\n', size: 8 })
     })
 
-    it('reports a pod that no longer exists', async () => {
+    it('reports a pod that no longer exists, folding its replacement into the root instead', async () => {
       const [before] = await podsNamed('files-rollout')
       const { id } = await connected({ workloadName: 'files-rollout' })
       const api = kubeConfigFor(testKubernetesFilesSource().context).makeApiClient(CoreV1Api)
@@ -243,8 +313,7 @@ describe.skipIf(!hasTestCluster)('Kubernetes Files against the test cluster', ()
       await api.deleteNamespacedPod({ name: before!, namespace: testFilesNamespace, gracePeriodSeconds: 0 })
 
       await vi.waitFor(() => expect(core.openFile(id, `${before}/app.log`)).rejects.toMatchObject({ code: 'POD_GONE' }), { timeout: 60_000, interval: 1_000 })
-      // Its replacement is there to browse instead.
-      await vi.waitFor(async () => expect((await podFolders(core, id)).map((pod) => pod.name)).not.toContain(before), { timeout: 60_000, interval: 1_000 })
+      await vi.waitFor(async () => expect(foldedPod(await core.expand(id, '')).name).not.toBe(before), { timeout: 60_000, interval: 1_000 })
     }, 150_000)
     it('opens a Large File at its end, then caches it through range reads', async () => {
       const [pod] = await podsNamed('files-busybox')
@@ -329,10 +398,10 @@ describe.skipIf(!hasRestrictedContext)('Kubernetes Files permission errors again
     const core = createCore()
     // The restricted ServiceAccount may list the Logs namespace's Deployments and pods, but not exec into them.
     const { id } = await core.addSource(restrictedKubernetesFilesSource({ namespace: testNamespace, workloadName: 'web', path: '/' }))
-    const [pod] = (await core.connect(id)) as EntryNode[]
+    const pod = foldedPod(await core.connect(id))
 
-    expect(await core.expand(id, `${pod!.path}/app`)).toEqual([
-      { kind: 'error', path: `${pod!.path}/app`, code: 'MISSING_PERMISSION', message: `create pods/exec in namespace ${testNamespace}` }
+    expect(await core.expand(id, `${pod.path}/app`)).toEqual([
+      { kind: 'error', path: `${pod.path}/app`, code: 'MISSING_PERMISSION', message: `create pods/exec in namespace ${testNamespace}` }
     ])
   })
 })

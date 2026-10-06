@@ -35,7 +35,8 @@ function isRunning(pod: V1Pod, container: string) {
  * The files of one Workload's pods, as a File Source: its root holds a folder per pod; a pod with several
  * containers holds a folder per container; below that is the target path's contents in that container, listed
  * and read by running commands in it (see shell-file-source.ts). Paths are `<pod>/<path…>`, or
- * `<pod>/<container>/<path…>` for a pod with several containers.
+ * `<pod>/<container>/<path…>` for a pod with several containers. A Workload's only pod is folded into the root,
+ * its paths keeping the pod.
  */
 export function createKubernetesFileSource(config: KubeConfig, target: KubernetesFilesTarget): FileSource & { check(): Promise<void> } {
   const apis = apisFor(config)
@@ -103,6 +104,12 @@ export function createKubernetesFileSource(config: KubeConfig, target: Kubernete
       const at = await resolve(path)
       if (at.at !== 'container') return { kind: 'folder' }
       return filesIn(at.pod, at.container).stat(at.inner)
+    },
+
+    async foldedChild(path) {
+      if (path) return undefined
+      const pods = await listPods()
+      return pods.length === 1 ? pods[0] : undefined
     },
 
     async read(path, range) {

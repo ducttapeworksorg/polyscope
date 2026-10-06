@@ -7,7 +7,7 @@ import type { FollowEvent, LogNode, NewKubernetesLogsSource, TreeNode } from '@s
 import { createCore, type Core } from './core'
 import { kubeConfigFor } from './kubeconfig'
 import { createKubernetesLogSource } from './kubernetes-log-source'
-import { startTestApiServer } from './kubernetes-test-api-server'
+import { ignoreAmbientProxy, standInCluster, startTestApiServer } from './kubernetes-test-api-server'
 import {
   counterLines,
   hasRestrictedContext,
@@ -260,36 +260,6 @@ describe('opening across Source kinds', () => {
     await expect(core.openLog(source.id, 'pods/counter/counter')).rejects.toMatchObject({ code: 'SOURCE_DISCONNECTED' })
   })
 })
-
-/** A kubeconfig whose context `fake` points at the stand-in API server at `server`, through `proxyUrl` if given. */
-const standInCluster = (server: string, caPath: string, proxyUrl?: string) =>
-  [
-    'apiVersion: v1',
-    'kind: Config',
-    'current-context: fake',
-    'clusters:',
-    '- name: fake',
-    '  cluster:',
-    `    server: ${server}`,
-    `    certificate-authority: ${JSON.stringify(caPath)}`,
-    // The stand-in's certificate is for localhost.
-    '    tls-server-name: localhost',
-    ...(proxyUrl ? [`    proxy-url: ${proxyUrl}`] : []),
-    'users:',
-    '- name: fake',
-    '  user:',
-    '    token: not-a-real-token',
-    'contexts:',
-    '- name: fake',
-    '  context:',
-    '    cluster: fake',
-    '    user: fake'
-  ].join('\n')
-
-/** Keeps the proxy settings of wherever the tests run out of the way. */
-const ignoreAmbientProxy = () => {
-  for (const name of ['HTTPS_PROXY', 'https_proxy', 'NO_PROXY', 'no_proxy']) vi.stubEnv(name, '')
-}
 
 describe('a cluster behind a proxy', () => {
   // Only the proxy knows this name, so whatever reaches the cluster went through it.

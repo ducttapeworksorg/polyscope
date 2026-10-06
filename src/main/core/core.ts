@@ -7,6 +7,7 @@ import type {
   CoreApi,
   CoreEvents,
   EntryNode,
+  FoldedNode,
   Environment,
   FileLog,
   FilesWorkloadKind,
@@ -597,8 +598,26 @@ export function createCore(options: CoreOptions = {}): Core {
     return { view: 'large', ...common, largeFileId, encoding, lastLines: lastLinesOf(last, encoding) }
   }
 
-  /** A page of a folder's children, folders first, then files, each by name; a more node ends it if there are more. */
+  /**
+   * A page of a folder's children, folders first, then files, each by name; a more node ends it if there are more.
+   * A folder with a child folded into it lists that child's children, after a folded node for it; an error node
+   * for the folder says why when they can't be listed.
+   */
   const listNodes = async (fileSource: FileSource, path: SourcePath, cursor?: string): Promise<TreeNode[]> => {
+    const folded = await fileSource.foldedChild?.(path)
+    if (!folded) return listEntries(fileSource, path, path, cursor)
+    const at = joinPath(path, folded.name)
+    const foldedNode: FoldedNode = { kind: 'folded', name: folded.name, path: at, ...(folded.kubernetes && { kubernetes: folded.kubernetes }) }
+    try {
+      return [foldedNode, ...(await listEntries(fileSource, at, path, cursor))]
+    } catch (error) {
+      const { code, message } = asCoreError(error)
+      return [foldedNode, { kind: 'error', path, code, message }]
+    }
+  }
+
+  /** A page of the children of `path`, shown as the children of `shownAt` (a folder it's folded into, or itself). */
+  const listEntries = async (fileSource: FileSource, path: SourcePath, shownAt: SourcePath, cursor?: string): Promise<TreeNode[]> => {
     const page = await fileSource.listChildren(path, cursor)
     const nodes = page.entries
       .map(
@@ -615,7 +634,7 @@ export function createCore(options: CoreOptions = {}): Core {
         })
       )
       .sort((a, b) => (a.kind === b.kind ? byName.compare(a.name, b.name) : a.kind === 'folder' ? -1 : 1))
-    return page.cursor === undefined ? nodes : [...nodes, { kind: 'more', path, cursor: page.cursor }]
+    return page.cursor === undefined ? nodes : [...nodes, { kind: 'more', path: shownAt, cursor: page.cursor }]
   }
 
   /** A Log Source node's children: groups in the order of their kind, containers in their pod's, the rest by name. */

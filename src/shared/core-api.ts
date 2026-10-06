@@ -240,6 +240,19 @@ export interface MoreNode {
   cursor: string
 }
 
+/**
+ * The only child of the node being listed, folded into it (a Kubernetes Files Source's root, for its Workload's one
+ * pod): the listing's other nodes are this child's children, under its path. It isn't a row of its own; its details
+ * go to the listed node's.
+ */
+export interface FoldedNode {
+  kind: 'folded'
+  name: string
+  path: SourcePath
+  /** Set when it's a Kubernetes Files Source's pod. */
+  kubernetes?: KubernetesEntry
+}
+
 /** The kinds of Workload a Kubernetes Logs Source groups its tree by; a Pod stands for a pod no Workload owns. */
 export type WorkloadKind = 'Deployment' | 'StatefulSet' | 'DaemonSet' | 'CronJob' | 'Job' | 'Pod'
 
@@ -308,7 +321,7 @@ export type PodNode = Extract<LogNode, { kind: 'pod' }>
 /** A container in a Log Source's tree: what opens as a Log Stream. */
 export type ContainerNode = Extract<LogNode, { kind: 'container' }>
 
-export type TreeNode = EntryNode | LogNode | ErrorNode | MoreNode
+export type TreeNode = EntryNode | LogNode | ErrorNode | MoreNode | FoldedNode
 
 /** Whether the app is talking to a Source right now. Never persisted: every launch starts Disconnected. */
 export type ConnectionState =
