@@ -3,16 +3,20 @@ import type { SourceInfo, TextFile } from '@shared/core-api'
 import {
   activateTab,
   canFollowFile,
+  canShowPrevious,
   closeAllTabs,
   closeOtherTabs,
   closeTab,
   cycleTab,
   emptyWorkspace,
   markPodGone,
+  noteRestart,
   openTab,
   pinTab,
+  reopenLogTab,
   reopenTab,
   setLanguage,
+  tabName,
   type TabContent,
   type Workspace
 } from './workspace'
@@ -239,8 +243,48 @@ describe('offering to Follow a tab’s file', () => {
   })
 
   it('doesn’t for a Log Stream, which has its own Follow', () => {
-    const log = { view: 'log', of: 'logStream', path: 'p', name: 'c', pod: 'p', previous: false, lastNLines: 10, timestamps: false, content: '' } as const
+    const log = { view: 'log', of: 'logStream', path: 'p', name: 'c', pod: 'p', previous: false, restarted: false, lastNLines: 10, timestamps: false, content: '' } as const
     expect(canFollowFile({ source, file: log })).toBe(false)
+  })
+})
+
+describe('switching a container’s log view to its Previous Log', () => {
+  const log = { view: 'log', of: 'logStream', path: 'p/c', name: 'c', pod: 'p', previous: false, restarted: false, lastNLines: 10, timestamps: false, content: '' } as const
+  const followed = (restarted = false) => openTab(emptyWorkspace, { key: 'c', source, file: { ...log, restarted, followId: 'f' } })
+  const onlyTab = (ws: Workspace) => ws.tabs[0]!
+
+  it('offers it once the container has restarted', () => {
+    expect(canShowPrevious(onlyTab(followed()))).toBe(false)
+    expect(canShowPrevious(onlyTab(followed(true)))).toBe(true)
+  })
+
+  it('offers it as soon as the tab’s Follow sees the container restart', () => {
+    const ws = noteRestart(openTab(followed(), { key: 'd', source, file: { ...log, followId: 'g' } }, { pinned: true }), 'f')
+
+    expect(ws.tabs.map(canShowPrevious)).toEqual([true, false])
+  })
+
+  it('goes by what a log read afresh says', () => {
+    expect(canShowPrevious(onlyTab(reopenLogTab(noteRestart(followed(), 'f'), 'c', log)))).toBe(false)
+    expect(canShowPrevious(onlyTab(reopenLogTab(followed(), 'c', { ...log, restarted: true })))).toBe(true)
+  })
+
+  it('doesn’t for a file’s log view, which has no Previous Log', () => {
+    const fileLog = { view: 'log', of: 'file', path: 'a', name: 'a', previous: false, lastNLines: 10, timestamps: false, content: '' } as const
+
+    expect(canShowPrevious(onlyTab(openTab(emptyWorkspace, { key: 'a', source, file: fileLog })))).toBe(false)
+  })
+
+  it('stops the Follow and keeps how the lines are shown when the Previous Log can’t be read', () => {
+    const failed = { view: 'logFailed', of: 'logStream', path: 'p/c', name: 'c', previous: true, lastNLines: 10, timestamps: true, message: 'gone' } as const
+    const tab = onlyTab(reopenLogTab(followed(true), 'c', failed))
+
+    expect(tab.follow).toBeUndefined()
+    expect(tab.file).toEqual(failed)
+    expect(tabName(tab.file)).toBe('c (previous)')
+    // To switch back to the current log, failing or not.
+    expect(canShowPrevious(tab)).toBe(true)
+    expect(canShowPrevious(onlyTab(reopenLogTab(followed(true), 'c', { ...failed, previous: false })))).toBe(true)
   })
 })
 

@@ -274,17 +274,8 @@ export type LogNode =
       path: SourcePath
       /** Set for an init container, or a sidecar (an init container that keeps running); left out for the pod's main containers. */
       role?: ContainerRole
-      /** How many times the container has restarted; left out until it has. */
+      /** How many times the container has restarted; left out until it has. Its log view then offers its Previous Log. */
       restarts?: number
-    }
-  | {
-      /** The Log Stream of a restarted container's previous run; listed in its pod right after the container. */
-      kind: 'previousLog'
-      /** Always `previous`: the node's path is its container's, and then this. */
-      name: string
-      path: SourcePath
-      /** The container it's the Previous Log of. */
-      container: string
     }
 
 export type ContainerRole = 'init' | 'sidecar'
@@ -316,9 +307,6 @@ export type PodNode = Extract<LogNode, { kind: 'pod' }>
 
 /** A container in a Log Source's tree: what opens as a Log Stream. */
 export type ContainerNode = Extract<LogNode, { kind: 'container' }>
-
-/** A restarted container's Previous Log in a Log Source's tree. */
-export type PreviousLogNode = Extract<LogNode, { kind: 'previousLog' }>
 
 export type TreeNode = EntryNode | LogNode | ErrorNode | MoreNode
 
@@ -478,7 +466,7 @@ export interface LogSnapshot {
   view: 'log'
   /** What the lines are of: a container's Log Stream. */
   of: 'logStream'
-  /** The container's path in its Source's tree, or its Previous Log's. */
+  /** The container's path in its Source's tree. */
   path: SourcePath
   /** The container's name. */
   name: string
@@ -486,6 +474,8 @@ export interface LogSnapshot {
   pod: string
   /** Whether this is the container's Previous Log: the log of its run before the current one. */
   previous: boolean
+  /** Whether the container had restarted when read, so has a Previous Log to switch to. */
+  restarted: boolean
   /** The lines asked for; the snapshot holds at most that many. */
   lastNLines: LastNLines
   /** Whether each line starts with when it was logged: an RFC 3339 timestamp in UTC, then a space. */
@@ -501,6 +491,8 @@ export interface OpenLogOptions {
   allowLarge?: boolean
   /** Starts each line with when it was logged; off unless asked for. */
   timestamps?: boolean
+  /** Reads the container's Previous Log rather than its current one. */
+  previous?: boolean
 }
 
 /** A Log Stream's snapshot, and the Follow that goes on from its last line; see followLog. */
@@ -702,7 +694,7 @@ export interface CoreApi {
    * Opens a container's log like openLog, and Follows it from its last line: what comes next arrives as
    * FollowEvents with the returned `followId`, until the Follow is stopped or ends by itself (disconnecting
    * its Source ends it). While the container restarts, the Follow goes on with its new run. A Previous Log
-   * can't be followed: NOT_FOLLOWABLE.
+   * has ended, so can't be followed: asking for one fails with NOT_FOLLOWABLE.
    */
   followLog(sourceId: string, path: SourcePath, options?: OpenLogOptions): Promise<FollowedLog>
   /**

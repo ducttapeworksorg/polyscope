@@ -110,6 +110,7 @@ VS Code's **Polyscope: Own Viewer** setting (`polyscope.ownViewer`, on by defaul
 
 - Log Streams open as a snapshot of their Last N lines.
 - Follow isn't offered.
+- A restarted container's **Previous Log** can't be opened: it's switched to with the **Previous** toggle in a log's toolbar, which VS Code's editor doesn't have.
 - A Large File opens only if it's within Polyscope's "open anyway" limit. A bigger one is refused, with an offer to turn the setting back on.
 
 The sidebar and viewer tabs take the colours of your VS Code theme and follow it when it changes. Environment and status colours stay Polyscope's.

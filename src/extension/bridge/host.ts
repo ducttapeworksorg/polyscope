@@ -12,6 +12,8 @@ export interface HostShell {
   appVersion(): Promise<string>
   openExtensionSettings(): Promise<void>
   open(request: OpenRequest): Promise<void>
+  /** Names the webview's tab anew; nothing happens for a view that has no tab. */
+  retitle(title: string): Promise<void>
   /** A Source or an Environment was added, edited or deleted, changing what labels and tints its tabs. */
   sourcesChanged(): void
   /** Whether `polyscope.ownViewer` is on. */
@@ -98,6 +100,7 @@ export function serveBridge({ core, log, shell, post }: Options) {
     checkForUpdates: async () => {},
     applyUpdate: async () => {},
     open: (request) => shell.open(request),
+    retitle: (title) => shell.retitle(title),
     ownViewer: () => shell.ownViewer()
   }
 

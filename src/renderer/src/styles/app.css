@@ -1040,16 +1040,6 @@ body.is-resizing {
   text-overflow: ellipsis;
 }
 
-/* A container's Previous Log sits under it, quieter than the log of its current run. */
-.tree-row--previous-log .tree-row__label {
-  color: var(--text-dim);
-  font-style: italic;
-}
-
-.tree-row--previous-log .tree-row__icon {
-  opacity: 0.6;
-}
-
 .material-icon,
 .kubernetes-icon {
   display: block;

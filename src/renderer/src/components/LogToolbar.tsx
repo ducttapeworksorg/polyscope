@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import type { LastNLines } from '@shared/core-api'
 import { t } from '../i18n'
-import { isLog, type OpenTab } from '../workspace'
+import { canShowPrevious, isLog, type OpenTab } from '../workspace'
 import { LastNLinesControl } from './LastNLinesControl'
 
 interface Props {
@@ -9,6 +9,7 @@ interface Props {
   onChangeLastNLines(value: LastNLines): void
   onToggleFollow(): void
   onTogglePause(): void
+  onTogglePrevious(): void
   onToggleTimestamps(): void
   onToggleUtc(): void
   onToggleWrap(): void
@@ -32,27 +33,43 @@ export function Toggle({ pressed, disabled, tooltip, onToggle, children }: Toggl
 
 /**
  * The controls at the top of every log view: its "Last N lines", Follow (with pause and resume) for a
- * container's current log or a file, timestamps in local time or UTC for a container's log, and wrapping.
+ * container's current log or a file, switching a container's log to its Previous Log and back, timestamps
+ * in local time or UTC for a container's log, and wrapping.
  */
-export function LogToolbar({ tab, onChangeLastNLines, onToggleFollow, onTogglePause, onToggleTimestamps, onToggleUtc, onToggleWrap }: Props) {
+export function LogToolbar({ tab, onChangeLastNLines, onToggleFollow, onTogglePause, onTogglePrevious, onToggleTimestamps, onToggleUtc, onToggleWrap }: Props) {
   const { file, follow } = tab
   const log = file.view === 'log' ? file : null
-  const timestamps = log?.timestamps ?? false
-  // A file's lines come as they are, with no timestamps to add.
+  // Kept by a log that failed to read, for reading it again.
+  const timestamps = file.view === 'log' || file.view === 'logFailed' ? file.timestamps : false
+  // A file's lines come as they are, with no timestamps to add, and it has no Previous Log.
   const ofFile = isLog(file) && file.of === 'file'
+  // A Previous Log has ended: there's nothing to Follow.
+  const previous = isLog(file) && file.previous
+  const lastNLines = file.view === 'log' || file.view === 'logFailed' ? file.lastNLines : 'all'
   return (
     <div className="log-toolbar">
-      <LastNLinesControl value={log ? log.lastNLines : 'all'} onChange={onChangeLastNLines} />
+      <LastNLinesControl value={lastNLines} onChange={onChangeLastNLines} />
       <div className="log-toolbar__toggles">
-        {!log?.previous && (
-          <>
-            <Toggle pressed={Boolean(follow)} disabled={!log} tooltip={t(ofFile ? 'logView.follow.file.tooltip' : 'logView.follow.tooltip')} onToggle={onToggleFollow}>
-              {t('logView.follow')}
-            </Toggle>
-            <Toggle pressed={follow?.paused ?? false} disabled={!follow} tooltip={t('logView.pause.tooltip')} onToggle={onTogglePause}>
-              {t(follow?.paused ? 'logView.resume' : 'logView.pause')}
-            </Toggle>
-          </>
+        <Toggle
+          pressed={Boolean(follow)}
+          disabled={!log || previous}
+          tooltip={t(ofFile ? 'logView.follow.file.tooltip' : previous ? 'logView.follow.previous.tooltip' : 'logView.follow.tooltip')}
+          onToggle={onToggleFollow}
+        >
+          {t('logView.follow')}
+        </Toggle>
+        <Toggle pressed={follow?.paused ?? false} disabled={!follow} tooltip={t('logView.pause.tooltip')} onToggle={onTogglePause}>
+          {t(follow?.paused ? 'logView.resume' : 'logView.pause')}
+        </Toggle>
+        {!ofFile && (
+          <Toggle
+            pressed={previous}
+            disabled={!canShowPrevious(tab)}
+            tooltip={t(canShowPrevious(tab) ? 'logView.previousLog.tooltip' : 'logView.previousLog.unavailable')}
+            onToggle={onTogglePrevious}
+          >
+            {t('logView.previousLog')}
+          </Toggle>
         )}
         {!ofFile && (
           <>

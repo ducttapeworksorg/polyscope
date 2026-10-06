@@ -1,4 +1,16 @@
-import type { FileLog, FollowedFile, FollowedLog, LanguageId, LogOf, LogSnapshot, OpenedFile, OpenOptions, SourceInfo, SourcePath } from '@shared/core-api'
+import type {
+  FileLog,
+  FollowedFile,
+  FollowedLog,
+  LanguageId,
+  LastNLines,
+  LogOf,
+  LogSnapshot,
+  OpenedFile,
+  OpenOptions,
+  SourceInfo,
+  SourcePath
+} from '@shared/core-api'
 import { followableSourceTypes } from '@shared/core-api'
 import { t } from './i18n'
 
@@ -16,12 +28,39 @@ export interface LogTooLarge {
   previous: boolean
 }
 
+/**
+ * A container's log that couldn't be read when its log view switched to it, or back from it: say a Previous Log
+ * Kubernetes no longer keeps. The view says why, and keeps how it shows lines for switching again.
+ */
+export interface LogFailed {
+  view: 'logFailed'
+  of: 'logStream'
+  path: SourcePath
+  /** The container's name. */
+  name: string
+  /** Whether it's the container's Previous Log that couldn't be read. */
+  previous: boolean
+  /** The lines it was asked for with, asked for again when it's read again. */
+  lastNLines: LastNLines
+  /** Whether it was asked for with timestamps, likewise. */
+  timestamps: boolean
+  /** Why, as the user is told. */
+  message: string
+}
+
 /** What a tab shows: a file, or a Log Stream or a file's last lines in a log view (followed or not). */
-export type TabContent = OpenedFile | LogSnapshot | FollowedLog | FileLog | FollowedFile | LogTooLarge
+export type TabContent = OpenedFile | LogSnapshot | FollowedLog | FileLog | FollowedFile | LogTooLarge | LogFailed
 
 /** Whether a tab's content is shown in a log view. */
-export const isLog = (content: TabContent): content is LogSnapshot | FileLog | LogTooLarge =>
-  content.view === 'log' || content.view === 'logTooLarge'
+export const isLog = (content: TabContent): content is LogSnapshot | FileLog | LogTooLarge | LogFailed =>
+  content.view === 'log' || content.view === 'logTooLarge' || content.view === 'logFailed'
+
+/**
+ * Whether a log tab can switch between its container's current log and its Previous Log: once the container has
+ * restarted, and always back from the Previous Log.
+ */
+export const canShowPrevious = ({ file, restarted }: Pick<OpenTab, 'file' | 'restarted'>) =>
+  isLog(file) && file.of === 'logStream' && (file.previous || restarted === true)
 
 /** Whether a Source's files can be Followed: those of Local and Kubernetes Files Sources grow; S3 objects don't. */
 export const followsFiles = (source: SourceInfo) => followableSourceTypes.includes(source.type)
@@ -53,6 +92,8 @@ export interface OpenTab {
   wrap?: boolean
   /** Set, to the pod's name, when a Kubernetes Files tab's pod turned out to be gone: it shows what was last read from it. */
   podGone?: string
+  /** Whether a log tab's container has restarted, as last read or since seen by its Follow, so has a Previous Log. */
+  restarted?: boolean
 }
 
 /** A Follow under way in a log tab: new lines are added as they come, unless it's paused. */
@@ -72,6 +113,10 @@ export const emptyWorkspace: Workspace = { tabs: [], activeKey: null }
 /** The Follow a log was read with, if any, running: its tab shows it and stops it when done with it. */
 const followOf = (file: TabContent): FollowState | undefined => ('followId' in file ? { followId: file.followId, paused: false } : undefined)
 
+/** Whether a container's log, as read, says it has restarted; nothing for what doesn't say. */
+const restartedOf = (file: TabContent): Pick<OpenTab, 'restarted'> =>
+  file.view === 'log' && file.of === 'logStream' ? { restarted: file.restarted } : {}
+
 /**
  * Shows a file: activating its tab if it's open already, otherwise putting it in place of the
  * preview tab or, with none, right after the active tab. Opening as pinned pins it for good.
@@ -82,7 +127,7 @@ export function openTab(ws: Workspace, tab: Pick<OpenTab, 'key' | 'source' | 'fi
     const shown = activateTab(ws, key)
     return pinned ? pinTab(shown, key) : shown
   }
-  const added = { ...tab, follow: followOf(tab.file), pinned }
+  const added = { ...tab, follow: followOf(tab.file), ...restartedOf(tab.file), pinned }
   const preview = pinned ? -1 : ws.tabs.findIndex((open) => !open.pinned)
   if (preview >= 0) return { tabs: ws.tabs.with(preview, added), activeKey: key }
   const active = ws.tabs.findIndex((open) => open.key === ws.activeKey)
@@ -145,11 +190,17 @@ export const markPodGone = (ws: Workspace, key: string, pod: string): Workspace 
 
 /** Puts a freshly read log in its tab, with the Follow that goes on from it, if any. Pins the tab. */
 export const reopenLogTab = (ws: Workspace, key: string, file: TabContent): Workspace =>
-  updateTab(ws, key, { file, follow: followOf(file), pinned: true })
+  updateTab(ws, key, { file, follow: followOf(file), ...restartedOf(file), pinned: true })
 
 /** Changes how a log tab is shown or followed, leaving its content as it is. */
 export const setLogView = (ws: Workspace, key: string, change: Partial<Pick<OpenTab, 'follow' | 'utc' | 'wrap'>>): Workspace =>
   updateTab(ws, key, change)
+
+/** Notes that a Follow's container restarted, so its tab can switch to the Previous Log. */
+export function noteRestart(ws: Workspace, followId: string): Workspace {
+  const tab = ws.tabs.find((open) => open.follow?.followId === followId)
+  return tab ? updateTab(ws, tab.key, { restarted: true }) : ws
+}
 
 /** Marks a Follow as over in whichever tab it was going on, leaving what it showed. */
 export function endFollow(ws: Workspace, followId: string): Workspace {

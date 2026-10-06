@@ -4,7 +4,7 @@ import '../src/styles/app.css'
 import './webview.css'
 import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { ContainerNode, EntryNode, PreviousLogNode, SourceInfo } from '@shared/core-api'
+import type { ContainerNode, EntryNode, SourceInfo } from '@shared/core-api'
 import type { OpenRequest } from '../../extension/bridge/protocol'
 import { SourcesPane } from '../src/components/SourcesPane'
 import { useSources } from '../src/components/use-sources'
@@ -13,12 +13,9 @@ import { bridge } from './bridge'
 /** Asks the extension host to open what was picked in the tree; it decides where. */
 const opener =
   (kind: OpenRequest['kind']) =>
-  (source: SourceInfo, node: EntryNode | ContainerNode | PreviousLogNode, options?: { pinned: boolean }) => {
+  (source: SourceInfo, node: EntryNode | ContainerNode, options?: { pinned: boolean }) => {
     const pinned = options?.pinned ?? false
-    const { path } = node
-    // A Previous Log goes by its container's name.
-    const named = node.kind === 'previousLog' ? { name: node.container, previous: true } : { name: node.name }
-    void bridge.open({ kind, sourceId: source.id, path, ...named, pinned })
+    void bridge.open({ kind, sourceId: source.id, path: node.path, name: node.name, pinned })
   }
 
 /**

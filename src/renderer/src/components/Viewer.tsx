@@ -28,9 +28,12 @@ interface Props {
   minimap: boolean
 }
 
-/** What the editor shows for a tab, or null when it shows something else: a binary file, a log too large to show, a Large File. */
+/**
+ * What the editor shows for a tab, or null when it shows something else: a binary file, a log too large to show or
+ * that couldn't be read, a Large File.
+ */
 function editorContent({ file, language, utc }: OpenTab) {
-  if (file.view === 'binary' || file.view === 'logTooLarge' || file.view === 'large') return null
+  if (file.view === 'binary' || file.view === 'logTooLarge' || file.view === 'logFailed' || file.view === 'large') return null
   if (file.view === 'log') return { text: shownContent(file, utc ?? false), language: 'log' }
   return { text: file.content, language: file.view === 'hex' ? 'plaintext' : (language ?? file.language) }
 }
@@ -63,8 +66,8 @@ function appendLines(model: monaco.editor.ITextModel, lines: string[], cap: Last
 }
 
 /**
- * One read-only Monaco editor; each tab keeps its own model and scroll/cursor state. Binary files, and logs
- * too large to show whole, get a placeholder.
+ * One read-only Monaco editor; each tab keeps its own model and scroll/cursor state. Binary files, logs
+ * too large to show whole, and logs that couldn't be read get a placeholder.
  */
 export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileThreshold, openAnywayLimit, onOpenAnyway, followFeed, onLineCount, minimap }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
@@ -195,10 +198,11 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
 
   const binary = activeTab?.file.view === 'binary' ? activeTab.file : null
   const tooLarge = activeTab?.file.view === 'logTooLarge'
+  const failed = activeTab?.file.view === 'logFailed' ? activeTab.file : null
   const large = activeTab?.file.view === 'large' ? activeTab.file : null
   return (
     <>
-      <div ref={hostRef} className="viewer__editor" hidden={!activeTab || !!binary || tooLarge || !!large} data-testid="editor" />
+      <div ref={hostRef} className="viewer__editor" hidden={!activeTab || !!binary || tooLarge || !!failed || !!large} data-testid="editor" />
       {large && (
         <LargeFileViewer
           key={large.largeFileId}
@@ -215,6 +219,11 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
           <button type="button" className="button button--quiet" onClick={() => onShowWholeLog(activeTab.key)}>
             {t('logView.showAll')}
           </button>
+        </div>
+      )}
+      {failed && (
+        <div className="viewer__empty viewer__binary" role="alert">
+          <p>{failed.message}</p>
         </div>
       )}
       {activeTab && binary && (

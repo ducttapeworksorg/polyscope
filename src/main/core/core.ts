@@ -392,11 +392,23 @@ export function createCore(options: CoreOptions = {}): Core {
   const readSnapshot = async (logSource: LogSource, sourceId: string, path: SourcePath, options: OpenLogOptions, forFollowing = false) => {
     const asked = options.lastNLines === undefined ? undefined : checkLastNLines(options.lastNLines)
     const timestamps = options.timestamps === true
-    const { pod, container, previous } = await logSource.logStreamAt(path)
+    const previous = options.previous === true
+    const { pod, container, restarts } = await logSource.logStreamAt(path)
     await settingsLoaded
     const lastNLines = asked ?? sourceFor(sourceId).lastNLines ?? settings.defaultLastNLines
-    const read = { timestamps: timestamps || forFollowing }
-    const snapshot = (lines: string[]): LogSnapshot => ({ view: 'log', of: 'logStream', path, name: container, pod, previous, lastNLines, timestamps, content: lines.join('\n') })
+    const read = { timestamps: timestamps || forFollowing, previous }
+    const snapshot = (lines: string[]): LogSnapshot => ({
+      view: 'log',
+      of: 'logStream',
+      path,
+      name: container,
+      pod,
+      previous,
+      restarted: restarts > 0,
+      lastNLines,
+      timestamps,
+      content: lines.join('\n')
+    })
     let text: string
     try {
       if (lastNLines !== 'all') text = await logSource.readLog(path, { ...read, tailLines: lastNLines })
@@ -609,8 +621,8 @@ export function createCore(options: CoreOptions = {}): Core {
   /** A Log Source node's children: groups in the order of their kind, containers in their pod's, the rest by name. */
   const listLogNodes = async (logSource: LogSource, path: SourcePath): Promise<TreeNode[]> => {
     const nodes = await logSource.listChildren(path)
-    // A pod's containers, each restarted one followed by its Previous Log.
-    if (nodes.every((node) => node.kind === 'container' || node.kind === 'previousLog')) return nodes
+    // A pod's containers.
+    if (nodes.every((node) => node.kind === 'container')) return nodes
     const rank = (node: LogNode) => (node.kind === 'group' ? workloadKinds.indexOf(node.workloadKind) : 0)
     return nodes.toSorted((a, b) => rank(a) - rank(b) || byName.compare(a.name, b.name))
   }
@@ -978,7 +990,7 @@ export function createCore(options: CoreOptions = {}): Core {
     async followLog(sourceId, path, options = {}) {
       await loaded
       const logSource = logSourceFor(sourceId, path)
-      if ((await logSource.logStreamAt(path)).previous) throw new CoreError('NOT_FOLLOWABLE', `A Previous Log has ended: ${path}`)
+      if (options.previous) throw new CoreError('NOT_FOLLOWABLE', `A Previous Log has ended: ${path}`)
       // The snapshot has to be of the run the Follow starts from: one read while the container restarted is read again.
       let restarts = (await logSource.containerInstance(path)).restarts
       let read: Awaited<ReturnType<typeof readSnapshot>>
@@ -1000,7 +1012,7 @@ export function createCore(options: CoreOptions = {}): Core {
           emit
         })
       )
-      return { ...snapshot, followId }
+      return { ...snapshot, restarted: snapshot.restarted || restarts > 0, followId }
     },
 
     async openFileLog(sourceId, path, options = {}) {
