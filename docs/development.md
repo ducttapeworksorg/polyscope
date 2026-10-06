@@ -113,6 +113,11 @@ git tag v1.2.3 && git push origin v1.2.3
 
 The release workflow checks the tag matches `package.json`'s version, then builds the installers on each platform, and the Extension Copy's `polyscope-<version>.vsix` at that same version, and publishes them to GitHub Releases, where installed copies find them. A tag with a pre-release part, like `v1.3.0-beta.1`, is published as a pre-release, which installed copies don't update to.
 
+Once the GitHub release is out, the workflow publishes its `.vsix` to Open VSX, marked as a pre-release for a pre-release tag, and, for a release only, to the VS Code Marketplace, which takes no pre-release part in a version. Neither takes an access token:
+
+- Open VSX trusts the workflow's GitHub OIDC token directly (`ovsx publish --trusted-publishing`).
+- For the VS Code Marketplace, the `vs-marketplace` job signs in to Azure as a Microsoft Entra app, with a federated credential for the `vs-marketplace` environment, and publishes as that app (`vsce publish --azure-credential`). The app is a Contributor on the `ducttapeworks` publisher. Its IDs are the repository variables `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`, and the environment only lets `v*.*.*` tags deploy.
+
 ### Pre-releases
 
 Name pre-releases `alpha` or `beta` (`v1.3.0-alpha.1`, `v1.3.0-beta.2`), and nothing else. electron-updater ranks just these two below a release, and a copy on a pre-release updates to anything at least as stable as itself:

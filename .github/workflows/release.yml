@@ -1,7 +1,8 @@
 name: Release
 
 # Pushing a version tag (v1.2.3, matching package.json) builds every platform's installers and the Extension Copy's
-# .vsix, and publishes them to GitHub Releases, where the app looks for updates, and the .vsix to Open VSX.
+# .vsix, and publishes them to GitHub Releases, where the app looks for updates, and the .vsix to Open VSX and, for a
+# stable release, the VS Code Marketplace.
 on:
   push:
     tags: ['v*.*.*']
@@ -123,3 +124,37 @@ jobs:
       # after the upload went through doesn't fail on the version being there already.
       - name: Publish to Open VSX
         run: npx --yes ovsx publish "polyscope-${GITHUB_REF_NAME#v}.vsix" --trusted-publishing --skip-duplicate
+
+  # The released .vsix, on the VS Code Marketplace too. Stable releases only: the Marketplace takes no pre-release part
+  # in a version (1.3.0-beta.1), so a pre-release goes to GitHub and Open VSX alone.
+  vs-marketplace:
+    needs: publish
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    # The environment is what the Entra app's federated credential names, as a tag's ref can't be matched by pattern.
+    environment: vs-marketplace
+    # id-token, for the OIDC token Entra ID trusts this workflow by, in place of a personal access token.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Download the .vsix from the release
+        run: gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --pattern "polyscope-${GITHUB_REF_NAME#v}.vsix"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # The app needs no Azure subscription, only to be a member of the publisher.
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      # --azure-credential, so vsce signs in as the app Azure CLI just logged in as. --skip-duplicate, so a rerun after
+      # the upload went through doesn't fail on the version being there already.
+      - name: Publish to the VS Code Marketplace
+        run: npx --yes @vscode/vsce publish --packagePath "polyscope-${GITHUB_REF_NAME#v}.vsix" --azure-credential --skip-duplicate
