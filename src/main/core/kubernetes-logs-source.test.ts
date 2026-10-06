@@ -261,6 +261,36 @@ describe('opening across Source kinds', () => {
   })
 })
 
+/** A kubeconfig whose context `fake` points at the stand-in API server at `server`, through `proxyUrl` if given. */
+const standInCluster = (server: string, caPath: string, proxyUrl?: string) =>
+  [
+    'apiVersion: v1',
+    'kind: Config',
+    'current-context: fake',
+    'clusters:',
+    '- name: fake',
+    '  cluster:',
+    `    server: ${server}`,
+    `    certificate-authority: ${JSON.stringify(caPath)}`,
+    // The stand-in's certificate is for localhost.
+    '    tls-server-name: localhost',
+    ...(proxyUrl ? [`    proxy-url: ${proxyUrl}`] : []),
+    'users:',
+    '- name: fake',
+    '  user:',
+    '    token: not-a-real-token',
+    'contexts:',
+    '- name: fake',
+    '  context:',
+    '    cluster: fake',
+    '    user: fake'
+  ].join('\n')
+
+/** Keeps the proxy settings of wherever the tests run out of the way. */
+const ignoreAmbientProxy = () => {
+  for (const name of ['HTTPS_PROXY', 'https_proxy', 'NO_PROXY', 'no_proxy']) vi.stubEnv(name, '')
+}
+
 describe('a cluster behind a proxy', () => {
   // Only the proxy knows this name, so whatever reaches the cluster went through it.
   const host = 'kube.polyscope.test'
@@ -272,8 +302,7 @@ describe('a cluster behind a proxy', () => {
     apiServer = await startTestApiServer()
     proxy = await startProxy({ hosts: { [host]: '127.0.0.1' } })
     server = `https://${host}:${new URL(apiServer.url).port}`
-    // Left alone by the proxy settings of wherever the tests run.
-    for (const name of ['HTTPS_PROXY', 'https_proxy', 'NO_PROXY', 'no_proxy']) vi.stubEnv(name, '')
+    ignoreAmbientProxy()
   })
 
   afterEach(async () => {
@@ -281,30 +310,7 @@ describe('a cluster behind a proxy', () => {
     await apiServer.close()
   })
 
-  /** A kubeconfig whose context `fake` points at the stand-in API server by its made-up name, through `proxyUrl` if given. */
-  const fakeCluster = (proxyUrl?: string) =>
-    [
-      'apiVersion: v1',
-      'kind: Config',
-      'current-context: fake',
-      'clusters:',
-      '- name: fake',
-      '  cluster:',
-      `    server: ${server}`,
-      `    certificate-authority: ${JSON.stringify(apiServer.caPath)}`,
-      // The stand-in's certificate is for localhost.
-      '    tls-server-name: localhost',
-      ...(proxyUrl ? [`    proxy-url: ${proxyUrl}`] : []),
-      'users:',
-      '- name: fake',
-      '  user:',
-      '    token: not-a-real-token',
-      'contexts:',
-      '- name: fake',
-      '  context:',
-      '    cluster: fake',
-      '    user: fake'
-    ].join('\n')
+  const fakeCluster = (proxyUrl?: string) => standInCluster(server, apiServer.caPath, proxyUrl)
 
   const shop = offline({ context: 'fake', namespace: 'shop' })
 
@@ -365,6 +371,41 @@ describe('a cluster behind a proxy', () => {
 
     await expect(core.connect(source.id)).rejects.toMatchObject(missing)
     expect(await core.connectionState(source.id)).toMatchObject({ state: 'error', ...missing })
+  })
+})
+
+// While a container crash-loops, Kubernetes counts its last crashed run as the current one, and has often removed the run before.
+describe('a Previous Log whose run Kubernetes has removed', () => {
+  let apiServer: Awaited<ReturnType<typeof startTestApiServer>>
+  let core: Core
+  let sourceId: string
+
+  beforeEach(async () => {
+    apiServer = await startTestApiServer()
+    ignoreAmbientProxy()
+    await kubeconfigFiles(standInCluster(apiServer.url, apiServer.caPath))
+    core = createCore()
+    sourceId = (await core.addSource(offline({ context: 'fake', namespace: 'crashing' }))).id
+    await core.connect(sourceId)
+  })
+
+  afterEach(async () => {
+    await core.disconnect(sourceId)
+    await apiServer.close()
+  })
+
+  it.each(['containerd', 'cri-o', 'docker'])('fails to open, rather than showing the kubelet’s message, with %s', async (runtime) => {
+    await expect(core.openLog(sourceId, `pods/crasher/${runtime}/previous`)).rejects.toMatchObject({
+      code: 'PREVIOUS_LOG_GONE',
+      message: `The previous run’s log is no longer available: pods/crasher/${runtime}/previous`
+    })
+  })
+
+  it('still shows the line when a container logs it itself', async () => {
+    expect(await core.openLog(sourceId, 'pods/crasher/containerd')).toMatchObject({
+      previous: false,
+      content: 'unable to retrieve container logs for containerd://0123456789abcdef'
+    })
   })
 })
 

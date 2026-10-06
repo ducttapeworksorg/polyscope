@@ -56,7 +56,10 @@ export interface LogSource {
   listChildren(path: SourcePath): Promise<LogNode[]>
   /** What a log's path points at. Fails with NOT_FOUND for a path that isn't in the tree, NOT_A_LOG_STREAM for one that isn't a log's. */
   logStreamAt(path: SourcePath): Promise<LogStreamInfo>
-  /** A log as text, lines ending in '\n'. Fails like logStreamAt, or with LOG_UNAVAILABLE when there's no log to give yet. */
+  /**
+   * A log as text, lines ending in '\n'. Fails like logStreamAt, with LOG_UNAVAILABLE when there's no log to give yet,
+   * or with PREVIOUS_LOG_GONE for a Previous Log whose run is no longer kept.
+   */
   readLog(path: SourcePath, options?: LogReadOptions): Promise<string>
   /**
    * Starts following a container's current log, resolving once the backend is sending; `onText` gets

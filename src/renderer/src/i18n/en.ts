@@ -362,6 +362,7 @@ export const en = {
   'error.NAMESPACE_NOT_FOUND': 'That namespace doesn’t exist in the cluster.',
   'error.NOT_A_LOG_STREAM': 'Only containers have logs.',
   'error.LOG_UNAVAILABLE': 'This container has no log to show: {message}',
+  'error.PREVIOUS_LOG_GONE': 'The previous run’s log is no longer available. There will be one again once the container next restarts.',
   'error.NOT_FOLLOWABLE': 'This can’t be followed: a Previous Log has ended, and S3 objects don’t grow.',
   'error.LOG_TOO_LARGE': 'The whole log is larger than the Large File threshold.',
   'error.INVALID_LINE_COUNT': 'Enter a whole number of lines greater than zero.',
