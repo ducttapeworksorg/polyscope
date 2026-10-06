@@ -604,6 +604,8 @@ export type CoreErrorCode =
   | 'NAMESPACE_NOT_FOUND'
   | 'NOT_A_LOG_STREAM'
   | 'LOG_UNAVAILABLE'
+  /** A Previous Log whose run Kubernetes no longer keeps, say a crash-looping container's run before its last. */
+  | 'PREVIOUS_LOG_GONE'
   | 'LOG_TOO_LARGE'
   | 'INVALID_LINE_COUNT'
   | 'NOT_FOLLOWABLE'

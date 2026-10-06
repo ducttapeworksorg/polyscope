@@ -27,6 +27,8 @@ const notFound = (path: SourcePath) => new CoreError('NOT_FOUND', `Nothing at ${
 
 const notALog = (path: SourcePath) => new CoreError('NOT_A_LOG_STREAM', `Only containers have logs: ${path}`)
 
+const previousLogGone = (path: SourcePath) => new CoreError('PREVIOUS_LOG_GONE', `The previous run’s log is no longer available: ${path}`)
+
 /** The last segment of a Previous Log's path, after its container's. */
 const previousSegment = 'previous'
 
@@ -35,6 +37,12 @@ function logError(error: unknown): CoreError {
   if (error instanceof ApiException && error.code === 400) return new CoreError('LOG_UNAVAILABLE', serverMessage(error))
   return asCoreError(error)
 }
+
+/**
+ * What the API server answers, successfully, for a run of a container the kubelet no longer keeps, whatever its
+ * runtime: e.g. `unable to retrieve container logs for containerd://<container id>`.
+ */
+const removedRunPattern = /^unable to retrieve container logs for [a-z][a-z0-9+.-]*:\/\/\S+\n?$/
 
 /** The whole body of a response, as text. */
 async function bodyOf(response: IncomingMessage): Promise<string> {
@@ -247,11 +255,15 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
 
     async readLog(path, options: LogReadOptions = {}) {
       const { pod, container, previous } = await logStreamAt(path)
+      let text: string
       try {
-        return await core.readNamespacedPodLog({ name: pod, namespace, container, previous, ...options })
+        text = await core.readNamespacedPodLog({ name: pod, namespace, container, previous, ...options })
       } catch (error) {
         throw logError(error)
       }
+      // A current log that reads so is what the container itself logged.
+      if (previous && removedRunPattern.test(text)) throw previousLogGone(path)
+      return text
     },
 
     async followLog(path, options, onText) {

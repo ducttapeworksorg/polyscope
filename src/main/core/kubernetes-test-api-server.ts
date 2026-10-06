@@ -1,7 +1,7 @@
 // Test support: a stand-in for a Kubernetes API server, just enough of one to connect a Kubernetes Logs Source to
 // and read and follow its one log, over TLS with a certificate from the private test CA. Its namespace `shop` holds
-// an ownerless pod `counter`; in `locked`, listing pods is denied the way RBAC denies it. Given a token, it turns away
-// requests that don't bear it.
+// an ownerless pod `counter`; in `locked`, listing pods is denied the way RBAC denies it; `crashing` holds a pod `crasher`
+// whose restarted containers' previous runs Kubernetes has removed. Given a token, it turns away requests that don't bear it.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { startTlsFront } from './test-network'
@@ -15,6 +15,30 @@ const counter = {
   status: {
     phase: 'Running',
     containerStatuses: [{ name: 'counter', image: 'busybox', imageID: '', ready: true, restartCount: 0, state: { running: {} } }]
+  }
+}
+
+/** The container runtimes `crasher`'s containers are named after, each with its own container id scheme. */
+const runtimes = ['containerd', 'cri-o', 'docker']
+
+/** What the kubelet answers for the log of a container's run it no longer keeps. */
+const removedRunMessage = (runtime: string) => `unable to retrieve container logs for ${runtime}://0123456789abcdef`
+
+/** Crash-looping, waiting to run again: its last run is the current one, and the run before that is gone. */
+const crasher = {
+  metadata: { name: 'crasher', uid: 'crasher' },
+  spec: { containers: runtimes.map((name) => ({ name })) },
+  status: {
+    phase: 'Running',
+    containerStatuses: runtimes.map((name) => ({
+      name,
+      image: 'busybox',
+      imageID: '',
+      ready: false,
+      restartCount: 3,
+      state: { waiting: { reason: 'CrashLoopBackOff' } },
+      lastState: { terminated: { exitCode: 1, reason: 'Error' } }
+    }))
   }
 }
 
@@ -44,6 +68,14 @@ function respond(request: IncomingMessage, response: ServerResponse, token: stri
     response.write(lines.map(({ time, text }) => `${stamped ? `${time} ` : ''}${text}\n`).join(''))
     // Following: nothing more for as long as the connection lasts.
     return following ? undefined : response.end()
+  }
+  if (namespace === 'crashing' && rest === '/pods') return json(response, 200, { kind: 'PodList', apiVersion: 'v1', metadata: {}, items: [crasher] })
+  if (namespace === 'crashing' && rest === '/pods/crasher') return json(response, 200, { kind: 'Pod', apiVersion: 'v1', ...crasher })
+  if (namespace === 'crashing' && rest === '/pods/crasher/log') {
+    // The previous run: the kubelet's answer, unstamped and with no line break. The current run logged that same line itself.
+    const runtime = url.searchParams.get('container') ?? ''
+    const previous = url.searchParams.get('previous') === 'true'
+    return response.writeHead(200, { 'content-type': 'text/plain' }).end(previous ? removedRunMessage(runtime) : `${removedRunMessage(runtime)}\n`)
   }
   return json(response, 200, { kind: 'List', apiVersion: 'v1', metadata: {}, items: [] })
 }
