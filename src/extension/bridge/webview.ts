@@ -63,6 +63,7 @@ export function createWebviewBridge({ post, listen }: Channel): ExtensionBridge 
     applyUpdate: call('applyUpdate'),
     openExtensionSettings: call('openExtensionSettings'),
     open: call('open'),
+    retitle: call('retitle'),
     ownViewer: call('ownViewer'),
     onOwnViewerChanged: on('ownViewerChanged'),
     onUpdateStatus: on('updateStatus'),

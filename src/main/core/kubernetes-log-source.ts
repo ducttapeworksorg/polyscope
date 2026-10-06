@@ -29,9 +29,6 @@ const notALog = (path: SourcePath) => new CoreError('NOT_A_LOG_STREAM', `Only co
 
 const previousLogGone = (path: SourcePath) => new CoreError('PREVIOUS_LOG_GONE', `The previous run’s log is no longer available: ${path}`)
 
-/** The last segment of a Previous Log's path, after its container's. */
-const previousSegment = 'previous'
-
 /** A failed log request as a CoreError: the API server answers 400 when a container has no log to give, e.g. one still waiting to start. */
 function logError(error: unknown): CoreError {
   if (error instanceof ApiException && error.code === 400) return new CoreError('LOG_UNAVAILABLE', serverMessage(error))
@@ -117,18 +114,15 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     return { kind: 'workload', workloadKind: kind, name, path: join(parent, name), ...(readyCount && { readyCount }) }
   }
 
-  /** A pod's containers, init and sidecar containers first as they start first; each restarted one followed by its Previous Log. */
+  /** A pod's containers, init and sidecar containers first as they start first. */
   const containerNodes = (parent: SourcePath, pod: V1Pod): LogNode[] => {
-    const node = (name: string, role?: ContainerRole): LogNode[] => {
-      const path = join(parent, name)
+    const node = (name: string, role?: ContainerRole): LogNode => {
       const restarts = restartsOf(pod, name)
-      const container: LogNode = { kind: 'container', name, path, ...(role && { role }), ...(restarts && { restarts }) }
-      if (!restarts) return [container]
-      return [container, { kind: 'previousLog', name: previousSegment, path: join(path, previousSegment), container: name }]
+      return { kind: 'container', name, path: join(parent, name), ...(role && { role }), ...(restarts && { restarts }) }
     }
     return [
-      ...(pod.spec?.initContainers ?? []).flatMap((c) => node(c.name, isSidecar(c) ? 'sidecar' : 'init')),
-      ...(pod.spec?.containers ?? []).flatMap((c) => node(c.name))
+      ...(pod.spec?.initContainers ?? []).map((c) => node(c.name, isSidecar(c) ? 'sidecar' : 'init')),
+      ...(pod.spec?.containers ?? []).map((c) => node(c.name))
     ]
   }
 
@@ -176,8 +170,7 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
       return containerNodes(path, podNamed(await podsOf('jobs', second!), third!, path))
     }
     // Deeper than any container: the path is a log's, or nothing's.
-    const kind = (await nodeAt(path))?.kind
-    throw kind === 'container' || kind === 'previousLog' ? new CoreError('NOT_A_FOLDER', `A log has no children: ${path}`) : notFound(path)
+    throw (await nodeAt(path))?.kind === 'container' ? new CoreError('NOT_A_FOLDER', `A log has no children: ${path}`) : notFound(path)
   }
 
   /** The children of a node, none if there's no such node or it has none. */
@@ -187,23 +180,19 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
       throw error
     })
 
-  /** The node at a path, found among its parent's children (for a Previous Log, its pod's); undefined if it isn't there. */
+  /** The node at a path, found among its parent's children; undefined if it isn't there. */
   const nodeAt = async (path: SourcePath): Promise<LogNode | undefined> => {
     const parent = path.slice(0, Math.max(0, path.lastIndexOf('/')))
     if (!parent) return undefined
-    const found = (await childrenOf(parent)).find((node) => node.path === path)
-    if (found || !path.endsWith(`/${previousSegment}`) || !parent.includes('/')) return found
-    return (await childrenOf(parent.slice(0, parent.lastIndexOf('/')))).find((node) => node.path === path)
+    return (await childrenOf(parent)).find((node) => node.path === path)
   }
 
   const logStreamAt = async (path: SourcePath): Promise<LogStreamInfo> => {
     if (!path || isGroup(path)) throw notALog(path)
     const node = await nodeAt(path)
     if (!node) throw notFound(path)
-    const segments = path.split('/')
-    if (node.kind === 'container') return { pod: segments.at(-2)!, container: node.name, previous: false }
-    if (node.kind === 'previousLog') return { pod: segments.at(-3)!, container: node.container, previous: true }
-    throw notALog(path)
+    if (node.kind !== 'container') throw notALog(path)
+    return { pod: path.split('/').at(-2)!, container: node.name, restarts: node.restarts ?? 0 }
   }
 
   /** Opens a connection following a container's log; resolves once the API server answers with the log. */
@@ -253,8 +242,8 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     listChildren,
     logStreamAt,
 
-    async readLog(path, options: LogReadOptions = {}) {
-      const { pod, container, previous } = await logStreamAt(path)
+    async readLog(path, { previous = false, ...options }: LogReadOptions = {}) {
+      const { pod, container } = await logStreamAt(path)
       let text: string
       try {
         text = await core.readNamespacedPodLog({ name: pod, namespace, container, previous, ...options })
@@ -267,8 +256,7 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     },
 
     async followLog(path, options, onText) {
-      const { pod, container, previous } = await logStreamAt(path)
-      if (previous) throw new CoreError('NOT_FOLLOWABLE', `A Previous Log has ended: ${path}`)
+      const { pod, container } = await logStreamAt(path)
       return openLogConnection(pod, container, options, onText)
     },
 

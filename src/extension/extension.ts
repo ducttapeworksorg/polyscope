@@ -99,6 +99,8 @@ export async function activate(context: ExtensionContext): Promise<TestApi | und
       await commands.executeCommand('workbench.action.openSettings', `@ext:${context.extension.id}`)
     },
     open,
+    // Only a viewer tab has a title of its own to change; see openViewerTab.
+    retitle: async () => {},
     sourcesChanged: () => tabDecorations.refresh(),
     ownViewer: async () => ownViewer(),
     onOwnViewerChanged(listener) {

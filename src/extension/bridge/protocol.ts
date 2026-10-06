@@ -8,14 +8,12 @@ import type { PolyscopeBridge } from '../../preload/bridge'
 
 /** What a webview asks the extension host to open, and where it was in the tree. */
 export interface OpenRequest {
-  /** A file, a Log Stream (or Previous Log), or a Followed file. */
+  /** A file, a Log Stream, or a Followed file. */
   kind: 'file' | 'log' | 'follow'
   sourceId: string
   path: SourcePath
   /** The file's name, or the container's for a Log Stream. */
   name: string
-  /** A Previous Log rather than the container's current Log Stream. */
-  previous?: boolean
   /** Opened in a tab of its own rather than the preview tab. */
   pinned: boolean
   /** A file opened in VS Code's editor even if it's a Large File, as the Large File Viewer's "open anyway" asks. */
@@ -28,6 +26,8 @@ export interface ExtensionBridge extends PolyscopeBridge {
   openExtensionSettings(): Promise<void>
   /** Opens a file, Log Stream or Follow wherever the extension host decides. */
   open(request: OpenRequest): Promise<void>
+  /** Names a viewer tab anew, say once its log view switches to a Previous Log; the sidebar has no title of its own to change. */
+  retitle(title: string): Promise<void>
   /** Whether `polyscope.ownViewer` is on: Follows, Log Streams and Large Files open in Polyscope's viewer tabs. */
   ownViewer(): Promise<boolean>
   /** Tells `listener` whenever `polyscope.ownViewer` changes; returns what unsubscribes it. */

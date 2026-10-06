@@ -321,7 +321,7 @@ describe('a cluster behind a proxy', () => {
     const updates = followUpdates(core)
     try {
       expect(await core.connect(source.id)).toEqual([{ kind: 'group', workloadKind: 'Pod', name: 'pods', path: 'pods' }])
-      expect((await core.openLog(source.id, 'pods/counter/counter')).content).toBe('line 1\nline 2\nline 3')
+      expect(await core.openLog(source.id, 'pods/counter/counter')).toMatchObject({ restarted: false, content: 'line 1\nline 2\nline 3' })
       const followed = await core.followLog(source.id, 'pods/counter/counter', { lastNLines: 1 })
       expect(followed.content).toBe('line 3')
       await vi.waitFor(() => expect(updates.of(followed.followId)).toEqual(['line 4']))
@@ -375,7 +375,7 @@ describe('a cluster behind a proxy', () => {
 })
 
 // While a container crash-loops, Kubernetes counts its last crashed run as the current one, and has often removed the run before.
-describe('a Previous Log whose run Kubernetes has removed', () => {
+describe('a crash-looping container, the run before its last removed by Kubernetes', () => {
   let apiServer: Awaited<ReturnType<typeof startTestApiServer>>
   let core: Core
   let sourceId: string
@@ -395,9 +395,9 @@ describe('a Previous Log whose run Kubernetes has removed', () => {
   })
 
   it.each(['containerd', 'cri-o', 'docker'])('fails to open, rather than showing the kubelet’s message, with %s', async (runtime) => {
-    await expect(core.openLog(sourceId, `pods/crasher/${runtime}/previous`)).rejects.toMatchObject({
+    await expect(core.openLog(sourceId, `pods/crasher/${runtime}`, { previous: true })).rejects.toMatchObject({
       code: 'PREVIOUS_LOG_GONE',
-      message: `The previous run’s log is no longer available: pods/crasher/${runtime}/previous`
+      message: `The previous run’s log is no longer available: pods/crasher/${runtime}`
     })
   })
 
@@ -406,6 +406,20 @@ describe('a Previous Log whose run Kubernetes has removed', () => {
       previous: false,
       content: 'unable to retrieve container logs for containerd://0123456789abcdef'
     })
+  })
+
+  it('lists the restarted containers with their restarts, but no Previous Logs', async () => {
+    expect(await core.expand(sourceId, 'pods/crasher')).toEqual(
+      ['containerd', 'cri-o', 'docker'].map((name) => ({ kind: 'container', name, path: `pods/crasher/${name}`, restarts: 3 }))
+    )
+  })
+
+  it('tells that the container has restarted, so has a Previous Log to switch to', async () => {
+    expect(await core.openLog(sourceId, 'pods/crasher/containerd')).toMatchObject({ path: 'pods/crasher/containerd', restarted: true })
+  })
+
+  it('cannot follow a Previous Log', async () => {
+    await expect(core.followLog(sourceId, 'pods/crasher/containerd', { previous: true })).rejects.toMatchObject({ code: 'NOT_FOLLOWABLE' })
   })
 })
 
@@ -600,6 +614,7 @@ describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () 
         name: 'counter',
         pod: 'counter',
         previous: false,
+        restarted: false,
         lastNLines: 10,
         timestamps: false,
         content: counterLines.slice(-10).join('\n')
@@ -701,37 +716,37 @@ describe.skipIf(!hasTestCluster)('Previous Logs against the test cluster', () =>
   })
 
   // Not on the seeded crasher: while it waits to run again, Kubernetes has often removed the run before its last.
-  it('lists a restarted container’s Previous Log right after it, and opens the run before the current one', async () => {
+  it('opens the run before the current one of a restarted container', async () => {
     const namespace = `polyscope-test-previous-${process.pid}`
     const { remove } = await restartedOnceNamespace(namespace)
     const restarted = (await core.addSource(testKubernetesLogsSource('Restarted', namespace))).id
     try {
       await core.connect(restarted)
 
-      const [container, previous] = await core.expand(restarted, 'pods/restarted')
-      expect(container).toMatchObject({ kind: 'container', name: 'restarted' })
-      expect(previous).toEqual({ kind: 'previousLog', name: 'previous', path: 'pods/restarted/restarted/previous', container: 'restarted' })
-      expect(await core.openLog(restarted, 'pods/restarted/restarted/previous')).toMatchObject({
+      expect(described(await core.expand(restarted, 'pods/restarted'))).toEqual(['container restarted'])
+      expect(await core.openLog(restarted, 'pods/restarted/restarted', { previous: true })).toMatchObject({
+        path: 'pods/restarted/restarted',
         name: 'restarted',
         pod: 'restarted',
         previous: true,
+        restarted: true,
         content: 'crashing'
       })
-      expect(await core.openLog(restarted, 'pods/restarted/restarted')).toMatchObject({ previous: false, content: 'running' })
+      expect(await core.openLog(restarted, 'pods/restarted/restarted')).toMatchObject({ previous: false, restarted: true, content: 'running' })
     } finally {
       await core.disconnect(restarted)
       await remove()
     }
   }, 150_000)
 
-  it('lists none for a container that has not restarted', async () => {
-    expect(described(await core.expand(sourceId, 'pods/counter'))).toEqual(['container counter'])
+  it('tells that a container that has not restarted has none', async () => {
+    expect(await core.openLog(sourceId, 'pods/counter/counter')).toMatchObject({ restarted: false })
   })
 
   it('cannot be followed', async () => {
     const pod = await crashedPod(core, sourceId)
 
-    await expect(core.followLog(sourceId, `${pod.path}/crash/previous`)).rejects.toMatchObject({ code: 'NOT_FOLLOWABLE' })
+    await expect(core.followLog(sourceId, `${pod.path}/crash`, { previous: true })).rejects.toMatchObject({ code: 'NOT_FOLLOWABLE' })
   }, 120_000)
 })
 

@@ -9,7 +9,7 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 ## Features
 
 - **Every place in one sidebar.** Local folders, S3-compatible buckets, files inside pods, and pod logs, each configured once as a **Source**.
-- **Logs that keep up.** Follow a container's log, or a growing file, live. Pause to read, and pick up where you left off. A crashed container's **Previous Log** is one click away.
+- **Logs that keep up.** Follow a container's log, or a growing file, live. Pause to read, and pick up where you left off. A crashed container's **Previous Log** is a toggle away, in the same tab.
 - **Files of any size.** A multi-gigabyte file opens end-first in a paged viewer, without downloading all of it. Compressed files (`.gz`, `.zst`) open decompressed.
 - **Always know where you are.** Label Sources with an **Environment** like *prod* or *staging*. Its colour tints every tab from that Source, so a file from prod stands out.
 - **Feels like VS Code.** Files open read-only in VS Code's own editor, with its search, highlighting and keybindings. The sidebar and viewer tabs take the colours of your theme.
@@ -36,7 +36,7 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 
 ## Viewer tabs
 
-Followed files, Kubernetes Log Streams and Large Files open in a Polyscope viewer tab, which appends live lines and pages through a multi-gigabyte file. Turn off the `polyscope.ownViewer` setting to open everything in VS Code's editor instead: Log Streams as a snapshot of their Last N lines, Large Files only up to the "open anyway" limit in Polyscope's Settings, and no Follow.
+Followed files, Kubernetes Log Streams and Large Files open in a Polyscope viewer tab, which appends live lines and pages through a multi-gigabyte file. Turn off the `polyscope.ownViewer` setting to open everything in VS Code's editor instead: Log Streams as a snapshot of their Last N lines, with no way to switch to a container's Previous Log, Large Files only up to the "open anyway" limit in Polyscope's Settings, and no Follow.
 
 ![A Large File in a Polyscope viewer tab, listing every line matching a search](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vvscode-large-file.png)
 

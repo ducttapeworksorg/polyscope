@@ -1,5 +1,5 @@
 import type { Ref } from 'react'
-import type { ContainerNode, EntryNode, PreviousLogNode, SourceInfo } from '@shared/core-api'
+import type { ContainerNode, EntryNode, SourceInfo } from '@shared/core-api'
 import type { UpdateStatus } from '@shared/updates'
 import { isExtensionCopy } from '../copy'
 import { EnvironmentsDialog } from './EnvironmentsDialog'
@@ -14,8 +14,8 @@ interface Props {
   update: UpdateStatus
   /** Opens a file in the preview tab, or in a tab of its own when pinned. */
   onOpenFile(source: SourceInfo, node: EntryNode, options?: { pinned: boolean }): void
-  /** Opens a container's Log Stream, or its Previous Log, in the preview tab, or in a tab of its own when pinned. */
-  onOpenLog(source: SourceInfo, node: ContainerNode | PreviousLogNode, options?: { pinned: boolean }): void
+  /** Opens a container's Log Stream in the preview tab, or in a tab of its own when pinned. */
+  onOpenLog(source: SourceInfo, node: ContainerNode, options?: { pinned: boolean }): void
   /** Follows a file of a Local or Kubernetes Files Source in a log view; without it, files offer no Follow. */
   onFollowFile?(source: SourceInfo, node: EntryNode): void
   /** Opens the extension's VS Code settings, from the Settings dialog of an Extension Copy. */

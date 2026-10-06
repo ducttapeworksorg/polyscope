@@ -418,27 +418,27 @@ const firstRunKubernetes: [string, () => Promise<void>][] = [
     }
   ],
   [
-    'a restarted container’s Previous Log opens in a viewer tab, and with ownViewer off in a text editor tab',
+    'a restarted container lists no Previous Log of its own, and opens in a viewer tab that can switch to it',
     async () => {
       const { core, open } = await extension()
       const namespace = `polyscope-vscode-previous-${process.pid}`
       // Crashed on its first run, logging "crashing", then kept running.
       const { remove } = await restartedOnceNamespace(namespace)
       const source = await core.addSource(testKubernetesLogsSource('Restarted', namespace))
-      const previous = 'pods/restarted/restarted/previous'
-      const request = { kind: 'log', sourceId: source.id, path: previous, name: 'restarted', previous: true, pinned: true } as const
+      const container = 'pods/restarted/restarted'
 
       try {
         await core.connect(source.id)
-        assert.deepEqual((await core.expand(source.id, 'pods/restarted')).map(nameOf), ['restarted', 'previous'])
+        assert.deepEqual((await core.expand(source.id, 'pods/restarted')).map(nameOf), ['restarted'])
 
-        await open(request)
-        const tab = await eventually(() => activeViewerTab('restarted (previous)'))
+        await open({ kind: 'log', sourceId: source.id, path: container, name: 'restarted', pinned: true })
+        const tab = await eventually(() => activeViewerTab('restarted'))
         await vscode.window.tabGroups.close(tab)
 
-        await withOwnViewer(false, async () => {
-          await open(request)
-          assert.equal(await shownInTextTab(logUriOf(source.id, previous, source.name)), 'crashing')
+        // What the viewer tab's Previous toggle reads.
+        assert.deepEqual(await core.openLog(source.id, container, { previous: true }).then(({ content, restarted }) => ({ content, restarted })), {
+          content: 'crashing',
+          restarted: true
         })
       } finally {
         await core.deleteSource(source.id)

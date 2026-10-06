@@ -63,11 +63,11 @@ The tree groups the namespace's Workloads: **Deployments**, **StatefulSets**, **
 - each Workload's **Ready Count**, like `1/2`;
 - each pod's health as a coloured dot, with its status (`Running`, `CrashLoopBackOff`, `OOMKilled`…) and restarts in its tooltip;
 - **init** and **sidecar** badges on the containers that start first;
-- a restart count on a container that has restarted, with its **Previous Log**, the log of its run before the last restart, just below it.
+- a restart count on a container that has restarted, with why it last ended (`Error`, `OOMKilled`…) in its pod's tooltip.
 
-Click a container to read its log, or turn on **Follow** to watch it live. See [Reading files and logs](reading.md#logs).
+Click a container to read its log, or turn on **Follow** to watch it live. Once a container has restarted, turn on **Previous** in its log's toolbar to read its **Previous Log**, the log of its run before the last restart, and off again to go back. See [Reading files and logs](reading.md#logs).
 
-![A Kubernetes Logs Source showing a crashing pod's Previous Log](images/previous-log.png)
+![A crashing container's Previous Log, switched to with Previous in the log's toolbar](images/previous-log.png)
 
 ## Environments
 

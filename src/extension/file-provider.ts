@@ -25,7 +25,7 @@ const readOnly = () => {
 
 /**
  * The read-only `polyscope` file system, through which VS Code's editor shows the files of File Sources, delivered
- * decompressed, and snapshots of Log Streams and Previous Logs. Reading a file of a Disconnected Source connects it,
+ * decompressed, and snapshots of Log Streams. Reading a file of a Disconnected Source connects it,
  * so the tabs VS Code restores after a reload work.
  */
 export function createFileProvider(core: Core): FileSystemProvider {

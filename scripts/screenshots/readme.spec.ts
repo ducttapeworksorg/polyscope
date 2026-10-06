@@ -127,8 +127,12 @@ test('screenshots', async () => {
   await window.waitForTimeout(2_500)
   await shot('kubernetes-logs')
 
-  // The crashing pod's Previous Log.
-  await row('Previous Log').first().dblclick()
+  // The crashing pod's app container, switched to its Previous Log.
+  await row('api').nth(1).dblclick()
+  const previous = window.getByRole('button', { name: 'Previous', exact: true })
+  await expect(previous).toBeEnabled()
+  await previous.click()
+  await expect(window.getByRole('tab', { name: /api \(previous\)/ })).toBeVisible()
   await shot('previous-log')
 
   // Local files: a log with its levels highlighted, among a few pinned tabs.

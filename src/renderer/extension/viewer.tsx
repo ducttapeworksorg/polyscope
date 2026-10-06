@@ -12,6 +12,7 @@ import { useSettings } from '../src/components/use-settings'
 import { useTabs } from '../src/components/use-tabs'
 import { core } from '../src/core-client'
 import { t } from '../src/i18n'
+import { tabName } from '../src/workspace'
 import { bridge } from './bridge'
 
 // A webview can't start a worker from its resources, which are of another origin, but can start one from a blob that
@@ -44,7 +45,7 @@ function ViewerTab() {
   // Deleted since the tab was asked for.
   const [sourceGone, setSourceGone] = useState(false)
   const [connection, setConnection] = useState<ConnectionState>({ state: 'connected' })
-  const { sourceId, path, name, previous = false } = request
+  const { sourceId, path, name } = request
 
   const syncConnection = async () => {
     const state = await core.connectionState(sourceId).catch(() => null)
@@ -59,13 +60,16 @@ function ViewerTab() {
       setSource(found)
       if (request.kind === 'follow') void tabs.followFile(found, { path, name })
       else if (request.kind === 'file') void tabs.openFile(found, { path, name }, { pinned: true })
-      else {
-        const node = previous ? { kind: 'previousLog' as const, name: 'previous', path, container: name } : { kind: 'container' as const, name, path }
-        void tabs.openLog(found, node, { pinned: true })
-      }
+      else void tabs.openLog(found, { path, name }, { pinned: true })
     })
     void syncConnection()
   }, [])
+
+  // Named as the desktop app names its tab, marked while the log view shows the Previous Log.
+  const title = tabs.activeTab && tabName(tabs.activeTab.file)
+  useEffect(() => {
+    if (title) void bridge.retitle(title)
+  }, [title])
 
   // The sidebar connects and disconnects the Source; a Follow ending on its own says it may have.
   useEffect(() => core.onFollowEvent((event) => event.kind === 'ended' && void syncConnection()), [])

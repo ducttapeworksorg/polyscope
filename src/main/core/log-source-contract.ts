@@ -8,12 +8,10 @@ export interface LogContractSubject {
   counter: SourcePath
 }
 
-const isLog = (node: LogNode) => node.kind === 'container' || node.kind === 'previousLog'
-
-/** Every node of a tree, walking down from `path`; logs are where it stops. */
+/** Every node of a tree, walking down from `path`; containers, the logs, are where it stops. */
 async function walk(source: LogSource, path: SourcePath = ''): Promise<LogNode[]> {
   const children = await source.listChildren(path)
-  const below = await Promise.all(children.map((node) => (isLog(node) ? [] : walk(source, node.path))))
+  const below = await Promise.all(children.map((node) => (node.kind === 'container' ? [] : walk(source, node.path))))
   return children.flatMap((node, i) => [node, ...below[i]!])
 }
 
@@ -43,14 +41,11 @@ export function describeLogSourceContract(name: string, subject: () => Promise<L
         }
       })
 
-      it('lists a Previous Log right after its container, under the container’s path', async () => {
+      it('lists no Previous Logs, only the restarts of the containers that have them', async () => {
         const { logSource } = await subject()
-        const nodes = await walk(logSource)
-        for (const [i, node] of nodes.entries()) {
-          if (node.kind !== 'previousLog') continue
-          expect(nodes[i - 1], node.path).toMatchObject({ kind: 'container', name: node.container, path: parentOf(node.path) })
-          expect(nodes[i - 1]).toHaveProperty('restarts')
-          await expect(logSource.listChildren(node.path)).rejects.toMatchObject({ code: 'NOT_A_FOLDER' })
+        for (const node of await walk(logSource)) {
+          expect(['group', 'workload', 'pod', 'container'], node.path).toContain(node.kind)
+          if (node.kind === 'container' && 'restarts' in node) expect(node.restarts, node.path).toBeGreaterThan(0)
         }
       })
 
@@ -118,15 +113,20 @@ export function describeLogSourceContract(name: string, subject: () => Promise<L
         await expect(logSource.readLog(`${parentOf(counter)}/no-such-container`)).rejects.toMatchObject({ code: 'NOT_FOUND' })
       })
 
+      it('has no Previous Log to give for a container that has not restarted', async () => {
+        const { logSource, counter } = await subject()
+        await expect(logSource.readLog(counter, { previous: true })).rejects.toMatchObject({ code: 'LOG_UNAVAILABLE' })
+      })
+
       it('starts each line with when it was logged, when asked', async () => {
         const { logSource, counter } = await subject()
         const lines = (await logSource.readLog(counter, { tailLines: 2, timestamps: true })).split('\n')
         expect(lines).toEqual([expect.stringMatching(timestamped('line 99')), expect.stringMatching(timestamped('line 100')), ''])
       })
 
-      it('tells a log’s pod and container', async () => {
+      it('tells a log’s pod and container, and how many times it has restarted', async () => {
         const { logSource, counter } = await subject()
-        expect(await logSource.logStreamAt(counter)).toEqual({ pod: lastSegment(parentOf(counter)), container: lastSegment(counter), previous: false })
+        expect(await logSource.logStreamAt(counter)).toEqual({ pod: lastSegment(parentOf(counter)), container: lastSegment(counter), restarts: 0 })
         await expect(logSource.logStreamAt(parentOf(counter))).rejects.toMatchObject({ code: 'NOT_A_LOG_STREAM' })
       })
     })

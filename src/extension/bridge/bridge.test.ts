@@ -69,6 +69,7 @@ beforeEach(async () => {
     appVersion: async () => '1.2.3',
     openExtensionSettings: async () => {},
     open: async () => {},
+    retitle: async () => {},
     sourcesChanged: () => {},
     ownViewer: async () => true,
     onOwnViewerChanged: (listener) => {
