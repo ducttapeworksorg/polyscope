@@ -39,7 +39,7 @@ A Kubernetes object with a pod template that owns pods (Deployment, StatefulSet,
 The log output of one container in one pod, viewable as a snapshot or live-followed.
 
 **Previous Log**:
-The **Log Stream** of a container's prior (crashed or restarted) instance, shown only when the container has restarted.
+The **Log Stream** of a container's prior (crashed or restarted) instance, available only when the container has restarted. Viewed by switching a container's log view to it, not as a node of its own in the tree; it can't be **Followed**.
 
 **Pod Status**:
 The health of a pod as shown in the tree: its phase or failure reason (Running, Pending, CrashLoopBackOff, OOMKilled…) plus its restart count when greater than zero.
@@ -77,8 +77,9 @@ _Avoid_: plugin
 - A **Source** is an instance of exactly one **Source Type**
 - A **Source** has zero or one **Environment**; an **Environment** is shared by many **Sources**
 - Every **Source Type** is either a **File Source** type or a **Log Source** type
-- A Kubernetes Files **Source** targets exactly one **Workload** and one path; it shows each of that **Workload**'s pods as a separate folder (per-pod volumes differ), with a container level only when the pod has several containers
+- A Kubernetes Files **Source** targets exactly one **Workload** and one path; it shows each of that **Workload**'s pods as a separate folder (per-pod volumes differ) only when there are several, with a container level only when the pod has several containers
 - A Kubernetes Logs **Source** covers every **Workload** in its namespace
+- In both Kubernetes **Source Types**, a Job, pod or container level with exactly one child folds into its parent: a **Workload** with one pod of one container opens its **Log Stream** directly. The folded level's details (e.g. **Pod Status**) move to the row that stands in for it; in Kubernetes Files a folded pod's details go only in its **Source**'s tooltip
 - Kubernetes Files and Kubernetes Logs are separate **Source Types**, even though both point at a cluster
 - A **Log Stream** belongs to one container of one pod of one **Workload**
 
