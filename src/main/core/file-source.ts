@@ -54,4 +54,9 @@ export interface FileSource {
   stat(path: SourcePath): Promise<FileStat>
   /** The bytes in `range`: fewer when it runs past the end of the file, none when it starts at the end or beyond. */
   read(path: SourcePath, range: ByteRange): Promise<Uint8Array>
+  /**
+   * The only child of a folder, when it's folded into it (a Kubernetes Files Source's root, for its Workload's one
+   * pod): the folder then shows that child's children in its place. Left out by Source Types that fold nothing.
+   */
+  foldedChild?(path: SourcePath): Promise<FileEntry | undefined>
 }

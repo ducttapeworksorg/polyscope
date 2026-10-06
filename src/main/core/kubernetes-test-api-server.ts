@@ -1,9 +1,11 @@
 // Test support: a stand-in for a Kubernetes API server, just enough of one to connect a Kubernetes Logs Source to
 // and read and follow its one log, over TLS with a certificate from the private test CA. Its namespace `shop` holds
 // an ownerless pod `counter`; in `locked`, listing pods is denied the way RBAC denies it; `crashing` holds a pod `crasher`
-// whose restarted containers' previous runs Kubernetes has removed. Given a token, it turns away requests that don't bear it.
+// whose restarted containers' previous runs Kubernetes has removed; `files` holds the Deployments of `filesDeployments`, for
+// a Kubernetes Files Source's tree (it can't exec into their pods). Given a token, it turns away requests that don't bear it.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { vi } from 'vitest'
 import { startTlsFront } from './test-network'
 
 /** What `counter` logs, with when, a second apart: `line 1` to `line 3`, then `line 4` while it's followed. */
@@ -42,6 +44,45 @@ const crasher = {
   }
 }
 
+/** A pod of a ReplicaSet in `files`, its containers named, all running or (`crashing`) all crash-looping. */
+const filesPod = (name: string, replicaSet: string, containers: string[], { crashing = false, sidecar = '' } = {}) => ({
+  metadata: { name, uid: name, ownerReferences: [{ kind: 'ReplicaSet', name: replicaSet, uid: replicaSet, controller: true }] },
+  spec: {
+    containers: containers.map((container) => ({ name: container })),
+    ...(sidecar && { initContainers: [{ name: sidecar, restartPolicy: 'Always' }] })
+  },
+  status: {
+    phase: 'Running',
+    ...(sidecar && { initContainerStatuses: [{ name: sidecar, image: 'busybox', imageID: '', ready: true, restartCount: 0, state: { running: {} } }] }),
+    containerStatuses: containers.map((container) => ({
+      name: container,
+      image: 'busybox',
+      imageID: '',
+      ready: !crashing,
+      restartCount: crashing ? 2 : 0,
+      state: crashing ? { waiting: { reason: 'CrashLoopBackOff' } } : { running: {} },
+      ...(crashing && { lastState: { terminated: { exitCode: 1, reason: 'Error' } } })
+    }))
+  }
+})
+
+/**
+ * The Deployments in `files`, each with one ReplicaSet, and their pods: `solo` has one pod of one container, crash-looping;
+ * `pair` one pod with a main container and a sidecar; `duo` two pods.
+ */
+export const filesDeployments = {
+  solo: [filesPod('solo-7d9f-abcde', 'solo-7d9f', ['app'], { crashing: true })],
+  pair: [filesPod('pair-5c4b-fghij', 'pair-5c4b', ['app'], { sidecar: 'proxy' })],
+  duo: [filesPod('duo-6a2e-klmno', 'duo-6a2e', ['app']), filesPod('duo-6a2e-pqrst', 'duo-6a2e', ['app'])]
+}
+
+const filesPods = Object.values(filesDeployments).flat()
+
+const filesReplicaSets = Object.entries(filesDeployments).map(([deployment, [pod]]) => {
+  const name = pod!.metadata.ownerReferences[0]!.name
+  return { metadata: { name, uid: name, ownerReferences: [{ kind: 'Deployment', name: deployment, uid: deployment, controller: true }] } }
+})
+
 const json = (response: ServerResponse, status: number, body: unknown) =>
   response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
 
@@ -77,7 +118,46 @@ function respond(request: IncomingMessage, response: ServerResponse, token: stri
     const previous = url.searchParams.get('previous') === 'true'
     return response.writeHead(200, { 'content-type': 'text/plain' }).end(previous ? removedRunMessage(runtime) : `${removedRunMessage(runtime)}\n`)
   }
+  if (namespace === 'files') {
+    if (rest === '/pods') return json(response, 200, { kind: 'PodList', apiVersion: 'v1', metadata: {}, items: filesPods })
+    if (rest === '/replicasets') return json(response, 200, { kind: 'ReplicaSetList', apiVersion: 'apps/v1', metadata: {}, items: filesReplicaSets })
+    const pod = filesPods.find((p) => rest === `/pods/${p.metadata.name}`)
+    if (pod) return json(response, 200, { kind: 'Pod', apiVersion: 'v1', ...pod })
+    const deployment = Object.keys(filesDeployments).find((name) => rest === `/deployments/${name}`)
+    if (deployment) return json(response, 200, { kind: 'Deployment', apiVersion: 'apps/v1', metadata: { name: deployment, uid: deployment } })
+    if (rest.startsWith('/pods/') || rest.startsWith('/deployments/')) return json(response, 404, { kind: 'Status', code: 404, reason: 'NotFound', message: 'not found' })
+  }
   return json(response, 200, { kind: 'List', apiVersion: 'v1', metadata: {}, items: [] })
+}
+
+/** A kubeconfig whose context `fake` points at the stand-in API server at `server`, through `proxyUrl` if given. */
+export const standInCluster = (server: string, caPath: string, proxyUrl?: string) =>
+  [
+    'apiVersion: v1',
+    'kind: Config',
+    'current-context: fake',
+    'clusters:',
+    '- name: fake',
+    '  cluster:',
+    `    server: ${server}`,
+    `    certificate-authority: ${JSON.stringify(caPath)}`,
+    // The stand-in's certificate is for localhost.
+    '    tls-server-name: localhost',
+    ...(proxyUrl ? [`    proxy-url: ${proxyUrl}`] : []),
+    'users:',
+    '- name: fake',
+    '  user:',
+    '    token: not-a-real-token',
+    'contexts:',
+    '- name: fake',
+    '  context:',
+    '    cluster: fake',
+    '    user: fake'
+  ].join('\n')
+
+/** Keeps the proxy settings of wherever the tests run out of the way. */
+export const ignoreAmbientProxy = () => {
+  for (const name of ['HTTPS_PROXY', 'https_proxy', 'NO_PROXY', 'no_proxy']) vi.stubEnv(name, '')
 }
 
 /**

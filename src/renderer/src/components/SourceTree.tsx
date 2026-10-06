@@ -15,6 +15,7 @@ import type {
   ContainerRole,
   EntryNode,
   Environment,
+  FoldedNode,
   LogNode,
   PodNode,
   PodStatus,
@@ -85,18 +86,32 @@ type ShownNode = EntryNode | LogNode
 
 const isLogNode = (node: ShownNode): node is LogNode => node.kind !== 'folder' && node.kind !== 'file'
 
-type Listing = { state: 'loading' } | { state: 'loaded'; nodes: ShownNode[]; more?: More } | { state: 'failed'; message: string }
+/** A listing once loaded, or once it failed, keeps the level folded into its node, if any (see FoldedNode). */
+type Listing =
+  | { state: 'loading' }
+  | { state: 'loaded'; nodes: ShownNode[]; more?: More; folded?: FoldedNode }
+  | { state: 'failed'; message: string; folded?: FoldedNode }
 
 /** A page of listed nodes as a listing, or a failed one if it's an error node; `before` are the pages loaded already. */
 function listingOf(page: TreeNode[], before: ShownNode[] = []): Listing {
+  const folded = page.find((n) => n.kind === 'folded')
+  const withFolded = folded && { folded }
   const failure = page.find((n) => n.kind === 'error')
-  if (failure) return { state: 'failed', message: describeFailure(failure) }
+  if (failure) return { state: 'failed', message: describeFailure(failure), ...withFolded }
   const more = page.find((n) => n.kind === 'more')
-  const entries = [...before, ...page.filter((n): n is ShownNode => n.kind !== 'error' && n.kind !== 'more')]
+  const entries = [...before, ...page.filter((n): n is ShownNode => n.kind !== 'error' && n.kind !== 'more' && n.kind !== 'folded')]
   // Each page comes folders first; joined, a later page's folders still go ahead of every file.
   const nodes = [...entries.filter((n) => n.kind === 'folder'), ...entries.filter((n) => n.kind !== 'folder')]
-  return more ? { state: 'loaded', nodes, more: { cursor: more.cursor, state: 'idle' } } : { state: 'loaded', nodes }
+  const moreOf = more && { more: { cursor: more.cursor, state: 'idle' } as const }
+  return { state: 'loaded', nodes, ...moreOf, ...withFolded }
 }
+
+/** The level folded into a listing, null if none is; undefined while it's loading, or if it failed before telling. */
+const foldedOf = (listing: Listing | undefined) =>
+  !listing || listing.state === 'loading' ? undefined
+  : listing.folded ? listing.folded
+  : listing.state === 'failed' ? undefined
+  : null
 
 interface RowProps {
   path: SourcePath
@@ -154,6 +169,20 @@ export function SourceTree(props: Props) {
     setListings(new Map())
   }, [connection.state])
 
+  // A root that folds in another level than before (a Workload's one pod replaced, say) collapses everything below
+  // it: their paths went through the level it folded in.
+  const rootFolded = foldedOf(listings.get(''))
+  const rootFoldedPath = rootFolded === undefined ? undefined : (rootFolded?.path ?? '')
+  const lastRootFolded = useRef(rootFoldedPath)
+  useEffect(() => {
+    if (rootFoldedPath === undefined) return
+    const before = lastRootFolded.current
+    lastRootFolded.current = rootFoldedPath
+    if (before === undefined || before === rootFoldedPath) return
+    setExpanded((prev) => new Set([...prev].filter((path) => path === '')))
+    setListings((prev) => new Map([...prev].filter(([path]) => path === '')))
+  }, [rootFoldedPath])
+
   const setListing = (path: SourcePath, listing: Listing) => setListings((prev) => new Map(prev).set(path, listing))
 
   const load = (path: SourcePath) => {
@@ -161,7 +190,13 @@ export function SourceTree(props: Props) {
     const settle = (listing: Listing) => loadedIn === generation.current && setListing(path, listing)
     setListing(path, { state: 'loading' })
     core.expand(source.id, path).then(
-      (nodes) => settle(listingOf(nodes)),
+      (nodes) => {
+        settle(listingOf(nodes))
+        // The pod folded into the root is gone: the root lists what's there now instead.
+        const inFolded = rootFolded && path.startsWith(`${rootFolded.path}/`)
+        const podGone = nodes.some((n) => n.kind === 'error' && n.code === 'POD_GONE')
+        if (inFolded && podGone && loadedIn === generation.current) load('')
+      },
       (error) => settle({ state: 'failed', message: describeError(error) })
     )
   }
@@ -288,11 +323,14 @@ export function SourceTree(props: Props) {
   /** Where the entry really is and, when known, exactly when it was last modified; for a pod, how it's doing. */
   const tooltip = (node: ShownNode) => {
     const where = uiFor(source.type).fullPath(source, node.path)
-    if (node.kind === 'pod') return [where, ...podStatusLines(node.status)].join('\n')
-    if ('kubernetes' in node && node.kubernetes?.kind === 'pod') return [where, ...podStatusLines(node.kubernetes.status)].join('\n')
+    if (node.kind === 'pod') return podTooltip(node.path, node.status)
+    if ('kubernetes' in node && node.kubernetes?.kind === 'pod') return podTooltip(node.path, node.kubernetes.status)
     if (!('modifiedTime' in node) || node.modifiedTime === undefined) return where
     return `${where}\n${t('tree.modified', { time: formatDateTime(node.modifiedTime) })}`
   }
+
+  /** Where a pod's folder or node is, and how the pod is doing. */
+  const podTooltip = (path: SourcePath, status: PodStatus) => [uiFor(source.type).fullPath(source, path), ...podStatusLines(status)].join('\n')
 
   /** A pod's status, and when and why it last restarted if it has. */
   const podStatusLines = ({ reason, restarts, lastRestart, lastTerminationReason }: PodStatus) => [
@@ -381,7 +419,7 @@ export function SourceTree(props: Props) {
 
   /** What an empty listing says: a namespace or node of a Log Source has no folders to be empty. */
   const emptyNote = (path: SourcePath) =>
-    source.type === 'kubernetesFiles' && !path ? 'tree.noPods'
+    source.type === 'kubernetesFiles' && !path && !rootFolded ? 'tree.noPods'
     : source.type !== 'kubernetesLogs' ? 'tree.emptyFolder'
     : path ? 'tree.emptyLogNode'
     : 'tree.emptyNamespace'
@@ -529,6 +567,8 @@ export function SourceTree(props: Props) {
 
   // Rendered ahead of the Source's own row, so that row knows whether the selected one is among them.
   const children = connected && expanded.has('') ? renderChildren('', 1) : null
+  // A level folded into the root, like a Workload's one pod, has no row: the Source's tooltip tells of it instead.
+  const foldedTooltip = connected && rootFolded?.kubernetes?.kind === 'pod' ? podTooltip(rootFolded.path, rootFolded.kubernetes.status) : undefined
 
   return (
     <div {...treeProps} role="tree" aria-label={source.name} className={`source-tree ${treeProps?.className ?? ''}`}>
@@ -544,7 +584,7 @@ export function SourceTree(props: Props) {
         actions: actionButtons,
         labelledBy: [`${id}-label`, tlsOff && `${id}-tls`, environment && `${id}-badge`].filter(Boolean).join(' '),
         className: `tree-row--source ${connectError ? 'is-error' : ''}`,
-        extra: { ...sourceRowProps, title: connectError ?? undefined }
+        extra: { ...sourceRowProps, title: connectError ?? foldedTooltip }
       })}
       {children}
     </div>
