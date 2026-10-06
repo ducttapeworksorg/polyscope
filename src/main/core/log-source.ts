@@ -52,6 +52,7 @@ export interface LogSource {
   /**
    * The nodes under a node: groups under the root, then down through Workloads and pods to containers,
    * which have none. A pod lists its containers in its own order; everything else comes in no particular order.
+   * A pod with exactly one container carries it folded in as its `container`, and still lists it as its child.
    * Previous Logs aren't listed: they're read through their containers' paths.
    * Fails with NOT_FOUND for a path that isn't in the tree, NOT_A_FOLDER for a log's.
    */

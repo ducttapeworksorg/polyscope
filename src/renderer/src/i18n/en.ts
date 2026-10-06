@@ -127,6 +127,8 @@ export const en = {
   'pod.restarts': 'Restarts: {count}',
   'pod.lastRestart': 'Last restart: {time}',
   'pod.lastTermination': 'Last termination reason: {reason}',
+  'pod.container': 'Container: {name}',
+  'pod.containerWithRole': 'Container: {name} ({role})',
   'workload.readyCount.tooltip': '{ready} of {desired} pods ready',
 
   'sourceActions.refresh': 'Refresh',
