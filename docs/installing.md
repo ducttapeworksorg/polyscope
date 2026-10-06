@@ -83,7 +83,7 @@ Polyscope also comes as an extension for VS Code 1.100 or later and for editors 
 
 VSCodium, Cursor, Windsurf and other editors that use [Open VSX](https://open-vsx.org/extension/ducttapeworks/polyscope) install it from their **Extensions** view: search for **Polyscope**. They update it too. To try pre-releases, choose **Switch to Pre-Release Version** on its page in the **Extensions** view.
 
-VS Code's own marketplace doesn't have it yet, so in VS Code you install the release's `polyscope-<version>.vsix` by hand, and again for each new release. The file is with each release's other downloads:
+VS Code installs it from its **Extensions** view too, from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=ducttapeworks.polyscope), and updates it. The Marketplace only has releases, not pre-releases, so to try a pre-release in VS Code, install its `polyscope-<version>.vsix` by hand. The file is with each release's other downloads, and any editor can install it this way:
 
 - In the editor, open the **Extensions** view, choose **…** at its top, then **Install from VSIX…**, and pick the downloaded file.
 - Or, from a terminal: `code --install-extension polyscope-<version>.vsix` (`codium`, `cursor` or `windsurf` in those editors).
