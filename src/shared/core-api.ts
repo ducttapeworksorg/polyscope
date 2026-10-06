@@ -261,7 +261,7 @@ export const workloadKinds: readonly WorkloadKind[] = ['Deployment', 'StatefulSe
 /**
  * A node in a Log Source's tree. Its root holds one group per kind of Workload that has any; groups hold
  * Workloads (or, for Pods, the pods themselves), a CronJob holds its Jobs, and the rest hold their pods,
- * which hold their containers: the Log Streams.
+ * which hold their containers: the Log Streams. A pod with one container carries it folded in (see its `container`).
  */
 export type LogNode =
   | { kind: 'group'; workloadKind: WorkloadKind; name: string; path: SourcePath }
@@ -280,16 +280,13 @@ export type LogNode =
       status: PodStatus
       /** How many containers the pod has, init and sidecar containers included. */
       containerCount: number
+      /**
+       * The pod's only container, when it has exactly one, folded into it: the pod's row opens that container's
+       * Log Stream rather than listing it. The container is still the pod's child, under its path.
+       */
+      container?: ContainerNode
     }
-  | {
-      kind: 'container'
-      name: string
-      path: SourcePath
-      /** Set for an init container, or a sidecar (an init container that keeps running); left out for the pod's main containers. */
-      role?: ContainerRole
-      /** How many times the container has restarted; left out until it has. Its log view then offers its Previous Log. */
-      restarts?: number
-    }
+  | ContainerNode
 
 export type ContainerRole = 'init' | 'sidecar'
 
@@ -319,7 +316,15 @@ export interface PodStatus {
 export type PodNode = Extract<LogNode, { kind: 'pod' }>
 
 /** A container in a Log Source's tree: what opens as a Log Stream. */
-export type ContainerNode = Extract<LogNode, { kind: 'container' }>
+export interface ContainerNode {
+  kind: 'container'
+  name: string
+  path: SourcePath
+  /** Set for an init container, or a sidecar (an init container that keeps running); left out for the pod's main containers. */
+  role?: ContainerRole
+  /** How many times the container has restarted; left out until it has. Its log view then offers its Previous Log. */
+  restarts?: number
+}
 
 export type TreeNode = EntryNode | LogNode | ErrorNode | MoreNode | FoldedNode
 

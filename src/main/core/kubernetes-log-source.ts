@@ -1,7 +1,7 @@
 import { request as httpRequest, type IncomingMessage, type RequestOptions } from 'node:http'
 import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
 import { ApiException, type KubeConfig, type V1ObjectMeta, type V1Pod } from '@kubernetes/client-node'
-import type { ContainerRole, LogNode, SourcePath, WorkloadKind } from '@shared/core-api'
+import type { ContainerNode, ContainerRole, LogNode, SourcePath, WorkloadKind } from '@shared/core-api'
 import { CoreError } from './core-error'
 import { apisFor, asCoreError, call, checkNamespace, controllerOf, podsOfWorkload, serverMessage, type PodOwnerKind } from './kubernetes-api'
 import type { LogConnection, LogFollowOptions, LogReadOptions, LogSource, LogStreamInfo } from './log-source'
@@ -54,6 +54,7 @@ const join = (parent: SourcePath, name: string) => (parent ? `${parent}/${name}`
 /**
  * The Workloads, pods and containers of one namespace, as a Log Source. Paths start with a group
  * (`deployments`, `cronjobs`…), then name each object on the way down, e.g. `cronjobs/nightly/<job>/<pod>/<container>`.
+ * A pod with one container carries it folded in, its path keeping the container.
  */
 export function createKubernetesLogSource(config: KubeConfig, namespace: string): LogSource & { checkNamespace(): Promise<void> } {
   const { core, apps, batch } = apisFor(config)
@@ -99,10 +100,25 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     return jobs.items.filter((job) => controllerOf(job.metadata)?.uid === owner.metadata?.uid)
   }
 
+  /** A pod's containers, init and sidecar containers first as they start first. */
+  const containerNodes = (parent: SourcePath, pod: V1Pod): ContainerNode[] => {
+    const node = (name: string, role?: ContainerRole): ContainerNode => {
+      const restarts = restartsOf(pod, name)
+      return { kind: 'container', name, path: join(parent, name), ...(role && { role }), ...(restarts && { restarts }) }
+    }
+    return [
+      ...(pod.spec?.initContainers ?? []).map((c) => node(c.name, isSidecar(c) ? 'sidecar' : 'init')),
+      ...(pod.spec?.containers ?? []).map((c) => node(c.name))
+    ]
+  }
+
+  /** A pod's node, its only container folded in if it has just the one. */
   const podNode = (parent: SourcePath, pod: V1Pod): LogNode => {
     const name = pod.metadata?.name ?? ''
-    const containerCount = (pod.spec?.initContainers?.length ?? 0) + (pod.spec?.containers.length ?? 0)
-    return { kind: 'pod', name, path: join(parent, name), status: podStatusOf(pod), containerCount }
+    const path = join(parent, name)
+    const containers = containerNodes(path, pod)
+    const folded = containers.length === 1 && { container: containers[0]! }
+    return { kind: 'pod', name, path, status: podStatusOf(pod), containerCount: containers.length, ...folded }
   }
 
   const podNodes = (parent: SourcePath, pods: V1Pod[]): LogNode[] => pods.filter((pod) => pod.metadata?.name).map((pod) => podNode(parent, pod))
@@ -112,18 +128,6 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     const name = workload.metadata?.name ?? ''
     const readyCount = readyCountOf(kind, workload)
     return { kind: 'workload', workloadKind: kind, name, path: join(parent, name), ...(readyCount && { readyCount }) }
-  }
-
-  /** A pod's containers, init and sidecar containers first as they start first. */
-  const containerNodes = (parent: SourcePath, pod: V1Pod): LogNode[] => {
-    const node = (name: string, role?: ContainerRole): LogNode => {
-      const restarts = restartsOf(pod, name)
-      return { kind: 'container', name, path: join(parent, name), ...(role && { role }), ...(restarts && { restarts }) }
-    }
-    return [
-      ...(pod.spec?.initContainers ?? []).map((c) => node(c.name, isSidecar(c) ? 'sidecar' : 'init')),
-      ...(pod.spec?.containers ?? []).map((c) => node(c.name))
-    ]
   }
 
   /** The pod named `name` among `pods`, or NOT_FOUND. */

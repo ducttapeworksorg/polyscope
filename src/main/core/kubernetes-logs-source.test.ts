@@ -393,6 +393,65 @@ describe('a crash-looping container, the run before its last removed by Kubernet
   })
 })
 
+describe('a pod with one container', () => {
+  let apiServer: Awaited<ReturnType<typeof startTestApiServer>>
+  let core: Core
+  let sourceIds: string[]
+
+  beforeEach(async () => {
+    apiServer = await startTestApiServer()
+    ignoreAmbientProxy()
+    await kubeconfigFiles(standInCluster(apiServer.url, apiServer.caPath))
+    core = createCore()
+    sourceIds = []
+  })
+
+  afterEach(async () => {
+    await Promise.all(sourceIds.map((id) => core.disconnect(id)))
+    await apiServer.close()
+  })
+
+  /** A connected Source of the stand-in's namespace. */
+  const connected = async (namespace: string) => {
+    const { id } = await core.addSource(offline({ context: 'fake', namespace }))
+    sourceIds.push(id)
+    await core.connect(id)
+    return id
+  }
+
+  it('carries that container, folded into it, with the container still listed under its path', async () => {
+    const sourceId = await connected('shop')
+    const counter = { kind: 'container', name: 'counter', path: 'pods/counter/counter' }
+
+    expect(await core.expand(sourceId, 'pods')).toEqual([expect.objectContaining({ kind: 'pod', path: 'pods/counter', container: counter })])
+    expect(await core.expand(sourceId, 'pods/counter')).toEqual([counter])
+    expect(await core.openLog(sourceId, counter.path)).toMatchObject({ path: counter.path, name: 'counter' })
+  })
+
+  it('carries the container’s restarts, as its Pod Status does', async () => {
+    const sourceId = await connected('files')
+    const [pod] = await core.expand(sourceId, 'deployments/solo')
+
+    expect(pod).toMatchObject({
+      kind: 'pod',
+      status: { restarts: 2 },
+      containerCount: 1,
+      container: { kind: 'container', name: 'app', path: 'deployments/solo/solo-7d9f-abcde/app', restarts: 2 }
+    })
+  })
+
+  it('is not folded with a sidecar, nor are pods of several containers', async () => {
+    const sourceId = await connected('files')
+    const [pair] = await core.expand(sourceId, 'deployments/pair')
+    const [crasher] = await core.expand(await connected('crashing'), 'pods')
+
+    expect(pair).toMatchObject({ kind: 'pod', containerCount: 2 })
+    expect(pair).not.toHaveProperty('container')
+    expect(crasher).toMatchObject({ kind: 'pod', containerCount: 3 })
+    expect(crasher).not.toHaveProperty('container')
+  })
+})
+
 /** Nodes as `kind name`, with a container's role after it, e.g. `container proxy (sidecar)`. */
 const described = (nodes: TreeNode[]) =>
   nodes.map((node) => {
@@ -494,12 +553,11 @@ describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () 
     it('lists only the pods no Workload owns under Pods', async () => {
       await core.connect(sourceId)
 
+      const container = { kind: 'container', name: 'counter', path: 'pods/counter/counter' }
       expect(await core.expand(sourceId, 'pods')).toEqual([
-        { kind: 'pod', name: 'counter', path: 'pods/counter', status: { reason: 'Running', health: 'healthy', restarts: 0 }, containerCount: 1 }
+        { kind: 'pod', name: 'counter', path: 'pods/counter', status: { reason: 'Running', health: 'healthy', restarts: 0 }, containerCount: 1, container }
       ])
-      expect(await core.expand(sourceId, 'pods/counter')).toEqual([
-        { kind: 'container', name: 'counter', path: 'pods/counter/counter' }
-      ])
+      expect(await core.expand(sourceId, 'pods/counter')).toEqual([container])
     })
 
     it('gives each of the other Workloads a Ready Count, but not Jobs or CronJobs', async () => {

@@ -65,6 +65,8 @@ The tree groups the namespace's Workloads: **Deployments**, **StatefulSets**, **
 - **init** and **sidecar** badges on the containers that start first;
 - a restart count on a container that has restarted, with why it last ended (`Error`, `OOMKilled`…) in its pod's tooltip.
 
+A pod with only one container doesn't expand: clicking the pod opens that container's log, and its tooltip names the container. If a container is added to the pod later, say a sidecar, choose **Refresh** on the pod to expand it.
+
 Click a container to read its log, or turn on **Follow** to watch it live. Once a container has restarted, turn on **Previous** in its log's toolbar to read its **Previous Log**, the log of its run before the last restart, and off again to go back. See [Reading files and logs](reading.md#logs).
 
 ![A crashing container's Previous Log, switched to with Previous in the log's toolbar](images/previous-log.png)

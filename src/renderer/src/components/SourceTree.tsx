@@ -192,6 +192,11 @@ export function SourceTree(props: Props) {
     core.expand(source.id, path).then(
       (nodes) => {
         settle(listingOf(nodes))
+        // A pod listed folded is just as it's listed now: what a Refresh of its own row listed before is out of date.
+        const folded = nodes.filter((n) => n.kind === 'pod' && n.container).map((n) => n.path)
+        if (folded.length > 0 && loadedIn === generation.current) {
+          setListings((prev) => new Map([...prev].filter(([listed]) => !folded.includes(listed))))
+        }
         // The pod folded into the root is gone: the root lists what's there now instead.
         const inFolded = rootFolded && path.startsWith(`${rootFolded.path}/`)
         const podGone = nodes.some((n) => n.kind === 'error' && n.code === 'POD_GONE')
@@ -351,9 +356,9 @@ export function SourceTree(props: Props) {
   }
 
   /** A pod's status dot, coloured by its health, after its restart badge if it has one container and that has restarted. */
-  const podIndicators = ({ status, containerCount }: Pick<PodNode, 'status' | 'containerCount'>) => (
+  const podIndicators = (status: PodStatus, oneContainer: boolean) => (
     <span className="tree-row__indicators">
-      {containerCount === 1 && status.restarts > 0 && restartBadge(status.restarts)}
+      {oneContainer && status.restarts > 0 && restartBadge(status.restarts)}
       <span className={`pod-status pod-status--${status.health}`} role="img" aria-label={t('pod.status', { reason: status.reason })} />
     </span>
   )
@@ -367,13 +372,24 @@ export function SourceTree(props: Props) {
     </span>
   )
 
-  /** Whether the pod a container is in has other containers, going by the pod's listed node. */
+  /** Whether the pod a container is in has other containers, going by the containers listed under the pod. */
   const inSeveralContainers = (container: SourcePath) => {
-    const pod = container.slice(0, container.lastIndexOf('/'))
-    const listing = listings.get(pod.slice(0, Math.max(0, pod.lastIndexOf('/'))))
-    const node = listing?.state === 'loaded' ? listing.nodes.find((n) => n.path === pod) : undefined
-    return node?.kind === 'pod' && node.containerCount > 1
+    const listing = listings.get(container.slice(0, container.lastIndexOf('/')))
+    return listing?.state === 'loaded' && listing.nodes.length > 1
   }
+
+  /**
+   * The container a pod's row opens in its place, if the pod is folded: its only container, as listed with the pod.
+   * A Refresh of the pod's own row that finds more unfolds the pod in place.
+   */
+  const foldedContainer = (pod: PodNode): ContainerNode | undefined => {
+    const listing = listings.get(pod.path)
+    return listing?.state === 'loaded' && listing.nodes.length > 1 ? undefined : pod.container
+  }
+
+  /** What a folded pod's tooltip adds: the container its row opens, and that container's role if it has one. */
+  const containerLine = ({ name, role }: ContainerNode) =>
+    role ? t('pod.containerWithRole', { name, role: t(`containerRole.${role}`) }) : t('pod.container', { name })
 
   /** A container's role, labelled after its name. */
   const roleBadge = (role: ContainerRole | undefined) =>
@@ -402,8 +418,23 @@ export function SourceTree(props: Props) {
         status: restarts > 0 ? <span className="tree-row__indicators">{restartBadge(restarts)}</span> : undefined
       })
     }
+    const folded = node.kind === 'pod' ? foldedContainer(node) : undefined
+    if (node.kind === 'pod' && folded) {
+      // A pod with one container opens its Log Stream, as that container's row would; Refresh can unfold it.
+      return row({
+        ...common,
+        label: node.name,
+        folder: false,
+        icon: <KubernetesIcon workloadKind="Pod" />,
+        onActivate: () => onOpenLog(source, folded),
+        onDoubleActivate: () => onOpenLog(source, folded, { pinned: true }),
+        menuItems: [refresh],
+        status: podIndicators(node.status, true),
+        extra: { title: [tooltip(node), containerLine(folded)].join('\n') }
+      })
+    }
     const status =
-      node.kind === 'pod' ? podIndicators(node)
+      node.kind === 'pod' ? podIndicators(node.status, false)
       : node.kind === 'workload' && node.readyCount ? readyCount(node.readyCount)
       : undefined
     return row({
@@ -450,7 +481,8 @@ export function SourceTree(props: Props) {
     const rows = listing.nodes.flatMap((node) => {
       if (isLogNode(node)) {
         const self = logRow(node, depth)
-        return node.kind !== 'container' && expanded.has(node.path) ? [self, ...renderChildren(node.path, depth + 1)] : [self]
+        const leaf = node.kind === 'container' || (node.kind === 'pod' && foldedContainer(node))
+        return !leaf && expanded.has(node.path) ? [self, ...renderChildren(node.path, depth + 1)] : [self]
       }
       if (node.problem) {
         const reason = describeFailure(node.problem)
@@ -481,7 +513,7 @@ export function SourceTree(props: Props) {
           : kubernetes?.kind === 'container' ? <KubernetesIcon container role={kubernetes.role} />
           : <MaterialIcon icon={node.icon} theme={theme} open={isFolder && expanded.has(node.path)} />,
         badge: kubernetes?.kind === 'container' ? roleBadge(kubernetes.role) : undefined,
-        status: kubernetes?.kind === 'pod' ? podIndicators(kubernetes) : undefined,
+        status: kubernetes?.kind === 'pod' ? podIndicators(kubernetes.status, kubernetes.containerCount === 1) : undefined,
         onActivate: () => (isFolder ? toggle(node.path) : onOpenFile(source, node)),
         onDoubleActivate: isFolder ? undefined : () => onOpenFile(source, node, { pinned: true }),
         menuItems:

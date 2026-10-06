@@ -57,6 +57,24 @@ export function describeLogSourceContract(name: string, subject: () => Promise<L
         }
       })
 
+      it('folds a pod’s only container into it, still listing the container under the pod', async () => {
+        const { logSource } = await subject()
+        const pods = (await walk(logSource)).filter((node) => node.kind === 'pod')
+        expect(pods.length).toBeGreaterThan(0)
+        for (const pod of pods) {
+          const containers = await logSource.listChildren(pod.path)
+          expect(pod.containerCount, pod.path).toBe(containers.length)
+          const [only] = containers
+          if (containers.length !== 1 || only?.kind !== 'container') {
+            expect(pod, pod.path).not.toHaveProperty('container')
+            continue
+          }
+          // Not its restarts: the container may restart between the two listings.
+          const { kind, name, path, role } = only
+          expect(pod.container, pod.path).toMatchObject({ kind, name, path, ...(role && { role }) })
+        }
+      })
+
       it('lists the counter container', async () => {
         const { logSource, counter } = await subject()
         const siblings = await logSource.listChildren(parentOf(counter))
