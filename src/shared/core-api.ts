@@ -317,7 +317,7 @@ export interface ReadyCount {
 /** How a pod is doing: as it should, on its way up, in trouble, or neither (going away, or its node out of touch). */
 export type PodHealth = 'healthy' | 'pending' | 'failing' | 'inactive'
 
-/** A pod's health as the tree shows it; see Pod Status in CONTEXT.md. */
+/** A pod's health as the tree shows it; see Pod Status in GLOSSARY.md. */
 export interface PodStatus {
   /** Its phase, or what's wrong with it, the way kubectl puts it: Running, Pending, CrashLoopBackOff, OOMKilled, Terminating… */
   reason: string
