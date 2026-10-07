@@ -115,7 +115,7 @@ It suggests the release the Conventional Commits since the last one call for (`f
 6. tags the release commit on `main`, not on the branch, since rebasing changed its hash, and pushes the tag: `git tag v1.2.3 && git push origin v1.2.3`
 7. watches the release workflow: `gh run watch`
 
-Stop at any step, or merge the pull request on GitHub yourself, and `npm run release` picks up from there: on a branch that ends with a release, it goes on to the pull request, and once that's merged, or on `main` at an untagged version, it tags.
+Stop at any step, or merge the pull request on GitHub yourself, and `npm run release` picks up from there: on a branch that has bumped the version, even with commits after that one, like a fix for CI, it goes on to the pull request, and once that's merged, or on `main` at an untagged version, it tags. It tags the branch's last commit as it landed on `main`, so those later commits are in the release.
 
 The release workflow checks the tag matches `package.json`'s version, then builds the installers on each platform, and the Extension Copy's `polyscope-<version>.vsix` at that same version, and publishes them to GitHub Releases, where installed copies find them. A tag with a pre-release part, like `v1.3.0-beta.1`, is published as a pre-release, which installed copies don't update to.
 
