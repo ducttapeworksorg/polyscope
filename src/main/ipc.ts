@@ -38,6 +38,9 @@ export function registerShellIpc(getWindow: () => BrowserWindow | null, { secret
     pick({ properties: ['openFile'], filters: Array.isArray(filters) ? filters.filter(isFileFilter) : [] })
   )
   ipcMain.handle('shell:secretStorageIsWeak', () => secretStorageIsWeak)
+  ipcMain.handle('shell:copyText', (_event, text: unknown) => {
+    if (typeof text === 'string') clipboard.writeText(text)
+  })
 }
 
 /** "Copy diagnostics": puts the versions, OS and recent app log, redacted, on the clipboard for a GitHub issue. */

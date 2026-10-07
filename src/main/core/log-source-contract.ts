@@ -83,6 +83,7 @@ export function describeLogSourceContract(name: string, subject: () => Promise<L
           const [only] = children
           const field = workload.workloadKind === 'CronJob' ? 'job' : 'pod'
           expect(workload, workload.path).not.toHaveProperty(field === 'job' ? 'pod' : 'job')
+          expect(Boolean(workload.empty), workload.path).toBe(children.length === 0)
           if (children.length !== 1 || !only) {
             expect(workload, workload.path).not.toHaveProperty(field)
             continue

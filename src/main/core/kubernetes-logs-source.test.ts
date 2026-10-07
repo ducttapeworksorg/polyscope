@@ -554,6 +554,20 @@ describe('a Workload with one pod, or a CronJob with one Job', () => {
     expect(named(jobs, 'retried')).not.toHaveProperty('pod')
   })
 
+  it('marks a Workload with no pods, and a CronJob with no Jobs, empty', async () => {
+    const files = await connected('files')
+    const batch = await connected('batch')
+    const deployments = await core.expand(files, 'deployments')
+    const cronJobs = await core.expand(batch, 'cronjobs')
+
+    expect(named(deployments, 'idle')).toMatchObject({ kind: 'workload', path: 'deployments/idle', empty: true })
+    expect(await core.expand(files, 'deployments/idle')).toEqual([])
+    expect(named(cronJobs, 'weekly')).toMatchObject({ kind: 'workload', path: 'cronjobs/weekly', empty: true })
+    for (const node of [named(deployments, 'solo'), named(deployments, 'duo'), named(cronJobs, 'hourly')]) {
+      expect(node).not.toHaveProperty('empty')
+    }
+  })
+
   it('lists the Workloads unfolded when the user may not list their pods', async () => {
     const logSource = createKubernetesLogSource(kubeConfigFor('fake'), 'locked')
     const [web] = await logSource.listChildren('deployments')
@@ -561,6 +575,7 @@ describe('a Workload with one pod, or a CronJob with one Job', () => {
 
     expect(web).toMatchObject({ kind: 'workload', path: 'deployments/web' })
     expect(web).not.toHaveProperty('pod')
+    expect(web).not.toHaveProperty('empty')
     expect(nightly).toMatchObject({ kind: 'workload', path: 'cronjobs/nightly' })
     expect(nightly).not.toHaveProperty('job')
   })

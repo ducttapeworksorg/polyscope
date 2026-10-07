@@ -284,6 +284,11 @@ export interface WorkloadNode {
    * The Workload's row stands in for the pod's; the pod is still its child, under its path.
    */
   pod?: PodNode
+  /**
+   * Set when the Workload had no pods when listed (a CronJob, no Jobs): its row has nothing to expand. Left out when
+   * that isn't known, say if the user may not list pods.
+   */
+  empty?: true
 }
 
 /** A pod in a Log Source's tree. */

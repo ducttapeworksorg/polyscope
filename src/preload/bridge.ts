@@ -14,6 +14,8 @@ export interface PolyscopeBridge {
   secretStorageIsWeak(): Promise<boolean>
   /** Copies the versions, OS and recent app log, with secrets redacted, to the clipboard. */
   copyDiagnostics(): Promise<void>
+  /** Puts text on the clipboard, such as a pod's name. */
+  copyText(text: string): Promise<void>
   /** This copy's version, e.g. `0.1.0`. */
   appVersion(): Promise<string>
   getUpdateStatus(): Promise<UpdateStatus>

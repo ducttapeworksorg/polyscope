@@ -66,6 +66,7 @@ beforeEach(async () => {
     pickFolder: async () => '/picked/folder',
     pickFile: async (filters) => `/picked/${filters[0]?.extensions[0] ?? 'nothing'}`,
     copyDiagnostics: async () => {},
+    copyText: async () => {},
     appVersion: async () => '1.2.3',
     openExtensionSettings: async () => {},
     open: async () => {},
@@ -119,6 +120,15 @@ describe('the host’s own calls over the bridge', () => {
   it('pick folders and files with the host’s dialogs', async () => {
     expect(await bridge.pickFolder()).toBe('/picked/folder')
     expect(await bridge.pickFile([{ name: 'PEM', extensions: ['pem'] }])).toBe('/picked/pem')
+  })
+
+  it('copy text with the host’s clipboard', async () => {
+    const copied: string[] = []
+    shell.copyText = async (text) => void copied.push(text)
+
+    await bridge.copyText('web-7d9f8c6b5-2xkqp')
+
+    expect(copied).toEqual(['web-7d9f8c6b5-2xkqp'])
   })
 
   it('pass open requests to the host', async () => {

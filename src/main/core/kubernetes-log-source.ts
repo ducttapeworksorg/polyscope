@@ -159,7 +159,8 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
 
   /**
    * A Workload's node, with its Ready Count if its kind has one; its only pod folded in if `pods` are its pods and
-   * there's just the one, or for a CronJob, its only Job if `jobs` are its Jobs and there's just the one.
+   * there's just the one, or for a CronJob, its only Job if `jobs` are its Jobs and there's just the one. Marked
+   * empty if those are known and there are none.
    */
   const workloadNode = (
     parent: SourcePath,
@@ -172,8 +173,10 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     const readyCount = readyCountOf(kind, workload)
     const [onlyPod, ...otherPods] = pods?.filter((pod) => pod.metadata?.name) ?? []
     const [onlyJob, ...otherJobs] = jobs?.filter(({ job }) => job.metadata?.name) ?? []
+    const children = kind === 'CronJob' ? jobs : pods
     const folded =
-      onlyJob && otherJobs.length === 0 ? { job: workloadNode(path, 'Job', onlyJob.job, { pods: onlyJob.pods }) }
+      children?.length === 0 ? { empty: true as const }
+      : onlyJob && otherJobs.length === 0 ? { job: workloadNode(path, 'Job', onlyJob.job, { pods: onlyJob.pods }) }
       : onlyPod && otherPods.length === 0 ? { pod: podNode(path, onlyPod) }
       : undefined
     return { kind: 'workload', workloadKind: kind, name, path, ...(readyCount && { readyCount }), ...folded }
