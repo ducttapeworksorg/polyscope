@@ -452,6 +452,129 @@ describe('a pod with one container', () => {
   })
 })
 
+describe('a Workload with one pod, or a CronJob with one Job', () => {
+  let apiServer: Awaited<ReturnType<typeof startTestApiServer>>
+  let core: Core
+  let sourceIds: string[]
+
+  beforeEach(async () => {
+    apiServer = await startTestApiServer()
+    ignoreAmbientProxy()
+    await kubeconfigFiles(standInCluster(apiServer.url, apiServer.caPath))
+    core = createCore()
+    sourceIds = []
+  })
+
+  afterEach(async () => {
+    await Promise.all(sourceIds.map((id) => core.disconnect(id)))
+    await apiServer.close()
+  })
+
+  /** A connected Source of the stand-in's namespace. */
+  const connected = async (namespace: string) => {
+    const { id } = await core.addSource(offline({ context: 'fake', namespace }))
+    sourceIds.push(id)
+    await core.connect(id)
+    return id
+  }
+
+  /** The node named `name` among a listing's. */
+  const named = (nodes: TreeNode[], name: string) => nodes.find((node) => 'name' in node && node.name === name)
+
+  it('carries a Workload’s only pod folded into it, with the pod’s only container folded into that, the paths kept whole', async () => {
+    const sourceId = await connected('files')
+    const solo = named(await core.expand(sourceId, 'deployments'), 'solo')
+    const pod = 'deployments/solo/solo-7d9f-abcde'
+
+    expect(solo).toMatchObject({
+      kind: 'workload',
+      path: 'deployments/solo',
+      pod: { kind: 'pod', name: 'solo-7d9f-abcde', path: pod, status: { restarts: 2 }, container: { kind: 'container', path: `${pod}/app` } }
+    })
+    expect(await core.expand(sourceId, 'deployments/solo')).toEqual([(solo as { pod: unknown }).pod])
+    expect(await core.expand(sourceId, pod)).toEqual([expect.objectContaining({ kind: 'container', path: `${pod}/app` })])
+  })
+
+  it('folds the pod of a Workload whose pod has several containers, but not the containers', async () => {
+    const sourceId = await connected('files')
+    const pair = named(await core.expand(sourceId, 'deployments'), 'pair')
+
+    expect(pair).toMatchObject({ pod: { kind: 'pod', path: 'deployments/pair/pair-5c4b-fghij', containerCount: 2 } })
+    expect((pair as { pod: object }).pod).not.toHaveProperty('container')
+  })
+
+  it('folds no pod into a Workload of several, each pod still folding its only container', async () => {
+    const sourceId = await connected('files')
+    const duo = named(await core.expand(sourceId, 'deployments'), 'duo')
+    const pods = await core.expand(sourceId, 'deployments/duo')
+
+    expect(duo).not.toHaveProperty('pod')
+    expect(pods).toEqual([
+      expect.objectContaining({ kind: 'pod', name: 'duo-6a2e-klmno', container: expect.objectContaining({ name: 'app' }) }),
+      expect.objectContaining({ kind: 'pod', name: 'duo-6a2e-pqrst', container: expect.objectContaining({ name: 'app' }) })
+    ])
+  })
+
+  it('carries a CronJob’s only Job folded into it, that Job’s only pod and container folded in turn', async () => {
+    const sourceId = await connected('batch')
+    const cronJobs = await core.expand(sourceId, 'cronjobs')
+    const job = 'cronjobs/nightly/nightly-1'
+
+    expect(named(cronJobs, 'nightly')).toMatchObject({
+      kind: 'workload',
+      workloadKind: 'CronJob',
+      job: {
+        kind: 'workload',
+        workloadKind: 'Job',
+        path: job,
+        pod: { kind: 'pod', path: `${job}/nightly-1-abcde`, container: { kind: 'container', path: `${job}/nightly-1-abcde/report` } }
+      }
+    })
+    expect(named(cronJobs, 'nightly')).not.toHaveProperty('pod')
+    expect(await core.openLog(sourceId, `${job}/nightly-1-abcde/report`)).toMatchObject({ path: `${job}/nightly-1-abcde/report`, name: 'report' })
+  })
+
+  it('folds no Job into a CronJob of several, each Job still folding its only pod', async () => {
+    const sourceId = await connected('batch')
+    const hourly = named(await core.expand(sourceId, 'cronjobs'), 'hourly')
+    const jobs = await core.expand(sourceId, 'cronjobs/hourly')
+
+    expect(hourly).not.toHaveProperty('job')
+    expect(jobs).toEqual([
+      expect.objectContaining({ kind: 'workload', name: 'hourly-1', pod: expect.objectContaining({ name: 'hourly-1-fghij' }) }),
+      expect.objectContaining({ kind: 'workload', name: 'hourly-2', pod: expect.objectContaining({ name: 'hourly-2-klmno' }) })
+    ])
+  })
+
+  it('folds a Job’s only pod, but not a Job’s several', async () => {
+    const sourceId = await connected('batch')
+    const jobs = await core.expand(sourceId, 'jobs')
+
+    expect(named(jobs, 'migrate')).toMatchObject({ pod: { kind: 'pod', path: 'jobs/migrate/migrate-pqrst' } })
+    expect(named(jobs, 'retried')).not.toHaveProperty('pod')
+  })
+
+  it('lists the Workloads unfolded when the user may not list their pods', async () => {
+    const logSource = createKubernetesLogSource(kubeConfigFor('fake'), 'locked')
+    const [web] = await logSource.listChildren('deployments')
+    const [nightly] = await logSource.listChildren('cronjobs')
+
+    expect(web).toMatchObject({ kind: 'workload', path: 'deployments/web' })
+    expect(web).not.toHaveProperty('pod')
+    expect(nightly).toMatchObject({ kind: 'workload', path: 'cronjobs/nightly' })
+    expect(nightly).not.toHaveProperty('job')
+  })
+
+  it('never folds a group, even of one Workload', async () => {
+    const sourceId = await connected('batch')
+
+    expect(await core.expand(sourceId, '')).toEqual([
+      { kind: 'group', workloadKind: 'CronJob', name: 'cronjobs', path: 'cronjobs' },
+      { kind: 'group', workloadKind: 'Job', name: 'jobs', path: 'jobs' }
+    ])
+  })
+})
+
 /** Nodes as `kind name`, with a container's role after it, e.g. `container proxy (sidecar)`. */
 const described = (nodes: TreeNode[]) =>
   nodes.map((node) => {
@@ -491,12 +614,13 @@ describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () 
       ])
     })
 
-    it('lists Workloads by name, with no ReplicaSets anywhere', async () => {
+    it('lists Workloads by name, with no ReplicaSets anywhere, each carrying its one pod', async () => {
       await core.connect(sourceId)
 
+      const pod = (workload: string) => expect.objectContaining({ kind: 'pod', name: expect.stringMatching(new RegExp(`^${workload}-`)) })
       expect(await core.expand(sourceId, 'deployments')).toEqual([
-        { kind: 'workload', workloadKind: 'Deployment', name: 'crasher', path: 'deployments/crasher', readyCount: { ready: 0, desired: 1 } },
-        { kind: 'workload', workloadKind: 'Deployment', name: 'web', path: 'deployments/web', readyCount: { ready: 1, desired: 1 } }
+        { kind: 'workload', workloadKind: 'Deployment', name: 'crasher', path: 'deployments/crasher', readyCount: { ready: 0, desired: 1 }, pod: pod('crasher') },
+        { kind: 'workload', workloadKind: 'Deployment', name: 'web', path: 'deployments/web', readyCount: { ready: 1, desired: 1 }, pod: pod('web') }
       ])
       expect(described(await core.expand(sourceId, 'statefulsets'))).toEqual(['workload db'])
       expect(described(await core.expand(sourceId, 'daemonsets'))).toEqual(['workload agent'])
@@ -529,15 +653,18 @@ describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () 
       expect(described(await core.expand(sourceId, pod.path))).toEqual(['container agent'])
     })
 
-    it('lists a CronJob’s Jobs, then their pods', async () => {
+    it('lists a CronJob’s Jobs, then their pods, folding the CronJob’s one Job and its one pod in', async () => {
       await core.connect(sourceId)
 
-      expect(await core.expand(sourceId, 'cronjobs')).toEqual([
-        { kind: 'workload', workloadKind: 'CronJob', name: 'nightly', path: 'cronjobs/nightly' }
-      ])
-      expect(await core.expand(sourceId, 'cronjobs/nightly')).toEqual([
-        { kind: 'workload', workloadKind: 'Job', name: 'nightly-manual', path: 'cronjobs/nightly/nightly-manual' }
-      ])
+      const job = {
+        kind: 'workload',
+        workloadKind: 'Job',
+        name: 'nightly-manual',
+        path: 'cronjobs/nightly/nightly-manual',
+        pod: expect.objectContaining({ kind: 'pod', container: expect.objectContaining({ name: 'report' }) })
+      }
+      expect(await core.expand(sourceId, 'cronjobs')).toEqual([{ kind: 'workload', workloadKind: 'CronJob', name: 'nightly', path: 'cronjobs/nightly', job }])
+      expect(await core.expand(sourceId, 'cronjobs/nightly')).toEqual([job])
       const pod = await onlyPod(core, sourceId, 'cronjobs/nightly/nightly-manual')
       expect(described(await core.expand(sourceId, pod.path))).toEqual(['container report'])
     })

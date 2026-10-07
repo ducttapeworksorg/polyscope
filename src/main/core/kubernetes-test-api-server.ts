@@ -1,8 +1,10 @@
 // Test support: a stand-in for a Kubernetes API server, just enough of one to connect a Kubernetes Logs Source to
 // and read and follow its one log, over TLS with a certificate from the private test CA. Its namespace `shop` holds
-// an ownerless pod `counter`; in `locked`, listing pods is denied the way RBAC denies it; `crashing` holds a pod `crasher`
+// an ownerless pod `counter`; in `locked`, which holds a Deployment `web` and a CronJob `nightly`, listing pods is
+// denied the way RBAC denies it; `crashing` holds a pod `crasher`
 // whose restarted containers' previous runs Kubernetes has removed; `files` holds the Deployments of `filesDeployments`, for
-// a Kubernetes Files Source's tree (it can't exec into their pods). Given a token, it turns away requests that don't bear it.
+// a Kubernetes Files Source's tree (it can't exec into their pods); `batch` holds the CronJobs and Jobs of `batchJobs`.
+// Given a token, it turns away requests that don't bear it.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { vi } from 'vitest'
@@ -83,6 +85,40 @@ const filesReplicaSets = Object.entries(filesDeployments).map(([deployment, [pod
   return { metadata: { name, uid: name, ownerReferences: [{ kind: 'Deployment', name: deployment, uid: deployment, controller: true }] } }
 })
 
+/** A completed pod of a Job, with one container, which logged `done`. */
+const jobPod = (name: string, job: string, container: string) => ({
+  metadata: { name, uid: name, ownerReferences: [{ kind: 'Job', name: job, uid: job, controller: true }] },
+  spec: { restartPolicy: 'Never', containers: [{ name: container }] },
+  status: {
+    phase: 'Succeeded',
+    containerStatuses: [
+      { name: container, image: 'busybox', imageID: '', ready: false, restartCount: 0, state: { terminated: { exitCode: 0, reason: 'Completed' } } }
+    ]
+  }
+})
+
+/**
+ * The Jobs in `batch`, by the CronJob that owns them ('' for none), and their pods: `nightly` has run once, `hourly` twice;
+ * `migrate` has one pod, `retried` two.
+ */
+export const batchJobs = {
+  nightly: { 'nightly-1': [jobPod('nightly-1-abcde', 'nightly-1', 'report')] },
+  hourly: { 'hourly-1': [jobPod('hourly-1-fghij', 'hourly-1', 'sync')], 'hourly-2': [jobPod('hourly-2-klmno', 'hourly-2', 'sync')] },
+  '': { migrate: [jobPod('migrate-pqrst', 'migrate', 'migrate')], retried: [jobPod('retried-uvwxy', 'retried', 'retry'), jobPod('retried-zabcd', 'retried', 'retry')] }
+}
+
+const batchCronJobs = Object.keys(batchJobs)
+  .filter(Boolean)
+  .map((name) => ({ metadata: { name, uid: name } }))
+
+const batchJobList = Object.entries(batchJobs).flatMap(([cronJob, jobs]) =>
+  Object.keys(jobs).map((name) => ({
+    metadata: { name, uid: name, ...(cronJob && { ownerReferences: [{ kind: 'CronJob', name: cronJob, uid: cronJob, controller: true }] }) }
+  }))
+)
+
+const batchPods = Object.values(batchJobs).flatMap((jobs) => Object.values(jobs).flat())
+
 const json = (response: ServerResponse, status: number, body: unknown) =>
   response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
 
@@ -98,6 +134,12 @@ function respond(request: IncomingMessage, response: ServerResponse, token: stri
   if (namespace === 'locked' && rest === '/pods') {
     const message = `pods is forbidden: User "jane" cannot list resource "pods" in API group "" in the namespace "locked"`
     return json(response, 403, { kind: 'Status', status: 'Failure', reason: 'Forbidden', code: 403, message })
+  }
+  if (namespace === 'locked' && rest === '/deployments') {
+    return json(response, 200, { kind: 'DeploymentList', apiVersion: 'apps/v1', metadata: {}, items: [{ metadata: { name: 'web', uid: 'web' } }] })
+  }
+  if (namespace === 'locked' && rest === '/cronjobs') {
+    return json(response, 200, { kind: 'CronJobList', apiVersion: 'batch/v1', metadata: {}, items: [{ metadata: { name: 'nightly', uid: 'nightly' } }] })
   }
   if (namespace === 'shop' && rest === '/pods') return json(response, 200, { kind: 'PodList', apiVersion: 'v1', metadata: {}, items: [counter] })
   if (namespace === 'shop' && rest === '/pods/counter') return json(response, 200, { kind: 'Pod', apiVersion: 'v1', ...counter })
@@ -121,11 +163,29 @@ function respond(request: IncomingMessage, response: ServerResponse, token: stri
   if (namespace === 'files') {
     if (rest === '/pods') return json(response, 200, { kind: 'PodList', apiVersion: 'v1', metadata: {}, items: filesPods })
     if (rest === '/replicasets') return json(response, 200, { kind: 'ReplicaSetList', apiVersion: 'apps/v1', metadata: {}, items: filesReplicaSets })
+    if (rest === '/deployments') {
+      const items = Object.keys(filesDeployments).map((name) => ({ metadata: { name, uid: name } }))
+      return json(response, 200, { kind: 'DeploymentList', apiVersion: 'apps/v1', metadata: {}, items })
+    }
     const pod = filesPods.find((p) => rest === `/pods/${p.metadata.name}`)
     if (pod) return json(response, 200, { kind: 'Pod', apiVersion: 'v1', ...pod })
     const deployment = Object.keys(filesDeployments).find((name) => rest === `/deployments/${name}`)
     if (deployment) return json(response, 200, { kind: 'Deployment', apiVersion: 'apps/v1', metadata: { name: deployment, uid: deployment } })
     if (rest.startsWith('/pods/') || rest.startsWith('/deployments/')) return json(response, 404, { kind: 'Status', code: 404, reason: 'NotFound', message: 'not found' })
+  }
+  if (namespace === 'batch') {
+    if (rest === '/pods') return json(response, 200, { kind: 'PodList', apiVersion: 'v1', metadata: {}, items: batchPods })
+    if (rest === '/jobs') return json(response, 200, { kind: 'JobList', apiVersion: 'batch/v1', metadata: {}, items: batchJobList })
+    if (rest === '/cronjobs') return json(response, 200, { kind: 'CronJobList', apiVersion: 'batch/v1', metadata: {}, items: batchCronJobs })
+    if (batchPods.some((pod) => rest === `/pods/${pod.metadata.name}/log`)) {
+      return response.writeHead(200, { 'content-type': 'text/plain' }).end('done\n')
+    }
+    const lists = { pods: batchPods, jobs: batchJobList, cronjobs: batchCronJobs }
+    const [, resource, name] = /^\/(pods|jobs|cronjobs)\/([^/]+)$/.exec(rest) ?? []
+    if (resource) {
+      const item = lists[resource as keyof typeof lists].find((i) => i.metadata.name === name)
+      return item ? json(response, 200, item) : json(response, 404, { kind: 'Status', code: 404, reason: 'NotFound', message: 'not found' })
+    }
   }
   return json(response, 200, { kind: 'List', apiVersion: 'v1', metadata: {}, items: [] })
 }

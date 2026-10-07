@@ -1,9 +1,20 @@
 import { request as httpRequest, type IncomingMessage, type RequestOptions } from 'node:http'
 import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
-import { ApiException, type KubeConfig, type V1ObjectMeta, type V1Pod } from '@kubernetes/client-node'
-import type { ContainerNode, ContainerRole, LogNode, SourcePath, WorkloadKind } from '@shared/core-api'
+import { ApiException, type KubeConfig, type V1Job, type V1ObjectMeta, type V1Pod } from '@kubernetes/client-node'
+import type { ContainerNode, ContainerRole, LogNode, PodNode, SourcePath, WorkloadKind, WorkloadNode } from '@shared/core-api'
 import { CoreError } from './core-error'
-import { apisFor, asCoreError, call, checkNamespace, controllerOf, podsOfWorkload, serverMessage, type PodOwnerKind } from './kubernetes-api'
+import {
+  apisFor,
+  asCoreError,
+  call,
+  checkNamespace,
+  controllerOf,
+  listReplicaSets,
+  podsOfWorkload,
+  podsOwnedBy,
+  serverMessage,
+  type PodOwnerKind
+} from './kubernetes-api'
 import type { LogConnection, LogFollowOptions, LogReadOptions, LogSource, LogStreamInfo } from './log-source'
 import { containerInstanceOf, isSidecar, podStatusOf, readyCountOf, restartsOf } from './pod-status'
 
@@ -54,16 +65,17 @@ const join = (parent: SourcePath, name: string) => (parent ? `${parent}/${name}`
 /**
  * The Workloads, pods and containers of one namespace, as a Log Source. Paths start with a group
  * (`deployments`, `cronjobs`…), then name each object on the way down, e.g. `cronjobs/nightly/<job>/<pod>/<container>`.
- * A pod with one container carries it folded in, its path keeping the container.
+ * A CronJob with one Job, a Workload with one pod and a pod with one container carry it folded in, paths keeping every level.
  */
 export function createKubernetesLogSource(config: KubeConfig, namespace: string): LogSource & { checkNamespace(): Promise<void> } {
-  const { core, apps, batch } = apisFor(config)
+  const apis = apisFor(config)
+  const { core, apps, batch } = apis
 
   const listPods = async () => (await call(() => core.listNamespacedPod({ namespace }))).items
   const cronJobs = async () => (await call(() => batch.listNamespacedCronJob({ namespace }))).items
+  const listJobs = async () => (await call(() => batch.listNamespacedJob({ namespace }))).items
   /** Jobs outside any CronJob. */
-  const standaloneJobs = async () =>
-    (await call(() => batch.listNamespacedJob({ namespace }))).items.filter((job) => controllerOf(job.metadata)?.kind !== 'CronJob')
+  const standaloneJobs = async () => (await listJobs()).filter((job) => controllerOf(job.metadata)?.kind !== 'CronJob')
 
   const names = (items: { metadata?: V1ObjectMeta }[]) => items.map((item) => item.metadata?.name ?? '').filter(Boolean)
 
@@ -89,15 +101,37 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
 
   /** The pods of a Workload (a CronJob's Job included); NOT_FOUND if the group has no such Workload. */
   const podsOf = (group: Exclude<Group, 'pods' | 'cronjobs'>, name: string): Promise<V1Pod[]> =>
-    podsOfWorkload({ core, apps, batch }, namespace, kindOfGroup[group] as PodOwnerKind, name, listPods())
+    podsOfWorkload(apis, namespace, kindOfGroup[group] as PodOwnerKind, name, listPods())
+
+  /** Of a namespace's Jobs, those of the CronJob with `uid`. */
+  const jobsOwnedBy = (uid: string | undefined, jobs: V1Job[]) => (uid ? jobs.filter((job) => controllerOf(job.metadata)?.uid === uid) : [])
 
   /** A CronJob's Jobs; NOT_FOUND if there's no such CronJob. */
   const jobsOf = async (cronJob: string) => {
-    const [owner, jobs] = await Promise.all([
-      call(() => batch.readNamespacedCronJob({ name: cronJob, namespace })),
-      call(() => batch.listNamespacedJob({ namespace }))
-    ])
-    return jobs.items.filter((job) => controllerOf(job.metadata)?.uid === owner.metadata?.uid)
+    const [owner, jobs] = await Promise.all([call(() => batch.readNamespacedCronJob({ name: cronJob, namespace })), listJobs()])
+    return jobsOwnedBy(owner.metadata?.uid, jobs)
+  }
+
+  /** What's listed only to fold a level into its parent: undefined if the user may not list it, the parent then listed unfolded. */
+  const unlessDenied = async <T>(listing: Promise<T>): Promise<T | undefined> => {
+    try {
+      return await listing
+    } catch (error) {
+      const { code } = error as CoreError
+      if (code === 'MISSING_PERMISSION' || code === 'PERMISSION_DENIED') return undefined
+      throw error
+    }
+  }
+
+  /**
+   * Finds the pods of Workloads of a kind among the namespace's, to fold a Workload's only pod into it. Undefined
+   * if the user may not list the pods (or a Deployment's ReplicaSets): the Workloads are listed unfolded.
+   */
+  const podFinder = async (kind: PodOwnerKind) => {
+    const listed = await unlessDenied(Promise.all([listPods(), kind === 'Deployment' ? listReplicaSets(apis, namespace) : []]))
+    if (!listed) return undefined
+    const [pods, replicaSets] = listed
+    return (uid: string | undefined) => podsOwnedBy(kind, uid, pods, replicaSets)
   }
 
   /** A pod's containers, init and sidecar containers first as they start first. */
@@ -113,7 +147,7 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
   }
 
   /** A pod's node, its only container folded in if it has just the one. */
-  const podNode = (parent: SourcePath, pod: V1Pod): LogNode => {
+  const podNode = (parent: SourcePath, pod: V1Pod): PodNode => {
     const name = pod.metadata?.name ?? ''
     const path = join(parent, name)
     const containers = containerNodes(path, pod)
@@ -121,13 +155,52 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     return { kind: 'pod', name, path, status: podStatusOf(pod), containerCount: containers.length, ...folded }
   }
 
-  const podNodes = (parent: SourcePath, pods: V1Pod[]): LogNode[] => pods.filter((pod) => pod.metadata?.name).map((pod) => podNode(parent, pod))
+  const podNodes = (parent: SourcePath, pods: V1Pod[]): PodNode[] => pods.filter((pod) => pod.metadata?.name).map((pod) => podNode(parent, pod))
 
-  /** A Workload's node, with its Ready Count if its kind has one. */
-  const workloadNode = (parent: SourcePath, kind: Exclude<WorkloadKind, 'Pod'>, workload: { metadata?: V1ObjectMeta }): LogNode => {
+  /**
+   * A Workload's node, with its Ready Count if its kind has one; its only pod folded in if `pods` are its pods and
+   * there's just the one, or for a CronJob, its only Job if `jobs` are its Jobs and there's just the one.
+   */
+  const workloadNode = (
+    parent: SourcePath,
+    kind: Exclude<WorkloadKind, 'Pod'>,
+    workload: { metadata?: V1ObjectMeta },
+    { pods, jobs }: { pods?: V1Pod[]; jobs?: { job: V1Job; pods?: V1Pod[] }[] } = {}
+  ): WorkloadNode => {
     const name = workload.metadata?.name ?? ''
+    const path = join(parent, name)
     const readyCount = readyCountOf(kind, workload)
-    return { kind: 'workload', workloadKind: kind, name, path: join(parent, name), ...(readyCount && { readyCount }) }
+    const [onlyPod, ...otherPods] = pods?.filter((pod) => pod.metadata?.name) ?? []
+    const [onlyJob, ...otherJobs] = jobs?.filter(({ job }) => job.metadata?.name) ?? []
+    const folded =
+      onlyJob && otherJobs.length === 0 ? { job: workloadNode(path, 'Job', onlyJob.job, { pods: onlyJob.pods }) }
+      : onlyPod && otherPods.length === 0 ? { pod: podNode(path, onlyPod) }
+      : undefined
+    return { kind: 'workload', workloadKind: kind, name, path, ...(readyCount && { readyCount }), ...folded }
+  }
+
+  /** A group's Workloads, each carrying its only pod, or a CronJob its only Job, folded in. */
+  const workloadNodes = async (group: Exclude<Group, 'pods'>): Promise<WorkloadNode[]> => {
+    const kind = kindOfGroup[group] as Exclude<WorkloadKind, 'Pod'>
+    const [items, podsOf, jobs] = await Promise.all([
+      members(group),
+      podFinder(kind === 'CronJob' ? 'Job' : (kind as PodOwnerKind)),
+      kind === 'CronJob' ? unlessDenied(listJobs()) : []
+    ])
+    return items
+      .filter((item) => item.metadata?.name)
+      .map((item) => {
+        const uid = item.metadata?.uid
+        if (kind !== 'CronJob') return workloadNode(group, kind, item, { pods: podsOf?.(uid) })
+        const owned = jobs && jobsOwnedBy(uid, jobs).map((job) => ({ job, pods: podsOf?.(job.metadata?.uid) }))
+        return workloadNode(group, kind, item, { jobs: owned })
+      })
+  }
+
+  /** A CronJob's Jobs, each carrying its only pod folded in. */
+  const jobNodes = async (parent: SourcePath, cronJob: string): Promise<WorkloadNode[]> => {
+    const [jobs, podsOf] = await Promise.all([jobsOf(cronJob), podFinder('Job')])
+    return jobs.filter((job) => job.metadata?.name).map((job) => workloadNode(parent, 'Job', job, { pods: podsOf?.(job.metadata?.uid) }))
   }
 
   /** The pod named `name` among `pods`, or NOT_FOUND. */
@@ -146,18 +219,14 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     }
     if (!isGroup(group) || segments.some((segment) => !segment)) throw notFound(path)
     if (first === undefined) {
-      const kind = kindOfGroup[group]
-      const items = (await members(group)).filter((item) => item.metadata?.name)
-      return kind === 'Pod' ? podNodes(path, items) : items.map((item) => workloadNode(path, kind, item))
+      return group === 'pods' ? podNodes(path, (await members(group)) as V1Pod[]) : await workloadNodes(group)
     }
     if (segments.length === 2) {
       if (group === 'pods') {
         const pod = podNamed((await listPods()).filter((p) => !controllerOf(p.metadata)), first, path)
         return containerNodes(path, pod)
       }
-      if (group === 'cronjobs') {
-        return (await jobsOf(first)).filter((job) => job.metadata?.name).map((job) => workloadNode(path, 'Job', job))
-      }
+      if (group === 'cronjobs') return await jobNodes(path, first)
       if (group === 'jobs' && !(await isStandaloneJob(first))) throw notFound(path)
       return podNodes(path, await podsOf(group, first))
     }
