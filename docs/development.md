@@ -96,22 +96,26 @@ git branch -D feat/portable-exe   # -D: rebasing gave the commits new hashes, so
 
 ## Releasing
 
-Bump the version on a branch like any other change, and merge it:
+A release is the last commit on the branch with the changes it ships. When the branch is done, run, on it:
 
 ```sh
-git switch -c chore/release-1.2.3
-npm version 1.2.3 --no-git-tag-version   # updates package.json and package-lock.json
-git commit -am "chore: release 1.2.3"
-git push -u origin chore/release-1.2.3
-gh pr create --base main --fill-first
+npm run release              # suggests a version from the branch's commits, and asks before each step
+npm run release -- 1.2.3     # or name the version
+npm run release -- --dry-run # only print the steps' commands, to run by hand
+npm run release -- --yes     # don't ask before each step
 ```
 
-Once it's merged, tag `main`, not your branch, since rebasing changed the commit's hash:
+It suggests the release the Conventional Commits since the last one call for (`feat` a minor bump, a breaking change a major one, or a minor one before 1.0, anything else a patch), and the next `beta` or `alpha` of it. Then it:
 
-```sh
-git switch main && git pull
-git tag v1.2.3 && git push origin v1.2.3
-```
+1. bumps the version and commits it as `chore: release 1.2.3`: `npm version 1.2.3 --no-git-tag-version`, which updates `package.json` and `package-lock.json`, then `git commit -am "chore: release 1.2.3"`
+2. pushes the branch and opens its pull request, if it hasn't one: `gh pr create --base main --fill-first`
+3. waits for CI to pass on it: `gh pr checks --watch`
+4. merges it: `gh pr merge --rebase`
+5. switches to `main`, pulls and deletes the branch
+6. tags the release commit on `main`, not on the branch, since rebasing changed its hash, and pushes the tag: `git tag v1.2.3 && git push origin v1.2.3`
+7. watches the release workflow: `gh run watch`
+
+Stop at any step, or merge the pull request on GitHub yourself, and `npm run release` picks up from there: on a branch that ends with a release, it goes on to the pull request, and once that's merged, or on `main` at an untagged version, it tags.
 
 The release workflow checks the tag matches `package.json`'s version, then builds the installers on each platform, and the Extension Copy's `polyscope-<version>.vsix` at that same version, and publishes them to GitHub Releases, where installed copies find them. A tag with a pre-release part, like `v1.3.0-beta.1`, is published as a pre-release, which installed copies don't update to.
 

@@ -13,7 +13,8 @@
     "src/preload/**/*",
     "src/shared/**/*",
     "tests/**/*",
-    "scripts/screenshots/**/*"
+    "scripts/screenshots/**/*",
+    "scripts/release.ts"
   ],
   "exclude": ["tests/extension/**/*"]
 }
