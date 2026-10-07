@@ -130,6 +130,8 @@ export const en = {
   'pod.container': 'Container: {name}',
   'pod.containerWithRole': 'Container: {name} ({role})',
   'workload.readyCount.tooltip': '{ready} of {desired} pods ready',
+  'workload.job': 'Job: {name}',
+  'workload.pod': 'Pod: {name}',
 
   'sourceActions.refresh': 'Refresh',
   'sourceActions.disconnect': 'Disconnect',

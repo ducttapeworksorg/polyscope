@@ -75,6 +75,23 @@ export function describeLogSourceContract(name: string, subject: () => Promise<L
         }
       })
 
+      it('folds a Workload’s only pod, and a CronJob’s only Job, into it, still listing it under the Workload', async () => {
+        const { logSource } = await subject()
+        for (const group of await logSource.listChildren('')) expect(Object.keys(group), group.path).toEqual(['kind', 'workloadKind', 'name', 'path'])
+        for (const workload of (await walk(logSource)).filter((node) => node.kind === 'workload')) {
+          const children = await logSource.listChildren(workload.path)
+          const [only] = children
+          const field = workload.workloadKind === 'CronJob' ? 'job' : 'pod'
+          expect(workload, workload.path).not.toHaveProperty(field === 'job' ? 'pod' : 'job')
+          if (children.length !== 1 || !only) {
+            expect(workload, workload.path).not.toHaveProperty(field)
+            continue
+          }
+          // Only what names it: its status may change between the two listings.
+          expect(workload[field], workload.path).toMatchObject({ kind: only.kind, name: only.name, path: only.path })
+        }
+      })
+
       it('lists the counter container', async () => {
         const { logSource, counter } = await subject()
         const siblings = await logSource.listChildren(parentOf(counter))

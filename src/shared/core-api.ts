@@ -261,32 +261,45 @@ export const workloadKinds: readonly WorkloadKind[] = ['Deployment', 'StatefulSe
 /**
  * A node in a Log Source's tree. Its root holds one group per kind of Workload that has any; groups hold
  * Workloads (or, for Pods, the pods themselves), a CronJob holds its Jobs, and the rest hold their pods,
- * which hold their containers: the Log Streams. A pod with one container carries it folded in (see its `container`).
+ * which hold their containers: the Log Streams. A level below a group with exactly one child carries it folded
+ * in: a CronJob its only Job (see its `job`), a Workload its only pod (its `pod`), a pod its only container (its `container`).
  */
-export type LogNode =
-  | { kind: 'group'; workloadKind: WorkloadKind; name: string; path: SourcePath }
-  | {
-      kind: 'workload'
-      workloadKind: Exclude<WorkloadKind, 'Pod'>
-      name: string
-      path: SourcePath
-      /** Deployments, StatefulSets and DaemonSets only: Jobs and CronJobs run to completion, so have none. */
-      readyCount?: ReadyCount
-    }
-  | {
-      kind: 'pod'
-      name: string
-      path: SourcePath
-      status: PodStatus
-      /** How many containers the pod has, init and sidecar containers included. */
-      containerCount: number
-      /**
-       * The pod's only container, when it has exactly one, folded into it: the pod's row opens that container's
-       * Log Stream rather than listing it. The container is still the pod's child, under its path.
-       */
-      container?: ContainerNode
-    }
-  | ContainerNode
+export type LogNode = { kind: 'group'; workloadKind: WorkloadKind; name: string; path: SourcePath } | WorkloadNode | PodNode | ContainerNode
+
+/** A Workload in a Log Source's tree, or a CronJob's Job. */
+export interface WorkloadNode {
+  kind: 'workload'
+  workloadKind: Exclude<WorkloadKind, 'Pod'>
+  name: string
+  path: SourcePath
+  /** Deployments, StatefulSets and DaemonSets only: Jobs and CronJobs run to completion, so have none. */
+  readyCount?: ReadyCount
+  /**
+   * A CronJob's only Job, when it has exactly one, folded into it: the CronJob's row stands in for the Job's.
+   * The Job is still the CronJob's child, under its path.
+   */
+  job?: WorkloadNode
+  /**
+   * The Workload's only pod, when it has exactly one, folded into it (never a CronJob's: its pods are its Jobs').
+   * The Workload's row stands in for the pod's; the pod is still its child, under its path.
+   */
+  pod?: PodNode
+}
+
+/** A pod in a Log Source's tree. */
+export interface PodNode {
+  kind: 'pod'
+  name: string
+  path: SourcePath
+  status: PodStatus
+  /** How many containers the pod has, init and sidecar containers included. */
+  containerCount: number
+  /**
+   * The pod's only container, when it has exactly one, folded into it: the pod's row opens that container's
+   * Log Stream rather than listing it. The container is still the pod's child, under its path.
+   */
+  container?: ContainerNode
+}
 
 export type ContainerRole = 'init' | 'sidecar'
 
@@ -311,9 +324,6 @@ export interface PodStatus {
   /** Why that container's previous run ended, e.g. OOMKilled or Error; left out if none has restarted. */
   lastTerminationReason?: string
 }
-
-/** A pod in a Log Source's tree. */
-export type PodNode = Extract<LogNode, { kind: 'pod' }>
 
 /** A container in a Log Source's tree: what opens as a Log Stream. */
 export interface ContainerNode {

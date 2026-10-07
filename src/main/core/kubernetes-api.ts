@@ -1,6 +1,6 @@
 // What the Kubernetes Source Types share: turning failed calls into CoreErrors, and finding a Workload's pods.
 
-import { ApiException, AppsV1Api, BatchV1Api, CoreV1Api, type KubeConfig, type V1ObjectMeta, type V1Pod } from '@kubernetes/client-node'
+import { ApiException, AppsV1Api, BatchV1Api, CoreV1Api, type KubeConfig, type V1ObjectMeta, type V1Pod, type V1ReplicaSet } from '@kubernetes/client-node'
 import type { WorkloadKind } from '@shared/core-api'
 import { CoreError } from './core-error'
 import { certificateCodes, networkCodes } from './network-errors'
@@ -116,15 +116,21 @@ export function readWorkload({ apps, batch }: KubernetesApis, namespace: string,
   return call(read)
 }
 
+/** Of a namespace's `pods`, those the Workload of `kind` with `uid` owns: a Deployment through its `replicaSets`, the rest directly. */
+export function podsOwnedBy(kind: PodOwnerKind, uid: string | undefined, pods: V1Pod[], replicaSets: V1ReplicaSet[] = []) {
+  if (!uid) return []
+  const owners = new Set(kind === 'Deployment' ? replicaSets.filter((rs) => controllerOf(rs.metadata)?.uid === uid).map((rs) => rs.metadata?.uid) : [uid])
+  return pods.filter((pod) => owners.has(controllerOf(pod.metadata)?.uid))
+}
+
+/** The ReplicaSets of a namespace, through which its Deployments own their pods. */
+export const listReplicaSets = async ({ apps }: KubernetesApis, namespace: string) =>
+  (await call(() => apps.listNamespacedReplicaSet({ namespace }))).items
+
 /** The pods of a Workload, going by who owns them; `pods` are the namespace's, if already listed. NOT_FOUND if there's no such Workload. */
 export async function podsOfWorkload(apis: KubernetesApis, namespace: string, kind: PodOwnerKind, name: string, pods?: Promise<V1Pod[]>) {
   const listed = pods ?? call(() => apis.core.listNamespacedPod({ namespace })).then((list) => list.items)
   const [workload, all] = await Promise.all([readWorkload(apis, namespace, kind, name), listed])
-  const ownedBy = (uids: ReadonlySet<string | undefined>) => (pod: V1Pod) => uids.has(controllerOf(pod.metadata)?.uid)
-  const uid = workload.metadata?.uid
-  if (kind !== 'Deployment') return all.filter(ownedBy(new Set([uid])))
-  // A Deployment owns its pods through ReplicaSets.
-  const replicaSets = (await call(() => apis.apps.listNamespacedReplicaSet({ namespace }))).items
-  const replicaSetUids = new Set(replicaSets.filter((rs) => controllerOf(rs.metadata)?.uid === uid).map((rs) => rs.metadata?.uid))
-  return all.filter(ownedBy(replicaSetUids))
+  const replicaSets = kind === 'Deployment' ? await listReplicaSets(apis, namespace) : []
+  return podsOwnedBy(kind, workload.metadata?.uid, all, replicaSets)
 }
