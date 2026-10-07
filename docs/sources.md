@@ -23,6 +23,8 @@ A folder on this machine or, on Windows, a UNC share (`\\server\share\logs`).
 - **Root path**: the folder to browse. **Browse…** picks it.
 - **Show hidden files**: dotfiles, and files marked hidden on Windows.
 
+In VS Code, a UNC share's server has to be in the `security.allowedUNCHosts` setting (as `"server"`, without backslashes), or VS Code blocks it. Restart VS Code after adding it. Setting `security.restrictUNCAccess` to `false` allows every server, but turns off that VS Code protection.
+
 Files that are still growing can be **followed** live. Polyscope notices when a followed file is truncated or rotated and carries on from the new file's start.
 
 ## S3-compatible Storage

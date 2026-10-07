@@ -13,7 +13,9 @@ const errnoCodes: Record<string, CoreErrorCode> = {
   EISDIR: 'NOT_A_FILE',
   EACCES: 'PERMISSION_DENIED',
   EPERM: 'PERMISSION_DENIED',
-  ELOOP: 'SYMLINK_LOOP'
+  ELOOP: 'SYMLINK_LOOP',
+  // VS Code's guard against UNC shares on servers it hasn't been told to allow.
+  ERR_UNC_HOST_NOT_ALLOWED: 'UNC_HOST_NOT_ALLOWED'
 }
 
 const errnoOf = (error: unknown) => (error as NodeJS.ErrnoException).code ?? ''

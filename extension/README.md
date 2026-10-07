@@ -44,6 +44,16 @@ Followed files, Kubernetes Log Streams and Large Files open in a Polyscope viewe
 
 Under Remote-SSH, WSL and Dev Containers, Polyscope runs on the remote machine. A Local Filesystem Source browses the remote's disk, and Kubernetes Sources use the remote's kubeconfig, with its auth plugins.
 
+## UNC shares on Windows
+
+VS Code blocks UNC paths to any server it hasn't been told to allow, even ones File Explorer opens without a password. A Local Filesystem Source on such a share (`\\server\share\logs`) then fails with "VS Code blocks this share's server". Add the server's name, without backslashes, to the `security.allowedUNCHosts` setting, and restart VS Code:
+
+```json
+"security.allowedUNCHosts": ["server"]
+```
+
+Setting `security.restrictUNCAccess` to `false` lifts the restriction for every server instead. That turns off a VS Code security protection, so prefer the allow list.
+
 ## Secrets and settings
 
 S3 secret keys are kept in VS Code's secret storage, encrypted by your operating system's keychain where it has one. Polyscope for VS Code keeps its own Sources and settings, apart from the desktop app's. The gear at the top of the sidebar opens them.

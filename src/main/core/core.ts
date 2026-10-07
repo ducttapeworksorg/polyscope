@@ -653,7 +653,11 @@ export function createCore(options: CoreOptions = {}): Core {
   /** Opens a Local File Source at its root folder, once it's clear the folder is there. */
   const reachLocal = async ({ rootPath, showHidden }: Extract<Target, { type: 'local' }>) => {
     const fileSource = createLocalFileSource(rootPath, { showHidden })
-    const root = await fileSource.stat('').catch(() => null)
+    const root = await fileSource.stat('').catch((error: unknown) => {
+      // Anything else, like a share that can't be reached or isn't allowed, is reported as itself.
+      if (error instanceof CoreError && (error.code === 'NOT_FOUND' || error.code === 'NOT_A_FOLDER')) return null
+      throw error
+    })
     if (!root) throw new CoreError('ROOT_NOT_FOUND', `Root path does not exist: ${rootPath}`)
     if (root.kind !== 'folder') throw new CoreError('ROOT_NOT_A_FOLDER', `Root path is not a folder: ${rootPath}`)
     return fileSource
