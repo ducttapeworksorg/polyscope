@@ -15,6 +15,6 @@
     "src/renderer/src/i18n/en.ts",
     "src/renderer/src/i18n/format.ts",
     "tests/extension/**/*",
-    "scripts/build-extension.ts"
+    "scripts/build-extension.mts"
   ]
 }

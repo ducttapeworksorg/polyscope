@@ -1,4 +1,4 @@
-// The Extension Copy driven in real VS Code (see run.ts), checked through VS Code's API: what the editor sees.
+// The Extension Copy driven in real VS Code (see run.mts), checked through VS Code's API: what the editor sees.
 // Run twice against the same VS Code profile, the second time as if the window had been reloaded.
 
 import assert from 'node:assert/strict'
@@ -282,7 +282,7 @@ const firstRunS3: [string, () => Promise<void>][] = [
     }
   ],
   [
-    // VS Code keeps SecretStorage in memory in a test run, so the reloaded window can't check this (see run.ts): a core
+    // VS Code keeps SecretStorage in memory in a test run, so the reloaded window can't check this (see run.mts): a core
     // started afresh stands in for the reloaded window's, knowing only what the extension's data and SecretStorage hold.
     'an S3 Source’s secret key survives a reload, signing in a core started afresh',
     async () => {

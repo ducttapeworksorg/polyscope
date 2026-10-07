@@ -89,7 +89,7 @@ A VS Code extension has the same split: the **extension host** is a Node.js proc
 | --- | --- | --- |
 | Language | TypeScript (strict, `noUncheckedIndexedAccess`) everywhere | One language across processes (ADR 0002) |
 | Desktop shell | [Electron](https://www.electronjs.org/) | Chosen over Tauri/Wails for identical rendering on every OS (ADR 0002) |
-| Build | [electron-vite](https://electron-vite.org/) (Vite) for the app; Vite directly (`scripts/build-extension.ts`) for the extension | `@shared/*` path alias in every bundle |
+| Build | [electron-vite](https://electron-vite.org/) (Vite) for the app; Vite directly (`scripts/build-extension.mts`) for the extension | `@shared/*` path alias in every bundle |
 | UI | React 19, plain CSS (`src/renderer/src/styles/app.css`) | No state library, no router, no CSS framework |
 | Editor | [Monaco](https://microsoft.github.io/monaco-editor/), the editor in VS Code, read-only | Its language workers are set up in `monaco.ts` |
 | S3 | `@aws-sdk/client-s3` | Keys, or AWS profiles including SSO |
@@ -495,8 +495,8 @@ flowchart LR
   P -- electron-vite --> OP["out/preload"]
   R -- electron-vite --> OR["out/renderer"]
   OM & OP & OR -- electron-builder --> Dist["dist/<br/>exe · portable · zip · dmg · AppImage · deb · rpm"]
-  E -- "vite (build-extension.ts)" --> ED["extension/dist/extension.js"]
-  RE -- "vite (build-extension.ts)" --> EW["extension/dist/webview/"]
+  E -- "vite (build-extension.mts)" --> ED["extension/dist/extension.js"]
+  RE -- "vite (build-extension.mts)" --> EW["extension/dist/webview/"]
   ED & EW -- vsce --> VSIX["polyscope-&lt;version&gt;.vsix"]
   Dist --> GH["GitHub Releases"]
   VSIX --> GH
@@ -504,7 +504,7 @@ flowchart LR
 ```
 
 - **The desktop app**: `npm run build` (electron-vite) produces `out/`, and `npm run dist` (electron-builder) packages it. `electron.vite.config.ts` gives each of main, preload and renderer its own Vite build, sharing the `@shared` alias.
-- **The extension**: `scripts/build-extension.ts` bundles the extension host into one CommonJS file (the `.vsix` ships no `node_modules`) and the two webview pages into `extension/dist/webview`. The `.vsix` always takes the app's version.
+- **The extension**: `scripts/build-extension.mts` bundles the extension host into one CommonJS file (the `.vsix` ships no `node_modules`) and the two webview pages into `extension/dist/webview`. The `.vsix` always takes the app's version.
 - **Releases**: pushing a `v*` tag runs `.github/workflows/release.yml`, which builds every platform's installers and the `.vsix`, publishes them to GitHub Releases, then publishes the `.vsix` to Open VSX and (for releases, not pre-releases) the VS Code Marketplace. Installed copies update from GitHub Releases. See [Development → Releasing](development.md#releasing).
 
 ## Testing

@@ -21,10 +21,10 @@
     "icon": "electron scripts/render-icon.cjs",
     "screenshots": "playwright test --config scripts/screenshots/playwright.config.ts",
     "dist": "npm run build && electron-builder --publish never",
-    "extension:build": "node scripts/build-extension.ts",
-    "extension:vsix": "node scripts/build-extension.ts --package",
-    "test:extension": "node scripts/build-extension.ts --tests && node tests/extension/run.ts",
-    "release": "node scripts/release.ts"
+    "extension:build": "node scripts/build-extension.mts",
+    "extension:vsix": "node scripts/build-extension.mts --package",
+    "test:extension": "node scripts/build-extension.mts --tests && node tests/extension/run.mts",
+    "release": "node scripts/release.mts"
   },
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",

@@ -14,7 +14,7 @@
     "src/shared/**/*",
     "tests/**/*",
     "scripts/screenshots/**/*",
-    "scripts/release.ts"
+    "scripts/release.mts"
   ],
   "exclude": ["tests/extension/**/*"]
 }

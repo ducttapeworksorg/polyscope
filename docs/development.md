@@ -32,7 +32,7 @@ Polyscope for VS Code (ADR 0005) runs the same core in VS Code's extension host,
 - `src/extension/`: the extension host's side. Activation, the `polyscope` file system VS Code's editor reads files through, the sidebar view and viewer tabs, tab decorations, and secrets in VS Code's SecretStorage. `bridge/` carries the UI's `window.polyscope` calls and the core's events between the webviews and the core.
 - `src/renderer/extension/`: the sidebar's and viewer tabs' pages, built from the app's UI components.
 - `extension/`: the manifest (`package.json`), the README shown in VS Code's Extensions view, and the activity bar icon. Builds land in `extension/dist`. The manifest's version doesn't matter: packaging always uses the app's.
-- `scripts/build-extension.ts`: the build.
+- `scripts/build-extension.mts`: the build.
 - `tests/extension/`: the integration tests, which drive real VS Code.
 
 ```sh
