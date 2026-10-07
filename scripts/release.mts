@@ -1,8 +1,8 @@
 // Releases Polyscope from the branch that ends with the release, as docs/development.md#releasing describes: bumps the
 // version as that branch's last commit, opens its pull request, waits for CI, merges it, and tags the release on main,
-// which runs the release workflow. Run it again at any point and it picks up where the release is: on a branch whose
-// last commit is a release, it goes on to the pull request; once that's merged, or on main with an untagged version,
-// it tags.
+// which runs the release workflow. Run it again at any point and it picks up where the release is: on a branch that
+// has bumped the version, even with fixes committed after that, it goes on to the pull request; once that's merged, or
+// on main with an untagged version, it tags the branch's last commit.
 //
 //   npm run release                   suggests a version from the branch's commits, then asks before each step
 //   npm run release -- 1.2.3          releases 1.2.3 (or 1.3.0-beta.1, etc.) without suggesting one
@@ -235,12 +235,15 @@ const finish = async (version: string, branch?: string): Promise<void> => {
   // -D: rebasing gave the commits new hashes, so git thinks they're unmerged.
   if (branch) run('git', ['branch', '-D', branch])
 
-  // Tag the release commit itself, even if something else was merged after it.
-  const commit = dryRun ? `${remote}/${main}` : read('git', ['log', `${remote}/${main}`, '-1', '--format=%H', '--fixed-strings', `--grep=${releaseSubject(version)}`])
-  if (!commit) fail(`Couldn't find "${releaseSubject(version)}" on ${main}.`)
+  // Tag the branch's last commit as it landed on main, so commits after the release one, like a fix for CI, are in
+  // the release; without a branch, main as it is.
+  const commit = dryRun ? `${remote}/${main}`
+    : (branch && tryRead('gh', ['pr', 'view', branch, '--json', 'mergeCommit', '--jq', '.mergeCommit.oid'])) ||
+      read('git', ['rev-parse', `${remote}/${main}`])
   if (!dryRun && packageVersion(commit) !== version) fail(`package.json at ${commit.slice(0, 7)} isn't at ${version}.`)
+  const described = dryRun ? `the branch's last commit on ${main}` : read('git', ['log', '-1', '--format=%h (%s)', commit])
 
-  await step(`Tag ${dryRun ? 'the release commit' : commit.slice(0, 7)} as v${version} and push the tag, which starts the release workflow`)
+  await step(`Tag ${described} as v${version} and push the tag, which starts the release workflow`)
   run('git', ['tag', `v${version}`, commit])
   run('git', ['push', remote, `v${version}`])
 
@@ -273,14 +276,16 @@ if (branch === main) {
   if (tagExists(version)) fail(`${main} is at ${version}, which is already tagged. Release from the branch with the changes.`)
   await finish(version)
 } else {
-  const subject = read('git', ['log', '-1', '--format=%s'])
-  const pending = subject === releaseSubject(packageVersion()) ? packageVersion() : undefined
-  if (pending && requested && requested !== pending) fail(`${branch} already ends with the release of ${pending}.`)
-  if (pending) console.log(`${branch} ends with the release of ${pending}; picking up from there.`)
+  // The branch has bumped the version and it isn't tagged yet: a release under way, even with commits after its
+  // release commit, like a fix for CI.
+  const version = packageVersion()
+  const pending = version !== packageVersion(`${remote}/${main}`) && !tagExists(version) ? version : undefined
+  if (pending && requested && requested !== pending) fail(`${branch} is already releasing ${pending}.`)
+  if (pending) console.log(`${branch} is releasing ${pending}; picking up from there.`)
 
   const pr = pullRequest(branch)
   if (pr?.state === 'MERGED') {
-    if (!pending) fail(`#${pr.number} for ${branch} is already merged, but doesn't end with a release.`)
+    if (!pending) fail(`#${pr.number} for ${branch} is already merged, but doesn't release a version.`)
     await finish(pending, branch)
   } else {
     const version = pending ?? (await prepare(branch))
