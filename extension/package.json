@@ -2,7 +2,7 @@
   "name": "polyscope",
   "displayName": "Polyscope",
   "description": "Read files and logs from local folders, S3 buckets, Kubernetes pods and container logs in one sidebar. Follow logs live, open multi-gigabyte files, and colour tabs by environment. Read-only.",
-  "version": "0.1.1",
+  "version": "0.0.0",
   "publisher": "ducttapeworks",
   "license": "Apache-2.0",
   "author": {
@@ -77,7 +77,8 @@
         {
           "type": "webview",
           "id": "polyscope.sources",
-          "name": "Sources"
+          "name": "Sources",
+          "icon": "media/activity-bar.svg"
         }
       ]
     },
