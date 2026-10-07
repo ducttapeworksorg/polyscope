@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
+import { getCACertificates } from 'node:tls'
 import { KubeConfig } from '@kubernetes/client-node'
 import type { KubeContext } from '@shared/core-api'
 import { CoreError } from './core-error'
@@ -45,9 +46,14 @@ export async function listKubeContexts(): Promise<KubeContext[]> {
     .sort((a, b) => byName.compare(a.name, b.name))
 }
 
+/** Node's CAs and the OS's, base64 PEM: what a cluster naming no CA of its own is trusted by, as kubectl trusts the OS's. */
+const defaultCaData = () =>
+  Buffer.from([...new Set([...getCACertificates('default'), ...getCACertificates('system')])].join('\n')).toString('base64')
+
 /**
  * The user's kubeconfig set to `context`; fails if it has no such context. Its cluster goes through its own
- * `proxy-url`, or else the proxy HTTPS_PROXY / NO_PROXY give it, as they are now.
+ * `proxy-url`, or else the proxy HTTPS_PROXY / NO_PROXY give it, as they are now; and, if it names no CA,
+ * trusts the OS's as well as Node's (Node alone doesn't, so company CAs would go unrecognised).
  */
 export function kubeConfigFor(context: string): KubeConfig {
   const config = loadKubeConfig()
@@ -55,9 +61,10 @@ export function kubeConfigFor(context: string): KubeConfig {
   if (!found) throw new CoreError('CONTEXT_NOT_FOUND', `No context named ${context} in the kubeconfig`)
   config.setCurrentContext(context)
   config.clusters = config.clusters.map((cluster) => {
-    if (cluster.name !== found.cluster || cluster.proxyUrl) return cluster
-    const proxyUrl = proxyFromEnv(cluster.server)
-    return proxyUrl ? { ...cluster, proxyUrl } : cluster
+    if (cluster.name !== found.cluster) return cluster
+    const proxyUrl = cluster.proxyUrl || proxyFromEnv(cluster.server)
+    const namesCa = cluster.caData || cluster.caFile || cluster.skipTLSVerify
+    return { ...cluster, ...(proxyUrl && { proxyUrl }), ...(!namesCa && { caData: defaultCaData() }) }
   })
   return config
 }

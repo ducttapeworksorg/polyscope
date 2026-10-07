@@ -365,7 +365,7 @@ export const en = {
   'error.CREDENTIALS_UNAVAILABLE': 'Couldn’t get credentials: {message}',
   'error.INVALID_PROXY': 'That proxy isn’t an http or https address.',
   'error.CA_BUNDLE_UNREADABLE': 'Couldn’t use the CA bundle: {message}',
-  'error.CERTIFICATE_UNTRUSTED': 'The store’s certificate isn’t trusted. Add its CA bundle, or turn off TLS verification: {message}',
+  'error.CERTIFICATE_UNTRUSTED': 'The server’s certificate isn’t trusted. Trust its CA (an S3 Source’s CA bundle, or the kubeconfig’s certificate-authority), or turn off TLS verification: {message}',
   'error.UNREACHABLE': 'The server can’t be reached: {message}',
   'error.CONTEXT_REQUIRED': 'Choose a kubeconfig context.',
   'error.CONTEXT_NOT_FOUND': 'That context isn’t in your kubeconfig.',

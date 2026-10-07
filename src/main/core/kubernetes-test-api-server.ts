@@ -192,8 +192,8 @@ function respond(request: IncomingMessage, response: ServerResponse, token: stri
   return json(response, 200, { kind: 'List', apiVersion: 'v1', metadata: {}, items: [] })
 }
 
-/** A kubeconfig whose context `fake` points at the stand-in API server at `server`, through `proxyUrl` if given. */
-export const standInCluster = (server: string, caPath: string, proxyUrl?: string) =>
+/** A kubeconfig whose context `fake` points at the stand-in API server at `server`, trusting `caPath` and through `proxyUrl` if given. */
+export const standInCluster = (server: string, caPath: string | undefined, proxyUrl?: string) =>
   [
     'apiVersion: v1',
     'kind: Config',
@@ -202,7 +202,7 @@ export const standInCluster = (server: string, caPath: string, proxyUrl?: string
     '- name: fake',
     '  cluster:',
     `    server: ${server}`,
-    `    certificate-authority: ${JSON.stringify(caPath)}`,
+    ...(caPath ? [`    certificate-authority: ${JSON.stringify(caPath)}`] : []),
     // The stand-in's certificate is for localhost.
     '    tls-server-name: localhost',
     ...(proxyUrl ? [`    proxy-url: ${proxyUrl}`] : []),
