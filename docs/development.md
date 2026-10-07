@@ -17,11 +17,13 @@ A build run from source (`npm run dev` or `npm start`) keeps its Sources, settin
 
 ## Where things are
 
+[Architecture](architecture.md) describes every layer, how they talk to each other, and where new code goes. In short:
+
 - `src/main/core/`: the core. Sources, Source Types and their backends, following, the Large File cache, settings and secrets.
 - `src/renderer/`: the UI. The sidebar, tabs, viewers, dialogs and status bar. Its strings are in `src/renderer/src/i18n/en.ts`.
 - `src/shared/`: the API between the two.
 - `tests/smoke/`: Playwright tests that drive the built app.
-- `CONTEXT.md`: the domain's language (Source, Source Type, Environment, Follow, Large File…). `docs/adr/` holds the architecture decisions.
+- `GLOSSARY.md`: the domain's language (Source, Source Type, Environment, Follow, Large File…). `docs/adr/` holds the architecture decisions.
 
 ## The Extension Copy
 
