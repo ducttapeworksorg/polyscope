@@ -3,10 +3,23 @@ import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EntryNode, LocalSourceInfo, TreeNode } from '@shared/core-api'
 import { createCore } from './core'
 import { createSecretStore, type SecretCipher } from './secret-store'
+
+// Folders that fail as VS Code fails a UNC share on a server it hasn't been told to allow.
+const uncBlocked = vi.hoisted(() => new Set<string>())
+vi.mock('node:fs/promises', async (original) => {
+  const fs = await original<typeof import('node:fs/promises')>()
+  const stat: typeof fs.stat = (async (path: string, ...rest: []) => {
+    if (uncBlocked.has(String(path))) {
+      throw Object.assign(new Error("UNC host 'server' access is not allowed"), { code: 'ERR_UNC_HOST_NOT_ALLOWED' })
+    }
+    return fs.stat(path, ...rest)
+  }) as typeof fs.stat
+  return { ...fs, stat, default: { ...fs, stat } }
+})
 
 let dir: string
 
@@ -453,6 +466,22 @@ describe('adding a Local Filesystem Source', () => {
 
     await expect(core.addSource({ type: 'local', ...input() })).rejects.toMatchObject({ code })
     expect(await core.listSources()).toEqual([])
+  })
+
+  it('is rejected for a share VS Code doesn’t allow, saying so rather than that it’s missing', async () => {
+    const share = join(dir, 'share')
+    await mkdir(share)
+    uncBlocked.add(share)
+    const core = createCore()
+
+    try {
+      await expect(core.addSource({ type: 'local', name: 'Logs', rootPath: share })).rejects.toMatchObject({
+        code: 'UNC_HOST_NOT_ALLOWED',
+        message: expect.stringContaining("UNC host 'server' access is not allowed")
+      })
+    } finally {
+      uncBlocked.clear()
+    }
   })
 
   it('trims the name and root path', async () => {
