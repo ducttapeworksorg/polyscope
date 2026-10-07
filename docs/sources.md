@@ -71,7 +71,9 @@ A level with only one thing in it folds into the row above:
 - A Workload or Job with only one pod stands in for that pod: it shows the pod's health dot (and restarts, if the pod has one container) after its Ready Count, and its tooltip names the pod. With one container too, clicking the Workload opens that container's log; with several, it expands straight to the containers.
 - A CronJob that has run only one Job stands in for that Job, and so for its pod too, if it has just the one.
 
-The groups (**Deployments**, **CronJobs**…) always expand, however few Workloads they hold. When things change, say a rollout or scaling replaces or adds pods, or a sidecar is added, choose **Refresh** on the row to bring the tree up to date: a Workload that now has several pods expands to list them, and one that's back to one pod folds it in again. Logs already open stay with the pod and container they were opened from.
+The groups (**Deployments**, **CronJobs**…) always expand, however few Workloads they hold. When things change, say a rollout or scaling replaces or adds pods, or a sidecar is added, choose **Refresh** on the row to bring the tree up to date: a Workload that now has several pods expands to list them, and one that's back to one pod folds it in again. Logs already open stay with the pod and container they were opened from. A Workload scaled down to no pods, or a CronJob that hasn't run yet, doesn't expand at all; choose **Refresh** on it once it has.
+
+Right-click a Workload, pod or container for **Copy name**, to paste it into `kubectl`, say. A row standing in for a Job, pod or container also offers to copy that one's name, like **Copy pod name**.
 
 Click a container to read its log, or turn on **Follow** to watch it live. Once a container has restarted, turn on **Previous** in its log's toolbar to read its **Previous Log**, the log of its run before the last restart, and off again to go back. See [Reading files and logs](reading.md#logs).
 

@@ -57,6 +57,7 @@ export function createWebviewBridge({ post, listen }: Channel): ExtensionBridge 
     pickFile: call('pickFile'),
     secretStorageIsWeak: call('secretStorageIsWeak'),
     copyDiagnostics: call('copyDiagnostics'),
+    copyText: call('copyText'),
     appVersion: call('appVersion'),
     getUpdateStatus: call('getUpdateStatus'),
     checkForUpdates: call('checkForUpdates'),

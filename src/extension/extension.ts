@@ -94,6 +94,7 @@ export async function activate(context: ExtensionContext): Promise<TestApi | und
       })
       await env.clipboard.writeText(report)
     },
+    copyText: async (text) => env.clipboard.writeText(text),
     appVersion: async () => context.extension.packageJSON.version as string,
     async openExtensionSettings() {
       await commands.executeCommand('workbench.action.openSettings', `@ext:${context.extension.id}`)

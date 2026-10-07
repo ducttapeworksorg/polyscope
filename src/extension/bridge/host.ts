@@ -9,6 +9,7 @@ export interface HostShell {
   pickFolder(): Promise<string | null>
   pickFile(filters: { name: string; extensions: string[] }[]): Promise<string | null>
   copyDiagnostics(): Promise<void>
+  copyText(text: string): Promise<void>
   appVersion(): Promise<string>
   openExtensionSettings(): Promise<void>
   open(request: OpenRequest): Promise<void>
@@ -93,6 +94,7 @@ export function serveBridge({ core, log, shell, post }: Options) {
     // VS Code's SecretStorage is backed by the OS keychain, or by its own encryption where there's none.
     secretStorageIsWeak: async () => false,
     copyDiagnostics: () => shell.copyDiagnostics(),
+    copyText: (text) => shell.copyText(text),
     appVersion: () => shell.appVersion(),
     openExtensionSettings: () => shell.openExtensionSettings(),
     // The editor's marketplace updates an Extension Copy.

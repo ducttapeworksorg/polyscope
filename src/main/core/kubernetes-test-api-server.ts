@@ -69,20 +69,21 @@ const filesPod = (name: string, replicaSet: string, containers: string[], { cras
 })
 
 /**
- * The Deployments in `files`, each with one ReplicaSet, and their pods: `solo` has one pod of one container, crash-looping;
- * `pair` one pod with a main container and a sidecar; `duo` two pods.
+ * The Deployments in `files`, each with one ReplicaSet unless it has no pods, and their pods: `solo` has one pod of one
+ * container, crash-looping; `pair` one pod with a main container and a sidecar; `duo` two pods; `idle` none.
  */
 export const filesDeployments = {
   solo: [filesPod('solo-7d9f-abcde', 'solo-7d9f', ['app'], { crashing: true })],
   pair: [filesPod('pair-5c4b-fghij', 'pair-5c4b', ['app'], { sidecar: 'proxy' })],
-  duo: [filesPod('duo-6a2e-klmno', 'duo-6a2e', ['app']), filesPod('duo-6a2e-pqrst', 'duo-6a2e', ['app'])]
+  duo: [filesPod('duo-6a2e-klmno', 'duo-6a2e', ['app']), filesPod('duo-6a2e-pqrst', 'duo-6a2e', ['app'])],
+  idle: []
 }
 
 const filesPods = Object.values(filesDeployments).flat()
 
-const filesReplicaSets = Object.entries(filesDeployments).map(([deployment, [pod]]) => {
-  const name = pod!.metadata.ownerReferences[0]!.name
-  return { metadata: { name, uid: name, ownerReferences: [{ kind: 'Deployment', name: deployment, uid: deployment, controller: true }] } }
+const filesReplicaSets = Object.entries(filesDeployments).flatMap(([deployment, [pod]]) => {
+  const name = pod?.metadata.ownerReferences[0]!.name
+  return name ? [{ metadata: { name, uid: name, ownerReferences: [{ kind: 'Deployment', name: deployment, uid: deployment, controller: true }] } }] : []
 })
 
 /** A completed pod of a Job, with one container, which logged `done`. */
@@ -98,11 +99,12 @@ const jobPod = (name: string, job: string, container: string) => ({
 })
 
 /**
- * The Jobs in `batch`, by the CronJob that owns them ('' for none), and their pods: `nightly` has run once, `hourly` twice;
- * `migrate` has one pod, `retried` two.
+ * The Jobs in `batch`, by the CronJob that owns them ('' for none), and their pods: `nightly` has run once, `hourly` twice,
+ * `weekly` not yet; `migrate` has one pod, `retried` two.
  */
 export const batchJobs = {
   nightly: { 'nightly-1': [jobPod('nightly-1-abcde', 'nightly-1', 'report')] },
+  weekly: {},
   hourly: { 'hourly-1': [jobPod('hourly-1-fghij', 'hourly-1', 'sync')], 'hourly-2': [jobPod('hourly-2-klmno', 'hourly-2', 'sync')] },
   '': { migrate: [jobPod('migrate-pqrst', 'migrate', 'migrate')], retried: [jobPod('retried-uvwxy', 'retried', 'retry'), jobPod('retried-zabcd', 'retried', 'retry')] }
 }
