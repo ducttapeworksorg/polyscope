@@ -1,6 +1,6 @@
 // Test support: stand-ins for what lies between Polyscope and a backend (an S3 store, a cluster) in a corporate network — a TLS front
 // whose certificate comes from a private CA, and a proxy. The CA and certificate are made afresh for each test run
-// and only ever held in memory, bar the CA's certificate (no key) in a temp file for Sources to trust.
+// and only ever held in memory, bar the CAs' certificates (no keys) in temp files for Sources to trust.
 
 import { webcrypto } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -25,22 +25,34 @@ import {
 const algorithm = { name: 'ECDSA', namedCurve: 'P-256', hash: 'SHA-256' }
 const generateKeys = () => webcrypto.subtle.generateKey(algorithm, true, ['sign', 'verify'])
 
-/** A private CA and a certificate it signed for 127.0.0.1 and localhost, as PEM. */
+const caExtensions = () => [
+  new BasicConstraintsExtension(true, undefined, true),
+  new KeyUsagesExtension(KeyUsageFlags.keyCertSign | KeyUsageFlags.cRLSign, true)
+]
+
+/**
+ * A private root CA, an issuing CA it signed, and a certificate that one signed for 127.0.0.1 and localhost, as PEM:
+ * the chain a company's own CA gives its servers.
+ */
 async function createCertificates() {
   const notBefore = new Date(Date.now() - 60 * 60_000)
   const notAfter = new Date(Date.now() + 24 * 60 * 60_000)
   const caKeys = await generateKeys()
   const ca = await X509CertificateGenerator.createSelfSigned(
+    { name: 'CN=Polyscope Test CA', keys: caKeys, notBefore, notAfter, signingAlgorithm: algorithm, extensions: caExtensions() },
+    webcrypto
+  )
+  const issuingCaKeys = await generateKeys()
+  const issuingCa = await X509CertificateGenerator.create(
     {
-      name: 'CN=Polyscope Test CA',
-      keys: caKeys,
+      subject: 'CN=Polyscope Test Issuing CA',
+      issuer: ca.subject,
+      publicKey: issuingCaKeys.publicKey,
+      signingKey: caKeys.privateKey,
       notBefore,
       notAfter,
       signingAlgorithm: algorithm,
-      extensions: [
-        new BasicConstraintsExtension(true, undefined, true),
-        new KeyUsagesExtension(KeyUsageFlags.keyCertSign | KeyUsageFlags.cRLSign, true)
-      ]
+      extensions: caExtensions()
     },
     webcrypto
   )
@@ -48,9 +60,9 @@ async function createCertificates() {
   const server = await X509CertificateGenerator.create(
     {
       subject: 'CN=localhost',
-      issuer: ca.subject,
+      issuer: issuingCa.subject,
       publicKey: serverKeys.publicKey,
-      signingKey: caKeys.privateKey,
+      signingKey: issuingCaKeys.privateKey,
       notBefore,
       notAfter,
       signingAlgorithm: algorithm,
@@ -67,7 +79,7 @@ async function createCertificates() {
     webcrypto
   )
   const key = PemConverter.encode(await webcrypto.subtle.exportKey('pkcs8', serverKeys.privateKey), 'PRIVATE KEY')
-  return { ca: ca.toString('pem'), cert: server.toString('pem'), key }
+  return { ca: ca.toString('pem'), issuingCa: issuingCa.toString('pem'), cert: server.toString('pem'), key }
 }
 
 // Made once per test run: generating keys is quick, but not free.
@@ -100,20 +112,24 @@ async function listen(server: Server | HttpServer) {
 }
 
 /**
- * Serves `endpoint` (an http URL) over https on 127.0.0.1, with a certificate signed by a private test CA;
- * `caPath` is a PEM file of the CA's certificate, gone once the front is closed.
+ * Serves `endpoint` (an http URL) over https on 127.0.0.1, with a certificate a private test CA issued through its
+ * issuing CA (both sent); `caPath` is a PEM file of the root CA's certificate and `issuingCaPath` of the issuing
+ * CA's, both gone once the front is closed.
  */
 export async function startTlsFront(endpoint: string) {
-  const { ca, cert, key } = await (certificates ??= createCertificates())
+  const { ca, issuingCa, cert, key } = await (certificates ??= createCertificates())
   const dir = await mkdtemp(join(tmpdir(), 'polyscope-ca-'))
   const caPath = join(dir, 'ca.pem')
+  const issuingCaPath = join(dir, 'issuing-ca.pem')
   await writeFile(caPath, ca)
+  await writeFile(issuingCaPath, issuingCa)
   const { hostname, port } = new URL(endpoint)
-  const server = createTlsServer({ cert, key }, (socket) => splice(socket, connect(Number(port), hostname)))
+  const server = createTlsServer({ cert: [cert, issuingCa].join('\n'), key }, (socket) => splice(socket, connect(Number(port), hostname)))
   const listening = await listen(server)
   return {
     url: `https://127.0.0.1:${listening.port}`,
     caPath,
+    issuingCaPath,
     close: async () => {
       await listening.close()
       await rm(dir, { recursive: true, force: true })

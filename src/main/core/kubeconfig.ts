@@ -1,8 +1,8 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { getCACertificates } from 'node:tls'
-import { KubeConfig } from '@kubernetes/client-node'
+import { type Cluster, KubeConfig } from '@kubernetes/client-node'
 import type { KubeContext } from '@shared/core-api'
 import { CoreError } from './core-error'
 import { proxyFromEnv } from './proxy-env'
@@ -46,14 +46,33 @@ export async function listKubeContexts(): Promise<KubeContext[]> {
     .sort((a, b) => byName.compare(a.name, b.name))
 }
 
-/** Node's CAs and the OS's, base64 PEM: what a cluster naming no CA of its own is trusted by, as kubectl trusts the OS's. */
-const defaultCaData = () =>
-  Buffer.from([...new Set([...getCACertificates('default'), ...getCACertificates('system')])].join('\n')).toString('base64')
+/** The CA a cluster names in its kubeconfig, as PEM; none if it names none. */
+function namedCa({ caData, caFile }: Cluster) {
+  if (caFile) {
+    try {
+      return readFileSync(caFile, 'utf8')
+    } catch (error) {
+      throw new CoreError('CA_BUNDLE_UNREADABLE', error instanceof Error ? error.message : String(error))
+    }
+  }
+  return caData ? Buffer.from(caData, 'base64').toString('utf8') : ''
+}
+
+/**
+ * What a cluster is trusted by, base64 PEM: Node's CAs, the OS's and the one it names. kubectl trusts only the one it
+ * names, if any; but a company's cluster often names its issuing CA, whose root only the OS holds, and Node, unlike
+ * kubectl, won't trust a CA that isn't a root.
+ */
+const caDataFor = (cluster: Cluster) => {
+  const cas = [...new Set([...getCACertificates('default'), ...getCACertificates('system')]), namedCa(cluster)]
+  return Buffer.from(cas.filter(Boolean).join('\n')).toString('base64')
+}
 
 /**
  * The user's kubeconfig set to `context`; fails if it has no such context. Its cluster goes through its own
- * `proxy-url`, or else the proxy HTTPS_PROXY / NO_PROXY give it, as they are now; and, if it names no CA,
- * trusts the OS's as well as Node's (Node alone doesn't, so company CAs would go unrecognised).
+ * `proxy-url`, or else the proxy HTTPS_PROXY / NO_PROXY give it, as they are now; and trusts the OS's CAs and Node's
+ * as well as any it names (Node alone trusts neither the OS's CAs, so company CAs would go unrecognised, nor a CA
+ * that isn't a root).
  */
 export function kubeConfigFor(context: string): KubeConfig {
   const config = loadKubeConfig()
@@ -63,8 +82,8 @@ export function kubeConfigFor(context: string): KubeConfig {
   config.clusters = config.clusters.map((cluster) => {
     if (cluster.name !== found.cluster) return cluster
     const proxyUrl = cluster.proxyUrl || proxyFromEnv(cluster.server)
-    const namesCa = cluster.caData || cluster.caFile || cluster.skipTLSVerify
-    return { ...cluster, ...(proxyUrl && { proxyUrl }), ...(!namesCa && { caData: defaultCaData() }) }
+    const { caFile: _, ...rest } = cluster
+    return { ...rest, ...(proxyUrl && { proxyUrl }), ...(!cluster.skipTLSVerify && { caData: caDataFor(cluster) }) }
   })
   return config
 }

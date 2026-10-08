@@ -54,7 +54,7 @@ export function asCoreError(error: unknown): CoreError {
     return new CoreError('CREDENTIALS_UNAVAILABLE', `${spawn.slice('spawn '.length)} was not found: ${message}`)
   }
   if (codes.some((code) => networkCodes.has(code))) return new CoreError('UNREACHABLE', `${message} (${codes.join(', ')})`)
-  if (codes.some((code) => certificateCodes.has(code))) return new CoreError('CERTIFICATE_UNTRUSTED', message)
+  if (codes.some((code) => certificateCodes.has(code))) return new CoreError('CERTIFICATE_UNTRUSTED', `${message} (${codes.join(', ')})`)
   return new CoreError('UNKNOWN', message)
 }
 

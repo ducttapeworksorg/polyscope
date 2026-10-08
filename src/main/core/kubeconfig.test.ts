@@ -43,9 +43,31 @@ describe('trusting a cluster', () => {
     expect(await createCore().listKubeWorkloads('fake', 'shop')).toEqual(expect.any(Array))
   })
 
-  it('fails as untrusted when neither the OS nor the kubeconfig trusts it', async () => {
+  it('trusts the CAs the OS does as well as the one the kubeconfig names, which may be an issuing CA only the OS has the root of', async () => {
+    await useKubeconfig(standInCluster(apiServer.url, apiServer.issuingCaPath))
+    os.cas = [await readFile(apiServer.caPath, 'utf8')]
+
+    expect(await createCore().listKubeWorkloads('fake', 'shop')).toEqual(expect.any(Array))
+  })
+
+  it('fails as untrusted, saying why, when neither the OS nor the kubeconfig trusts it', async () => {
     await useKubeconfig(standInCluster(apiServer.url, undefined))
 
+    await expect(createCore().listKubeWorkloads('fake', 'shop')).rejects.toMatchObject({
+      code: 'CERTIFICATE_UNTRUSTED',
+      message: expect.stringContaining('UNABLE_TO_GET_ISSUER_CERT_LOCALLY')
+    })
+  })
+
+  it('fails as untrusted when the kubeconfig names an issuing CA whose root nothing trusts', async () => {
+    await useKubeconfig(standInCluster(apiServer.url, apiServer.issuingCaPath))
+
     await expect(createCore().listKubeWorkloads('fake', 'shop')).rejects.toMatchObject({ code: 'CERTIFICATE_UNTRUSTED' })
+  })
+
+  it('fails as unreadable when the kubeconfig names a CA file that isn’t there', async () => {
+    await useKubeconfig(standInCluster(apiServer.url, join(dir, 'missing.pem')))
+
+    await expect(createCore().listKubeWorkloads('fake', 'shop')).rejects.toMatchObject({ code: 'CA_BUNDLE_UNREADABLE' })
   })
 })
