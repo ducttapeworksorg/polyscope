@@ -148,7 +148,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       # The app needs no Azure subscription, only to be a member of the publisher.
-      - uses: azure/login@v2
+      - uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
