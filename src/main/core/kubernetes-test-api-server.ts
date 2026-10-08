@@ -223,7 +223,8 @@ export const ignoreAmbientProxy = () => {
 }
 
 /**
- * Starts the stand-in; `url` is its https address on 127.0.0.1, and `caPath` a PEM file of the CA that trusts it.
+ * Starts the stand-in; `url` is its https address on 127.0.0.1, `caPath` a PEM file of the root CA that trusts it, and
+ * `issuingCaPath` of the issuing CA between them.
  * With a `token`, only requests bearing it are answered.
  */
 export async function startTestApiServer({ token }: { token?: string } = {}) {
@@ -234,6 +235,7 @@ export async function startTestApiServer({ token }: { token?: string } = {}) {
   return {
     url: front.url,
     caPath: front.caPath,
+    issuingCaPath: front.issuingCaPath,
     close: async () => {
       await front.close()
       server.closeAllConnections()
