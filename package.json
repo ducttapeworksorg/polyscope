@@ -1,6 +1,6 @@
 {
   "name": "polyscope",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "A cross-platform desktop viewer for files and logs from many systems.",
   "license": "Apache-2.0",
   "author": {
