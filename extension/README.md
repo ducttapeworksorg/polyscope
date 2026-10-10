@@ -62,7 +62,7 @@ S3 secret keys are kept in VS Code's secret storage, encrypted by your operating
 
 ## Also a desktop app
 
-Polyscope is also a standalone app for Windows, macOS and Linux, with the same Sources tree. Get it from the [Polyscope repository](https://github.com/ducttapeworksorg/polyscope).
+Polyscope is also a standalone app for Windows, macOS and Linux, with the same Sources tree. Get it from the [Polyscope website](https://ducttapeworks.dev/polyscope/) or the [Polyscope repository](https://github.com/ducttapeworksorg/polyscope).
 
 ## Feedback
 

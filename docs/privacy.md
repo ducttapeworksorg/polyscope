@@ -21,3 +21,7 @@ Nothing Polyscope reads is ever changed: every Source is read-only.
 ## Diagnostics for bug reports
 
 **Settings → Help → Copy diagnostics** puts the Polyscope, OS and Electron versions and the recent app log on your clipboard, to paste into a bug report. The same redaction applies, and your home folder's path is replaced with `~`. Read it over before you post it.
+
+## Questions
+
+Email [privacy@ducttapeworks.dev](mailto:privacy@ducttapeworks.dev) with any question about privacy in Polyscope.

@@ -5,9 +5,10 @@
   "license": "Apache-2.0",
   "author": {
     "name": "Ducttapeworks",
-    "email": "ducttapeworks@proton.me"
+    "email": "info@ducttapeworks.dev",
+    "url": "https://ducttapeworks.dev/"
   },
-  "homepage": "https://github.com/ducttapeworksorg/polyscope",
+  "homepage": "https://ducttapeworks.dev/polyscope/",
   "repository": "github:ducttapeworksorg/polyscope",
   "private": true,
   "main": "./out/main/index.js",
