@@ -40,7 +40,7 @@ test.beforeEach(async () => {
       'kind: Config',
       `clusters: [{ name: fake, cluster: { server: 'http://127.0.0.1:${port}', insecure-skip-tls-verify: true } }]`,
       'users: [{ name: fake, user: { token: fake } }]',
-      'contexts: [{ name: fake, context: { cluster: fake, user: fake, namespace: shop } }]',
+      'contexts: [{ name: fake, context: { cluster: fake, user: fake, namespace: shop } }, { name: other, context: { cluster: fake, user: fake, namespace: staging } }]',
       'current-context: fake'
     ].join('\n')
   )
@@ -108,6 +108,23 @@ test('suggest every namespace, Workload and mount path, whatever is typed alread
   await workload.selectOption('StatefulSet/db')
   await path.click()
   await expect(options).toHaveText(['/var/lib/db'])
+})
+
+test('switching context fills in its namespace, unless one was typed', async () => {
+  const window = await app.firstWindow()
+  const dialog = await openAddSource(window, 'kubernetesLogs')
+  const context = dialog.getByLabel('Context', { exact: true })
+  const namespace = dialog.getByRole('combobox', { name: 'Namespace', exact: true })
+
+  await expect(namespace).toHaveValue('shop')
+  await context.selectOption('other')
+  await expect(namespace).toHaveValue('staging')
+  await context.selectOption('fake')
+  await expect(namespace).toHaveValue('shop')
+
+  await namespace.fill('payments')
+  await context.selectOption('other')
+  await expect(namespace).toHaveValue('payments')
 })
 
 test('new S3 Sources use path-style addressing', async () => {
