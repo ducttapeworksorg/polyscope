@@ -127,6 +127,58 @@ test('switching context fills in its namespace, unless one was typed', async () 
   await expect(namespace).toHaveValue('payments')
 })
 
+test('a new Log Source is named after its namespace until it is named otherwise', async () => {
+  const window = await app.firstWindow()
+  const dialog = await openAddSource(window, 'kubernetesLogs')
+  const name = dialog.getByLabel('Name', { exact: true })
+  const namespace = dialog.getByRole('combobox', { name: 'Namespace', exact: true })
+
+  await expect(name).toHaveValue('shop')
+  await dialog.getByLabel('Context', { exact: true }).selectOption('other')
+  await expect(name).toHaveValue('staging')
+  await namespace.fill('payments')
+  await expect(name).toHaveValue('payments')
+
+  await name.fill('Payments')
+  await namespace.fill('shop')
+  await expect(name).toHaveValue('Payments')
+})
+
+test('a new Files Source is named after its Workload until it is named otherwise', async () => {
+  const window = await app.firstWindow()
+  const dialog = await openAddSource(window, 'kubernetesFiles')
+  const name = dialog.getByLabel('Name', { exact: true })
+  const workload = dialog.getByLabel('Workload', { exact: true })
+
+  // Not after its namespace, which it has as well.
+  await expect(dialog.getByRole('combobox', { name: 'Namespace' })).toHaveValue('shop')
+  await expect(name).toHaveValue('')
+  await workload.selectOption('Deployment/web')
+  await expect(name).toHaveValue('web')
+  await workload.selectOption('StatefulSet/db')
+  await expect(name).toHaveValue('db')
+
+  await name.fill('Database')
+  await workload.selectOption('Deployment/web')
+  await expect(name).toHaveValue('Database')
+})
+
+test('a new S3 Source is named after its bucket until it is named otherwise', async () => {
+  const window = await app.firstWindow()
+  const dialog = await openAddSource(window, 's3')
+  const name = dialog.getByLabel('Name', { exact: true })
+  const bucket = dialog.getByLabel('Bucket', { exact: true })
+
+  await bucket.pressSequentially('logs')
+  await expect(name).toHaveValue('logs')
+  await bucket.fill('archive')
+  await expect(name).toHaveValue('archive')
+
+  await name.fill('Archive')
+  await bucket.fill('logs')
+  await expect(name).toHaveValue('Archive')
+})
+
 test('new S3 Sources use path-style addressing', async () => {
   const window = await app.firstWindow()
   const dialog = await openAddSource(window, 's3')

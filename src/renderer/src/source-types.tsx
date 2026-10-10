@@ -42,6 +42,12 @@ type SourceTypeUis = { [T in SourceTypeId]: SourceTypeUi<Extract<NewSource, { ty
 
 const lastSegment = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path
 
+/**
+ * A Source's name as the setting it's named after changes `from` one value `to` another: filled in while it's blank,
+ * kept in step while it's still what was filled in, and left alone once typed.
+ */
+const nameFollowing = (name: string, from: string, to: string) => (!name.trim() || name === from ? to : name)
+
 /** A Source path on disk under `rootPath`, written with the separator the root path uses. */
 function pathOnDisk(rootPath: string, path: SourcePath) {
   if (!path) return rootPath
@@ -91,13 +97,16 @@ function LocalFields({ value, onChange }: FieldsProps<Extract<NewSource, { type:
 type S3Settings = Extract<NewSource, { type: 's3' }>
 
 function S3Fields({ value, onChange, editing }: FieldsProps<S3Settings>) {
+  // A new Source is named after its bucket.
+  const set = (key: keyof S3Settings, input: string) =>
+    onChange(key === 'bucket' ? { ...value, bucket: input, name: nameFollowing(value.name, value.bucket, input) } : { ...value, [key]: input })
   const text = (key: keyof S3Settings, label: MessageKey, { hint, mono = false }: { hint?: MessageKey; mono?: boolean } = {}) => (
     <label className="field">
       <span className="field__label">{t(label)}</span>
       <input
         className={`field__input ${mono ? 'field__input--path' : ''}`}
         value={String(value[key] ?? '')}
-        onChange={(e) => onChange({ ...value, [key]: e.target.value })}
+        onChange={(e) => set(key, e.target.value)}
         spellCheck={false}
       />
       {hint && <span className="field__hint">{t(hint)}</span>}
@@ -269,10 +278,17 @@ function ClusterFields<S extends KubernetesLogsSettings | KubernetesFilesSetting
   /** The namespace a context fills in: its own, or `default`. */
   const namespaceOf = (context: string, listed: KubeContext[]) => listed.find((c) => c.name === context)?.namespace ?? 'default'
 
+  /** The settings with `namespace` in them: a new Log Source is named after its namespace, a Files Source after its Workload. */
+  const withNamespace = (settings: S, namespace: string): S => ({
+    ...settings,
+    namespace,
+    name: settings.type === 'kubernetesLogs' ? nameFollowing(settings.name, settings.namespace, namespace) : settings.name
+  })
+
   /** Picks a context, filling in its namespace unless the one there was typed rather than filled in from the last context. */
   const pick = (context: string, listed = contexts ?? []) => {
     const typed = value.namespace.trim() && value.namespace !== namespaceOf(value.context, listed)
-    onChange({ ...value, context, namespace: typed ? value.namespace : namespaceOf(context, listed) })
+    onChange(withNamespace({ ...value, context }, typed ? value.namespace : namespaceOf(context, listed)))
   }
 
   useEffect(() => {
@@ -326,7 +342,7 @@ function ClusterFields<S extends KubernetesLogsSettings | KubernetesFilesSetting
           className="field__input--path"
           value={value.namespace}
           options={namespaces.items ?? []}
-          onChange={(namespace) => onChange({ ...value, namespace })}
+          onChange={(namespace) => onChange(withNamespace(value, namespace))}
         />
         <span className="field__hint">
           {t(value.type === 'kubernetesFiles' ? 'kubernetesFilesSource.namespace.hint' : 'kubernetesSource.namespace.hint')}
@@ -350,6 +366,9 @@ function KubernetesFilesFields({ value, onChange }: FieldsProps<KubernetesFilesS
   const choices = workloadName && !selected ? [{ kind: workloadKind, name: workloadName, mountPaths: [] }, ...listed] : listed
   const workloadHint = workloads.problem ?? (workloads.items?.length === 0 ? t('kubernetesFilesSource.workload.none', { namespace }) : null)
   const pathId = useId()
+  // A new Source is named after its Workload.
+  const withWorkload = (kind: FilesWorkloadKind, name: string) =>
+    onChange({ ...value, workloadKind: kind, workloadName: name, name: nameFollowing(value.name, workloadName, name) })
 
   return (
     <>
@@ -382,7 +401,7 @@ function KubernetesFilesFields({ value, onChange }: FieldsProps<KubernetesFilesS
               id="kubernetes-workload"
               className="field__input field__input--path"
               value={workloadName}
-              onChange={(e) => onChange({ ...value, workloadName: e.target.value })}
+              onChange={(e) => withWorkload(workloadKind, e.target.value)}
               spellCheck={false}
             />
           </div>
@@ -398,7 +417,7 @@ function KubernetesFilesFields({ value, onChange }: FieldsProps<KubernetesFilesS
             value={workloadName ? workloadKey({ kind: workloadKind, name: workloadName }) : ''}
             onChange={(e) => {
               const workload = choices.find((choice) => workloadKey(choice) === e.target.value)
-              if (workload) onChange({ ...value, workloadKind: workload.kind, workloadName: workload.name })
+              if (workload) withWorkload(workload.kind, workload.name)
             }}
           >
             {!workloadName && (
