@@ -266,10 +266,13 @@ function ClusterFields<S extends KubernetesLogsSettings | KubernetesFilesSetting
   const namespaces = useListing(() => (value.context ? core.listKubeNamespaces(value.context) : null), [value.context])
   const namespaceId = useId()
 
-  /** Picks a context, filling in its namespace (or `default`) unless one was typed already. */
+  /** The namespace a context fills in: its own, or `default`. */
+  const namespaceOf = (context: string, listed: KubeContext[]) => listed.find((c) => c.name === context)?.namespace ?? 'default'
+
+  /** Picks a context, filling in its namespace unless the one there was typed rather than filled in from the last context. */
   const pick = (context: string, listed = contexts ?? []) => {
-    const namespace = value.namespace.trim() ? value.namespace : (listed.find((c) => c.name === context)?.namespace ?? 'default')
-    onChange({ ...value, context, namespace })
+    const typed = value.namespace.trim() && value.namespace !== namespaceOf(value.context, listed)
+    onChange({ ...value, context, namespace: typed ? value.namespace : namespaceOf(context, listed) })
   }
 
   useEffect(() => {
