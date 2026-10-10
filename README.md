@@ -17,7 +17,7 @@ Polyscope puts them all in one tree, read the same way:
 - **Always know where you are.** Label Sources with an **Environment** like *prod* or *staging*. Its colour follows you onto every tab and the status bar.
 - **Read-only and private.** Polyscope never writes to what it reads, collects no telemetry, and encrypts your secrets with your operating system's secure storage.
 
-It runs on Windows, macOS and Linux, and [inside VS Code](#in-vs-code).
+It runs on Windows, macOS and Linux, and [inside VS Code](#in-vs-code). Find out more at [ducttapeworks.dev/polyscope](https://ducttapeworks.dev/polyscope/).
 
 ## What it reads
 
@@ -74,7 +74,7 @@ The extension keeps its own Sources, Environments and settings, apart from the a
 
 Please [open an issue on GitHub](https://github.com/ducttapeworksorg/polyscope/issues). To help us reproduce it, open **Settings → Help → Copy diagnostics** and paste the result into the issue. It contains the Polyscope, OS and Electron versions (VS Code's, in the extension) and the recent app log. Secret keys, tokens, passwords, credential-bearing URLs and your home folder's path are removed first, but read it over before you post it.
 
-To report a security problem, please email [ducttapeworks@proton.me](mailto:ducttapeworks@proton.me) rather than opening a public issue.
+To report a security problem, please email [security@ducttapeworks.dev](mailto:security@ducttapeworks.dev) rather than opening a public issue.
 
 ## License
 
