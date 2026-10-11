@@ -28,15 +28,15 @@ An **Environment** flagged as needing extra care (e.g. prod).
 A **Source** whose content is a browsable hierarchy of folders and files.
 
 **Log Source**:
-A **Source** whose content is a hierarchy of workloads producing **Log Streams**.
+A **Source** whose content is a hierarchy of groups ending in **Log Streams**. What the groups are depends on its **Source Type**.
+
+**Log Stream**:
+The log output of one thing that logs (a container, a systemd unit, a CloudWatch log stream), viewable as a snapshot or live-followed.
 
 ### Kubernetes
 
 **Workload**:
 A Kubernetes object with a pod template that owns pods (Deployment, StatefulSet, DaemonSet, Job, CronJob). Browsed within the single namespace fixed on the **Source**.
-
-**Log Stream**:
-The log output of one container in one pod, viewable as a snapshot or live-followed.
 
 **Previous Log**:
 The **Log Stream** of a container's prior (crashed or restarted) instance, available only when the container has restarted. Viewed by switching a container's log view to it, not as a node of its own in the tree; it can't be **Followed**.
@@ -47,10 +47,15 @@ The health of a pod as shown in the tree: its phase or failure reason (Running, 
 **Ready Count**:
 How many of a **Workload**'s pods are ready out of how many are desired (e.g. `2/3`). Deployments, StatefulSets and DaemonSets have one; Jobs and CronJobs run to completion, so have none.
 
+### Docker
+
+**Container Status**:
+The health of a Docker container as shown in the tree: running, exited (with its exit code), restarting or unhealthy, plus its restart count when greater than zero. The Docker counterpart of **Pod Status**.
+
 ### Viewing
 
 **Follow**:
-Continuously appending new content to an open view as it is produced (live **Log Streams**, or growing files on Local and Kubernetes Files **Sources**). Not applicable to S3 objects.
+Continuously appending new content to an open view as it is produced (live **Log Streams**, or growing files on Local, Kubernetes Files and SSH Files **Sources**). Not applicable to S3 or Azure Blob objects.
 _Avoid_: tail, watch, stream (as a verb)
 
 **Large File**:
@@ -81,7 +86,8 @@ _Avoid_: plugin
 - A Kubernetes Logs **Source** covers every **Workload** in its namespace
 - In both Kubernetes **Source Types**, a Job, pod or container level with exactly one child folds into its parent: a **Workload** with one pod of one container opens its **Log Stream** directly. The folded level's details (e.g. **Pod Status**) move to the row that stands in for it; in Kubernetes Files a folded pod's details go only in its **Source**'s tooltip
 - Kubernetes Files and Kubernetes Logs are separate **Source Types**, even though both point at a cluster
-- A **Log Stream** belongs to one container of one pod of one **Workload**
+- In Kubernetes Logs, a **Log Stream** belongs to one container of one pod of one **Workload**
+- **Previous Log**, **Pod Status** and **Ready Count** belong to Kubernetes Logs; other **Log Source** types needn't have them
 
 ## Flagged ambiguities
 
