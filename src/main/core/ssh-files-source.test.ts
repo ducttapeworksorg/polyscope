@@ -8,11 +8,12 @@ import type { HostKey, LargeFileEvent, LargeFileSearchEvent, NewSshFilesSource, 
 import { createCore } from './core'
 import type { SeedTree } from './file-source-contract'
 import { createSecretStore } from './secret-store'
-import { generateKey, sshdTarget, startTestSshServer, writeTree, type TestSshServer } from './ssh-test-server'
+import { generateKey, sshdTarget, startTestSshAgent, startTestSshServer, writeTree, type TestSshAgent, type TestSshServer } from './ssh-test-server'
 
 let dir: string
 let home: string
-const servers: TestSshServer[] = []
+/** The servers and agents a test started, to stop after it. */
+const started: (TestSshServer | TestSshAgent)[] = []
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'polyscope-ssh-files-'))
@@ -25,14 +26,22 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.unstubAllEnvs()
-  await Promise.all(servers.splice(0).map((server) => server.close()))
+  await Promise.all(started.splice(0).map((server) => server.close()))
   await rm(dir, { recursive: true, force: true })
 })
 
 const startServer = async (options?: Parameters<typeof startTestSshServer>[0]) => {
   const server = await startTestSshServer(options)
-  servers.push(server)
+  started.push(server)
   return server
+}
+
+/** Starts an SSH agent holding `keys`, which SSH_AUTH_SOCK names. */
+const startAgent = async (...keys: string[]) => {
+  const agent = await startTestSshAgent(...keys)
+  started.push(agent)
+  vi.stubEnv('SSH_AUTH_SOCK', agent.path)
+  return agent
 }
 
 /** Writes a key file into the test's folder, returning its path. */
@@ -100,8 +109,10 @@ describe('adding an SSH Files Source', () => {
       user: 'ops',
       port: 22,
       path: '/var/log/app',
+      auth: 'keyFile',
       keyFile: '/keys/id',
-      passphraseSet: false
+      passphraseSet: false,
+      passwordSet: false
     }
     expect(added).toEqual(expected)
     expect(await core.listSources()).toEqual([expected])
@@ -191,6 +202,58 @@ describe('an SSH Files Source’s passphrase', () => {
   })
 })
 
+describe('an SSH Files Source’s password', () => {
+  const password = (changes: Partial<NewSshFilesSource> = {}) => offline({ auth: 'password', keyFile: '', password: 'open sesame', ...changes })
+
+  it('goes to the secret store, never into the saved registry', async () => {
+    const dataDir = join(dir, 'user-data')
+    const secrets = createSecretStore({ dataDir, cipher: { encrypt: (plain) => Buffer.from(plain, 'utf16le'), decrypt: (b) => b.toString('utf16le') } })
+    const core = createCore({ dataDir, secrets })
+
+    const source = await core.addSource(password())
+
+    expect(source).toMatchObject({ auth: 'password', passwordSet: true, passphraseSet: false })
+    expect(await secrets.get(source.id, 'password')).toBe('open sesame')
+    expect(await readFile(join(dataDir, 'sources.json'), 'utf8')).not.toContain('open sesame')
+    expect(JSON.stringify(await core.listSources())).not.toContain('open sesame')
+  })
+
+  it('is required to add a Source signing in with one', async () => {
+    const core = createCore()
+
+    await expect(core.addSource(password({ password: ' ' }))).rejects.toMatchObject({ code: 'PASSWORD_REQUIRED' })
+    await expect(core.addSource(password({ password: undefined }))).rejects.toMatchObject({ code: 'PASSWORD_REQUIRED' })
+  })
+
+  it('is kept when an edit leaves it blank, replaced when an edit gives one, copied by Duplicate and forgotten by Delete', async () => {
+    const secrets = createSecretStore({ cipher: { encrypt: (plain) => Buffer.from(plain), decrypt: (b) => b.toString() } })
+    const core = createCore({ secrets })
+    const source = await core.addSource(password())
+
+    expect(await core.editSource(source.id, password({ name: 'Renamed', password: '' }))).toMatchObject({ name: 'Renamed', passwordSet: true })
+    expect(await secrets.get(source.id, 'password')).toBe('open sesame')
+    await core.editSource(source.id, password({ password: 'new one' }))
+    const copy = await core.duplicateSource(source.id)
+    await core.deleteSource(source.id)
+
+    expect(copy).toMatchObject({ auth: 'password', passwordSet: true })
+    expect(await secrets.get(copy.id, 'password')).toBe('new one')
+    expect(await secrets.get(source.id, 'password')).toBeUndefined()
+  })
+
+  it('is forgotten when the Source goes on to sign in another way, as a passphrase is', async () => {
+    const secrets = createSecretStore({ cipher: { encrypt: (plain) => Buffer.from(plain), decrypt: (b) => b.toString() } })
+    const core = createCore({ secrets })
+    const source = await core.addSource(password())
+
+    expect(await core.editSource(source.id, offline({ passphrase: 'for the key' }))).toMatchObject({ passwordSet: false, passphraseSet: true })
+    expect(await secrets.get(source.id, 'password')).toBeUndefined()
+    expect(await core.editSource(source.id, offline({ auth: 'agent' }))).toMatchObject({ keyFile: '', passwordSet: false, passphraseSet: false })
+    expect(await secrets.get(source.id, 'passphrase')).toBeUndefined()
+    await expect(core.editSource(source.id, password({ password: '' }))).rejects.toMatchObject({ code: 'PASSWORD_REQUIRED' })
+  })
+})
+
 describe('an SSH Files Source’s host key', () => {
   it('is trusted from ~/.ssh/known_hosts, and connecting lists the folder', async () => {
     const server = await startServer()
@@ -251,6 +314,45 @@ describe('an SSH Files Source’s host key', () => {
     await expect(stat(join(home, '.ssh', 'known_hosts2'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('trusted in Polyscope is forgotten when the last Source on its server is deleted', async () => {
+    const server = await startServer()
+    const other = await startServer()
+    const dataDir = join(dir, 'user-data')
+    const core = createCore({ dataDir })
+    const trustFor = async (source: { id: string }) => {
+      const failure = (await core.connect(source.id).catch((error: unknown) => error)) as { hostKey: HostKey }
+      await core.trustHostKey(failure.hostKey)
+    }
+    const first = await core.addSource(await settingsFor(server, '/'))
+    const second = await core.addSource(await settingsFor(server, '/', { name: 'Same server' }))
+    const elsewhere = await core.addSource(await settingsFor(other, '/'))
+    await trustFor(first)
+    await trustFor(elsewhere)
+
+    // Another Source still uses the server's key.
+    await core.deleteSource(first.id)
+    expect(await core.connect(second.id)).toEqual([])
+
+    await core.deleteSource(second.id)
+    const restarted = createCore({ dataDir })
+    await expect(restarted.testConnection(await settingsFor(server, '/'))).rejects.toMatchObject({ code: 'HOST_KEY_UNKNOWN' })
+    expect(await restarted.connect(elsewhere.id)).toEqual([])
+  })
+
+  it('in ~/.ssh/known_hosts is never forgotten by deleting a Source', async () => {
+    const server = await startServer()
+    const line = knownHostsLine(server)
+    await knownHosts(line)
+    const core = createCore({ dataDir: join(dir, 'user-data') })
+    const source = await core.addSource(await settingsFor(server, '/'))
+
+    await core.deleteSource(source.id)
+
+    expect(await readFile(join(home, '.ssh', 'known_hosts'), 'utf8')).toBe(`${line}
+`)
+    await expect(core.testConnection(await settingsFor(server, '/'))).resolves.toBeUndefined()
+  })
+
   it('can’t be trusted unless a connection offered it', async () => {
     const madeUp = { host: '127.0.0.1', port: 22, keyType: 'ssh-ed25519', fingerprint: 'SHA256:made-up' }
 
@@ -280,7 +382,7 @@ describe('an SSH Files Source’s host key', () => {
     // Another server, with another host key, at the same address.
     const { port } = first
     await first.close()
-    servers.splice(servers.indexOf(first), 1)
+    started.splice(started.indexOf(first), 1)
     const impostor = await startServer({ port })
 
     await expect(core.testConnection(await settingsFor(impostor, '/'))).rejects.toMatchObject({ code: 'HOST_KEY_CHANGED' })
@@ -387,7 +489,7 @@ describe('connecting an SSH Files Source', () => {
     const server = await startServer()
     const settings = await settingsFor(server, '/')
     await server.close()
-    servers.splice(servers.indexOf(server), 1)
+    started.splice(started.indexOf(server), 1)
 
     await failsWith('UNREACHABLE', server, settings)
   })
@@ -438,6 +540,45 @@ describe('connecting an SSH Files Source', () => {
 
     await expect(core.testConnection({ ...settings, passphrase: '' }, source.id)).resolves.toBeUndefined()
     expect(await core.connect(source.id)).toEqual([])
+  })
+
+  it('signs in with a password, and fails with a wrong one', async () => {
+    const server = await startServer({ password: 'open sesame' })
+    const path = await server.seed({ 'app.log': 'a' })
+    const settings = await settingsFor(server, path, { auth: 'password', keyFile: '', password: 'open sesame' })
+
+    await failsWith('SIGN_IN_REFUSED', server, { ...settings, password: 'wrong' })
+    await knownHosts(knownHostsLine(server))
+    const core = createCore()
+    const source = await core.addSource(settings)
+    expect(names(await core.connect(source.id))).toEqual(['app.log'])
+  })
+
+  it('signs in through the SSH agent, trying each of its keys', async () => {
+    const server = await startServer()
+    const path = await server.seed({ 'app.log': 'a' })
+    await startAgent(generateKey().private, server.clientKey)
+    await knownHosts(knownHostsLine(server))
+    const core = createCore()
+    const source = await core.addSource(await settingsFor(server, path, { auth: 'agent', keyFile: '' }))
+
+    expect(source).toMatchObject({ auth: 'agent', keyFile: '', passphraseSet: false, passwordSet: false })
+    expect(names(await core.connect(source.id))).toEqual(['app.log'])
+  })
+
+  it('fails when the SSH agent holds no key the server takes', async () => {
+    const server = await startServer()
+    await startAgent(generateKey().private)
+
+    await failsWith('SIGN_IN_REFUSED', server, await settingsFor(server, '/', { auth: 'agent' }))
+  })
+
+  // Windows goes on to the agents that are always looked for there, which this computer may have (see ssh-agent.test.ts).
+  it.skipIf(process.platform === 'win32')('fails saying so when no SSH agent answers', async () => {
+    const server = await startServer()
+    vi.stubEnv('SSH_AUTH_SOCK', join(dir, 'no-agent.sock'))
+
+    await failsWith('AGENT_NOT_FOUND', server, await settingsFor(server, '/', { auth: 'agent' }))
   })
 
   it('opens one connection, which disconnecting closes, and a connection test leaves none open', async () => {

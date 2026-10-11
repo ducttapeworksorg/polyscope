@@ -75,7 +75,8 @@ import { createRegistryStore, emptyRegistry, type SavedSource } from './registry
 import { createS3FileSource, readCaBundle, type S3Target } from './s3-file-source'
 import { createSecretStore, type SecretStore } from './secret-store'
 import { createSettingsStore } from './settings-store'
-import { connectSsh } from './ssh-connection'
+import { findSshAgent } from './ssh-agent'
+import { connectSsh, type SshSignIn } from './ssh-connection'
 import { createSshFileSource } from './ssh-file-source'
 
 const asCoreError = (error: unknown) =>
@@ -111,6 +112,8 @@ function withDefaults(saved: SavedSource): SavedSource {
         proxyUrl: source.proxyUrl ?? ''
       }
     case 'sshFiles':
+      // Before agent and password sign-in, every SSH Files Source signed in with a key file.
+      return { ...source, auth: source.auth ?? 'keyFile', keyFile: source.keyFile ?? '' }
     case 'kubernetesFiles':
     case 'kubernetesLogs':
       return source
@@ -123,7 +126,7 @@ const unlabelled = <S extends SavedSource>({ environmentId: _, ...source }: S) =
 /** Where a Source points and how it gets there: its settings, less its id, name, label and remembered view choices. */
 type Target =
   | Pick<LocalSourceInfo, 'type' | 'rootPath' | 'showHidden'>
-  | Pick<SshFilesSourceInfo, 'type' | 'host' | 'user' | 'port' | 'path' | 'keyFile'>
+  | Pick<SshFilesSourceInfo, 'type' | 'host' | 'user' | 'port' | 'path' | 'auth' | 'keyFile'>
   | Omit<S3SourceInfo, 'id' | 'name' | 'environmentId' | 'lastNLines' | 'secretKeySet'>
   | Pick<KubernetesFilesSourceInfo, 'type' | 'context' | 'namespace' | 'workloadKind' | 'workloadName' | 'path'>
   | Pick<KubernetesLogsSourceInfo, 'type' | 'context' | 'namespace'>
@@ -132,11 +135,13 @@ type S3Settings = Extract<Target, { type: 's3' }>
 
 /**
  * The name a Source's one secret is stored under, when its settings have a use for one: an S3 Source's secret key
- * when it signs in with keys, an SSH Files Source's key file passphrase.
+ * when it signs in with keys, an SSH Files Source's key file passphrase or password.
  */
 function secretNameOf(settings: { type: SourceTypeId; auth?: string }) {
   if (settings.type === 's3') return (settings.auth ?? 'keys') === 'keys' ? 'secretKey' : undefined
-  return settings.type === 'sshFiles' ? 'passphrase' : undefined
+  if (settings.type !== 'sshFiles') return undefined
+  const auth = settings.auth ?? 'keyFile'
+  return auth === 'keyFile' ? 'passphrase' : auth === 'password' ? 'password' : undefined
 }
 
 const isBlank = (value: string | undefined) => !value?.trim()
@@ -177,9 +182,10 @@ function sshTargetOf(input: NewSshFilesSource): Extract<Target, { type: 'sshFile
   if (!user) throw new CoreError('USER_REQUIRED', 'An SSH Files Source needs a user to sign in as')
   const port = input.port ?? 22
   if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new CoreError('INVALID_PORT', `Not a port from 1 to 65535: ${String(port)}`)
-  const keyFile = input.keyFile?.trim() ?? ''
-  if (!keyFile) throw new CoreError('KEY_FILE_REQUIRED', 'An SSH Files Source needs a key file to sign in with')
-  return { type: 'sshFiles', host, user, port, path: normaliseAbsolutePath(input.path ?? '', 'INVALID_PATH'), keyFile }
+  const auth = input.auth ?? 'keyFile'
+  const keyFile = auth === 'keyFile' ? (input.keyFile?.trim() ?? '') : ''
+  if (auth === 'keyFile' && !keyFile) throw new CoreError('KEY_FILE_REQUIRED', 'An SSH Files Source needs a key file to sign in with')
+  return { type: 'sshFiles', host, user, port, path: normaliseAbsolutePath(input.path ?? '', 'INVALID_PATH'), auth, keyFile }
 }
 
 /** A kubeconfig context's name, checked and trimmed. */
@@ -261,6 +267,8 @@ export interface CoreOptions {
   secrets?: SecretStore
   /** Where Large Files are cached; defaults to a folder in `dataDir`, or else in the OS temp folder. */
   cacheDir?: string
+  /** ssh2's pagent.exe, for signing in through Pageant on Windows; only Windows' OpenSSH agent is tried without it. */
+  pageantHelper?: string
 }
 
 /**
@@ -393,7 +401,10 @@ export function createCore(options: CoreOptions = {}): Core {
       saved.environmentId === undefined || environments.some((e) => e.id === saved.environmentId) ? { ...saved } : unlabelled(saved)
     // Only whether there is a secret: the secret itself stays in the core.
     if (source.type === 's3') return { ...source, secretKeySet: (await secrets.get(source.id, 'secretKey')) !== undefined }
-    if (source.type === 'sshFiles') return { ...source, passphraseSet: (await secrets.get(source.id, 'passphrase')) !== undefined }
+    if (source.type === 'sshFiles') {
+      const stored = async (name: string) => secretNameOf(source) === name && (await secrets.get(source.id, name)) !== undefined
+      return { ...source, passphraseSet: await stored('passphrase'), passwordSet: await stored('password') }
+    }
     return source
   }
 
@@ -703,16 +714,27 @@ export function createCore(options: CoreOptions = {}): Core {
     return fileSource
   }
 
-  /**
-   * Connects to an SSH Files Source's server, its host key checked, signs in with its key file (decrypted with
-   * `passphrase`), and opens its folder, once it's clear the folder is there.
-   */
-  const reachSsh = async ({ host, port, user, path, keyFile }: Extract<Target, { type: 'sshFiles' }>, passphrase?: string) => {
+  /** How an SSH Files Source signs in: `secret` is its key file's passphrase, or its password. */
+  const sshSignInOf = async ({ auth, keyFile }: Extract<Target, { type: 'sshFiles' }>, secret?: string): Promise<SshSignIn> => {
+    if (auth === 'agent') return { agent: await findSshAgent(options.pageantHelper ? { pageantHelper: options.pageantHelper } : {}) }
+    if (auth === 'password') {
+      if (secret === undefined) throw new CoreError('PASSWORD_REQUIRED', 'Enter the password to sign in with')
+      return { password: secret }
+    }
     const privateKey = await readFile(keyFile).catch((error: Error) => {
       throw new CoreError('KEY_FILE_UNREADABLE', `Couldn't read the key file ${keyFile}: ${error.message}`)
     })
+    return { privateKey, ...(secret !== undefined && { passphrase: secret }) }
+  }
+
+  /**
+   * Connects to an SSH Files Source's server, its host key checked, signs in (with `secret`, its key file's passphrase
+   * or its password, if it has one), and opens its folder, once it's clear the folder is there.
+   */
+  const reachSsh = async (target: Extract<Target, { type: 'sshFiles' }>, secret?: string) => {
+    const { host, port, user, path } = target
     const connection = await connectSsh(
-      { host, port, user, privateKey, ...(passphrase !== undefined && { passphrase }) },
+      { host, port, user, ...(await sshSignInOf(target, secret)) },
       { checkHostKey: (key) => hostKeys.check(host, port, key), preferredHostKeyTypes: await hostKeys.knownTypes(host, port) }
     )
     const fileSource = createSshFileSource(connection, path)
@@ -770,7 +792,8 @@ export function createCore(options: CoreOptions = {}): Core {
   const secretFor = async (input: NewSource, sourceId?: string) => {
     const name = secretNameOf(input)
     if (name === undefined) return undefined
-    const typed = input.type === 's3' ? input.secretAccessKey : input.type === 'sshFiles' ? input.passphrase : undefined
+    const typed =
+      input.type === 's3' ? input.secretAccessKey : input.type === 'sshFiles' ? (name === 'password' ? input.password : input.passphrase) : undefined
     if (!isBlank(typed)) return typed
     return sourceId === undefined ? undefined : secrets.get(sourceId, name)
   }
@@ -796,6 +819,9 @@ export function createCore(options: CoreOptions = {}): Core {
     const typed = await secretFor(input)
     if (target.type === 's3' && target.auth === 'keys' && typed === undefined && (await secretFor(input, editing)) === undefined) {
       throw new CoreError('SECRET_KEY_REQUIRED', 'An S3 Source needs a secret key')
+    }
+    if (target.type === 'sshFiles' && target.auth === 'password' && typed === undefined && (await secretFor(input, editing)) === undefined) {
+      throw new CoreError('PASSWORD_REQUIRED', 'An SSH Files Source signing in with a password needs one')
     }
     return { saved: { ...target, name, ...label }, ...(typed !== undefined && { secret: typed }) }
   }
@@ -890,9 +916,13 @@ export function createCore(options: CoreOptions = {}): Core {
 
     async deleteSource(sourceId) {
       await loaded
-      sourceFor(sourceId)
+      const source = sourceFor(sourceId)
       // Secrets go first: if that fails the Source is still there to delete again.
       await secrets.remove(sourceId)
+      // As do the host keys trusted in Polyscope for its server, unless another Source reaches the same server: at worst,
+      // a Source that fails to delete has its server's key offered to trust again.
+      const onSameServer = (s: SavedSource) => s.type === 'sshFiles' && source.type === 'sshFiles' && s.host.toLowerCase() === source.host.toLowerCase() && s.port === source.port
+      if (source.type === 'sshFiles' && !sources.some((s) => s !== source && onSameServer(s))) await hostKeys.forget(source.host, source.port)
       await commit(() => sources.splice(sources.indexOf(sourceFor(sourceId)), 1))
       dropConnection(sourceId)
     },

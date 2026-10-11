@@ -10,6 +10,7 @@ import {
   type SourceInfo,
   type SourcePath,
   type SourceTypeId,
+  type SshAuth,
   type SshFilesSourceInfo
 } from '@shared/core-api'
 import { ComboBox } from './components/ComboBox'
@@ -113,18 +114,15 @@ function SshFields({ value, onChange, editing }: FieldsProps<SshSettings>) {
       {hint && <span className="field__hint">{t(hint)}</span>}
     </label>
   )
-  const stored = editing?.type === 'sshFiles' ? editing.passphraseSet : false
+  const auth = value.auth ?? 'keyFile'
+  // Only a secret stored for the way it signs in counts.
+  const signsInSame = editing?.type === 'sshFiles' && editing.auth === auth
+  const stored = signsInSame && (auth === 'password' ? editing.passwordSet : editing.passphraseSet)
   const [weakSecrets, setWeakSecrets] = useState(false)
 
   useEffect(() => {
     void window.polyscope.secretStorageIsWeak().then(setWeakSecrets)
   }, [])
-
-  const browseKeyFile = async () => {
-    // Key files have no extension of their own to filter by.
-    const picked = await window.polyscope.pickFile([{ name: t('sshSource.keyFile.allFiles'), extensions: ['*'] }])
-    if (picked) onChange({ ...value, keyFile: picked })
-  }
 
   return (
     <>
@@ -146,6 +144,61 @@ function SshFields({ value, onChange, editing }: FieldsProps<SshSettings>) {
       {text('user', 'sshSource.user')}
       {text('path', 'sshSource.path', 'sshSource.path.hint')}
       <div className="field">
+        <span className="field__label" id="ssh-auth-label">
+          {t('sshSource.auth')}
+        </span>
+        <div className="segmented" role="radiogroup" aria-labelledby="ssh-auth-label">
+          {(['agent', 'keyFile', 'password'] as const satisfies SshAuth[]).map((option) => (
+            <label key={option} className="segmented__option">
+              <input type="radio" name="ssh-auth" value={option} checked={auth === option} onChange={() => onChange({ ...value, auth: option })} />
+              {t(`sshSource.auth.${option}`)}
+            </label>
+          ))}
+        </div>
+        {auth === 'agent' && <span className="field__hint">{t('sshSource.agent.hint')}</span>}
+      </div>
+      {auth === 'keyFile' && <KeyFileFields value={value} onChange={onChange} stored={stored} weakSecrets={weakSecrets} />}
+      {auth === 'password' && (
+        <label className="field">
+          <span className="field__label">{t('sshSource.password')}</span>
+          {/* Typed in, sent to the core once, and never shown again: the core only says whether one is stored. */}
+          <input
+            type="password"
+            className="field__input field__input--path"
+            value={value.password ?? ''}
+            onChange={(e) => onChange({ ...value, password: e.target.value })}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          {editing && <span className="field__hint">{t(stored ? 'sshSource.password.stored' : 'sshSource.password.missing')}</span>}
+          {weakSecrets && <span className="field__problem">{t('sshSource.password.weak')}</span>}
+        </label>
+      )}
+    </>
+  )
+}
+
+/** The key file that signs in, and its passphrase if it's encrypted. */
+function KeyFileFields({
+  value,
+  onChange,
+  stored,
+  weakSecrets
+}: {
+  value: SshSettings
+  onChange(value: SshSettings): void
+  stored: boolean
+  weakSecrets: boolean
+}) {
+  const browseKeyFile = async () => {
+    // Key files have no extension of their own to filter by.
+    const picked = await window.polyscope.pickFile([{ name: t('sshSource.keyFile.allFiles'), extensions: ['*'] }])
+    if (picked) onChange({ ...value, keyFile: picked })
+  }
+
+  return (
+    <>
+      <div className="field">
         <label className="field__label" htmlFor="ssh-key-file">
           {t('sshSource.keyFile')}
         </label>
@@ -153,7 +206,7 @@ function SshFields({ value, onChange, editing }: FieldsProps<SshSettings>) {
           <input
             id="ssh-key-file"
             className="field__input field__input--path"
-            value={value.keyFile}
+            value={value.keyFile ?? ''}
             onChange={(e) => onChange({ ...value, keyFile: e.target.value })}
             spellCheck={false}
           />
@@ -581,17 +634,20 @@ export const sourceTypeUi: SourceTypeUis = {
     label: 'sourceType.sshFiles',
     hint: 'sourceType.sshFiles.hint',
     Icon: TerminalIcon,
-    blank: () => ({ type: 'sshFiles', name: '', host: '', user: '', path: '', keyFile: '', passphrase: '' }),
-    // Everything but the passphrase, which the renderer never has: left blank, the stored one stays.
-    settingsOf: ({ name, host, port, user, path, keyFile }) => ({
+    // The agent first: it signs in without Polyscope holding a key or password.
+    blank: () => ({ type: 'sshFiles', name: '', host: '', user: '', path: '', auth: 'agent', keyFile: '', passphrase: '', password: '' }),
+    // Everything but the passphrase or password, which the renderer never has: left blank, the stored one stays.
+    settingsOf: ({ name, host, port, user, path, auth, keyFile }) => ({
       type: 'sshFiles',
       name,
       host,
       ...(port !== 22 && { port }),
       user,
       path,
+      auth,
       keyFile,
-      passphrase: ''
+      passphrase: '',
+      password: ''
     }),
     fullPath: remotePath,
     Fields: SshFields
@@ -655,8 +711,8 @@ export const sourceTypeUi: SourceTypeUis = {
  */
 export function targetOf(source: SourceInfo) {
   const { id: _, name: __, environmentId: ___, lastNLines: _____, ...settings } = source
-  const { secretKeySet: ____, passphraseSet: ______, ...target } = settings as typeof settings & { secretKeySet?: boolean; passphraseSet?: boolean }
-  return JSON.stringify(Object.entries(target).sort())
+  // Whether a secret is stored (`secretKeySet`, `passwordSet`…) isn't where it points.
+  return JSON.stringify(Object.entries(settings).filter(([key]) => !key.endsWith('Set')).sort())
 }
 
 /** Looks up a Source Type's UI without narrowing on the type first. */

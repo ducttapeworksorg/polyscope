@@ -17,6 +17,8 @@ export interface HostKeyStore {
   knownTypes(host: string, port: number): Promise<string[]>
   /** Trusts a host key check() found unknown since the store was made: HOST_KEY_UNKNOWN for any other. */
   trust(hostKey: HostKey): Promise<void>
+  /** Forgets the host keys trusted in Polyscope for a server; those in known_hosts aren't Polyscope's to forget. */
+  forget(host: string, port: number): Promise<void>
 }
 
 /** A host key known for a server, from a known_hosts line or Polyscope's own store. */
@@ -124,6 +126,15 @@ export function createHostKeyStore({ dataDir }: { dataDir?: string } = {}): Host
         keys.push(trusted)
       }
       offered.delete(offeredKey(name, String(fingerprint)))
+    },
+
+    async forget(host, port) {
+      const name = knownHostsName(host, port)
+      const keys = await saved
+      if (!keys.some((k) => k.host === name)) return
+      const kept = keys.filter((k) => k.host !== name)
+      await write?.({ version: 1, keys: kept } satisfies SavedKeys)
+      keys.splice(0, keys.length, ...kept)
     }
   }
 }

@@ -106,6 +106,12 @@ export const en = {
   'sshSource.user': 'User',
   'sshSource.path': 'Path',
   'sshSource.path.hint': 'The absolute path of the folder to browse, like /var/log.',
+  'sshSource.auth': 'Sign in with',
+  'sshSource.auth.agent': 'SSH agent',
+  'sshSource.auth.keyFile': 'Key file',
+  'sshSource.auth.password': 'Password',
+  'sshSource.agent.hint':
+    'Uses the keys in your SSH agent: SSH_AUTH_SOCK’s, or on Windows Pageant’s or the OpenSSH Authentication Agent’s (1Password’s agent too).',
   'sshSource.keyFile': 'Key file',
   'sshSource.keyFile.hint': 'The private key that signs in, like ~/.ssh/id_ed25519.',
   'sshSource.keyFile.allFiles': 'All files',
@@ -115,6 +121,11 @@ export const en = {
   'sshSource.passphrase.stored': 'Stored encrypted. Leave blank to keep it.',
   'sshSource.passphrase.weak':
     'No keyring (GNOME Keyring or KWallet) is running, so the passphrase is only obfuscated on disk, not securely encrypted.',
+  'sshSource.password': 'Password',
+  'sshSource.password.stored': 'Stored encrypted. Leave blank to keep it.',
+  'sshSource.password.missing': 'None stored yet.',
+  'sshSource.password.weak':
+    'No keyring (GNOME Keyring or KWallet) is running, so the password is only obfuscated on disk, not securely encrypted.',
 
   'hostKey.type': 'Key type: {keyType}',
   'hostKey.fingerprint': 'Fingerprint: {fingerprint}',
@@ -431,6 +442,8 @@ export const en = {
   'error.INVALID_PORT': 'Enter a port from 1 to 65535.',
   'error.INVALID_PATH': 'Enter an absolute path, like /var/log.',
   'error.KEY_FILE_REQUIRED': 'Choose the key file to sign in with.',
+  'error.PASSWORD_REQUIRED': 'Enter the password to sign in with.',
+  'error.AGENT_NOT_FOUND': 'No SSH agent was found. Start one with your keys in it, or sign in another way: {message}',
   'error.KEY_FILE_UNREADABLE': 'The key file can’t be used: {message}',
   'error.PASSPHRASE_REQUIRED': 'The key file is encrypted. Enter its passphrase.',
   'error.PASSPHRASE_WRONG': 'That passphrase doesn’t decrypt the key file.',

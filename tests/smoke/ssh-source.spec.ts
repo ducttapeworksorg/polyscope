@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test'
+import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test'
 import { startTestSshServer, type TestSshServer } from '../../src/main/core/ssh-test-server'
 
 let dir: string
@@ -35,15 +35,16 @@ async function openAddSshSource(window: Page) {
   return dialog
 }
 
-test('an SSH Files Source has host, port, user, path, key file and passphrase fields, and is named after its host and path', async () => {
+/** Picks a way to sign in, clicking its option as a user would: the radio itself is hidden beneath. */
+const signInWith = (dialog: Locator, option: string) => dialog.locator('label.segmented__option', { hasText: option }).click()
+
+test('an SSH Files Source has host, port, user and path fields, and is named after its host and path', async () => {
   const window = await app.firstWindow()
   const dialog = await openAddSshSource(window)
   const name = dialog.getByLabel('Name', { exact: true })
 
   await expect(dialog.getByLabel('Port')).toHaveAttribute('placeholder', '22')
   await expect(dialog.getByLabel('User')).toBeVisible()
-  await expect(dialog.getByRole('button', { name: 'Browse…' })).toBeVisible()
-  await expect(dialog.getByLabel('Passphrase')).toHaveAttribute('type', 'password')
 
   await dialog.getByLabel('Host').pressSequentially('web-1')
   await dialog.getByLabel('Path').fill('/var/log')
@@ -54,13 +55,33 @@ test('an SSH Files Source has host, port, user, path, key file and passphrase fi
   await expect(name).toHaveValue('Web logs')
 })
 
+test('an SSH Files Source signs in through the agent unless a key file or password is picked', async () => {
+  const window = await app.firstWindow()
+  const dialog = await openAddSshSource(window)
+  const passwordField = dialog.locator('input[type="password"]')
+
+  await expect(dialog.getByRole('radio', { name: 'SSH agent' })).toBeChecked()
+  await expect(dialog.getByText(/Uses the keys in your SSH agent/)).toBeVisible()
+  await expect(passwordField).toHaveCount(0)
+
+  await signInWith(dialog, 'Key file')
+  await expect(dialog.getByRole('textbox', { name: 'Key file', exact: true })).toBeVisible()
+  await expect(dialog.getByRole('button', { name: 'Browse…' })).toBeVisible()
+  await expect(dialog.getByLabel('Passphrase')).toHaveAttribute('type', 'password')
+
+  await signInWith(dialog, 'Password')
+  await expect(dialog.getByRole('textbox', { name: 'Key file', exact: true })).toHaveCount(0)
+  await expect(passwordField).toHaveCount(1)
+})
+
 test('a relative path is refused', async () => {
   const window = await app.firstWindow()
   const dialog = await openAddSshSource(window)
   await dialog.getByLabel('Host').fill('web-1')
   await dialog.getByLabel('User').fill('ops')
   await dialog.getByLabel('Path').fill('var/log')
-  await dialog.getByLabel('Key file', { exact: true }).fill('/keys/id_ed25519')
+  await signInWith(dialog, 'Key file')
+  await dialog.getByRole('textbox', { name: 'Key file', exact: true }).fill('/keys/id_ed25519')
 
   await dialog.getByRole('button', { name: 'Add Source' }).click()
 
@@ -77,7 +98,8 @@ test('testing a connection to an unknown host shows its fingerprint, and trustin
   await dialog.getByLabel('Port').fill(String(server.port))
   await dialog.getByLabel('User').fill(server.user)
   await dialog.getByLabel('Path').fill(path)
-  await dialog.getByLabel('Key file', { exact: true }).fill(keyFile)
+  await signInWith(dialog, 'Key file')
+  await dialog.getByRole('textbox', { name: 'Key file', exact: true }).fill(keyFile)
 
   await dialog.getByRole('button', { name: 'Test connection' }).click()
 
