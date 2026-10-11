@@ -54,17 +54,23 @@ export interface NewS3Source {
 export interface NewSshFilesSource {
   type: 'sshFiles'
   name: string
-  /** The server's host name or address. */
+  /**
+   * The server's host name or address, or a Host alias from the user's `~/.ssh/config`: either way, its HostName,
+   * User, Port, IdentityFile and ProxyJump there are used, as ssh uses them.
+   */
   host: string
-  /** The user to sign in as. */
+  /** The user to sign in as; when blank, the SSH config's User for the host. */
   user: string
-  /** 22 when left out. */
+  /** When left out, the SSH config's Port for the host, or else 22. */
   port?: number
   /** The absolute path of the folder browsed on the server, e.g. `/var/log/app`. */
   path: string
   /** How to sign in: `keyFile` when left out. */
   auth?: SshAuth
-  /** The private key file that signs in with `keyFile`, on this computer; ignored otherwise. */
+  /**
+   * The private key file that signs in with `keyFile`, on this computer; ignored otherwise. When blank, the SSH
+   * config's IdentityFile for the host.
+   */
   keyFile?: string
   /**
    * The key file's passphrase, if it's encrypted: goes into the OS keychain and never comes back out of the core.
@@ -174,13 +180,16 @@ export interface S3SourceInfo extends SourceIdentity {
 
 export interface SshFilesSourceInfo extends SourceIdentity {
   type: 'sshFiles'
+  /** A host name or address, or an alias from `~/.ssh/config`. */
   host: string
+  /** Blank to use the SSH config's. */
   user: string
-  port: number
+  /** Left out to use the SSH config's, or else 22. */
+  port?: number
   /** Normalised: absolute, without a trailing '/' (but `/` itself for the root). */
   path: string
   auth: SshAuth
-  /** Blank unless it signs in with a key file. */
+  /** Blank unless it signs in with a key file named here rather than by the SSH config's IdentityFile. */
   keyFile: string
   /** Whether a passphrase is stored for the key file; the passphrase itself never leaves the core. */
   passphraseSet: boolean
@@ -390,6 +399,15 @@ export interface ContainerNode {
 }
 
 export type TreeNode = EntryNode | LogNode | ErrorNode | MoreNode | FoldedNode
+
+/** A Host alias in the user's `~/.ssh/config`, with what the config says about it. */
+export interface SshHost {
+  alias: string
+  /** Its HostName, or the alias itself if it names none. */
+  hostName: string
+  user?: string
+  port?: number
+}
 
 /** An SSH server's host key, as offered to the user to trust: never the key itself, which stays in the core. */
 export interface HostKey {
@@ -743,6 +761,8 @@ export type CoreErrorCode =
   | 'SIGN_IN_REFUSED'
   /** An SSH server with its SFTP subsystem turned off. */
   | 'SFTP_UNAVAILABLE'
+  /** A host whose `~/.ssh/config` needs an option Polyscope doesn't support, like ProxyCommand; the message names it. */
+  | 'UNSUPPORTED_SSH_OPTION'
   | 'UNKNOWN'
 
 export interface CoreApi {
@@ -846,6 +866,8 @@ export interface CoreApi {
   rememberLastNLines(sourceId: string, lastNLines: LastNLines | null): Promise<void>
   /** The profiles in the local AWS config and credentials files, by name, `default` first; none if there are no such files. */
   listAwsProfiles(): Promise<string[]>
+  /** The Host aliases in the user's `~/.ssh/config` (and the files it Includes), in the order they come, with what it says about each. */
+  listSshHosts(): Promise<SshHost[]>
   /** The contexts in the user's kubeconfig (KUBECONFIG, or ~/.kube/config), by name; none if there is no kubeconfig. */
   listKubeContexts(): Promise<KubeContext[]>
   /** The namespaces in a context's cluster, by name. */
@@ -907,6 +929,7 @@ export const coreMethods: readonly CoreMethod[] = [
   'stopFollow',
   'rememberLastNLines',
   'listAwsProfiles',
+  'listSshHosts',
   'listKubeContexts',
   'listKubeNamespaces',
   'listKubeWorkloads',

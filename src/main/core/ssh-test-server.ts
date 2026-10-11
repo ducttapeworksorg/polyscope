@@ -5,7 +5,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { type Dirent, type Stats } from 'node:fs'
 import { lstat, mkdir, mkdtemp, open, readdir, realpath, rm, stat, writeFile, type FileHandle } from 'node:fs/promises'
-import { createServer, type AddressInfo } from 'node:net'
+import { connect, createServer, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
 import ssh2, { type AuthenticationType, type Connection, type ParsedKey, type SFTPWrapper } from 'ssh2'
@@ -39,6 +39,8 @@ export interface TestSshServer {
   seed(tree: SeedTree, folder?: string): Promise<string>
   /** How many clients are connected to it now. */
   connectionCount(): number
+  /** Where clients have had it forward channels to, as ProxyJump has a bastion do: `host:port`, in order. */
+  forwarded(): string[]
   close(): Promise<void>
 }
 
@@ -169,6 +171,7 @@ export async function startTestSshServer({
   const hostKeys = generateKey()
   const allowed = utils.parseKey(clientKeys.public) as ParsedKey
   const connections = new Set<Connection>()
+  const forwarded: string[] = []
 
   const server = new Server({ hostKeys: [hostKeys.private] }, (client) => {
     connections.add(client)
@@ -182,6 +185,15 @@ export async function startTestSshServer({
       const signed = ctx.signature ? { blob: ctx.blob!, signature: ctx.signature, ...(ctx.hashAlgo && { hashAlgo: ctx.hashAlgo }) } : undefined
       if (!acceptsKey(allowed, ctx.key, signed)) return ctx.reject(methods)
       ctx.accept()
+    })
+    // As a bastion: hosts under .invalid, which never resolve anywhere else, stand for servers only it can reach.
+    client.on('tcpip', (accept, _reject, { destIP, destPort }) => {
+      forwarded.push(`${destIP}:${destPort}`)
+      const channel = accept()
+      const socket = connect(destPort, destIP.endsWith('.invalid') ? '127.0.0.1' : destIP)
+      socket.on('error', () => channel.destroy())
+      channel.on('error', () => socket.destroy())
+      socket.pipe(channel).pipe(socket)
     })
     client.on('session', (accept) => {
       const session = accept()
@@ -207,6 +219,7 @@ export async function startTestSshServer({
       return `/${folder}`
     },
     connectionCount: () => connections.size,
+    forwarded: () => [...forwarded],
     async close() {
       for (const connection of connections) connection.end()
       await new Promise<void>((resolve) => server.close(() => resolve()))

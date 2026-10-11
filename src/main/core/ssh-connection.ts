@@ -2,6 +2,7 @@
 // reach a host over SSH can share it. It checks the server's host key before signing in, and reports failures as CoreErrors.
 
 import { createHash } from 'node:crypto'
+import type { Duplex } from 'node:stream'
 import ssh2, { type AnyAuthMethod, type BaseAgent, type ParsedKey, type SFTPWrapper } from 'ssh2'
 import type { HostKey } from '@shared/core-api'
 import { CoreError } from './core-error'
@@ -79,23 +80,34 @@ function privateKeyOf({ privateKey, passphrase }: { privateKey: string | Buffer;
   return key
 }
 
-/** Connects to an SSH server, checks its host key and signs in. */
-export async function connectSsh(target: SshTarget, options: SshConnectOptions): Promise<SshConnection> {
+/** A server to go through on the way to another (a ProxyJump bastion), and how to check its host key. */
+export interface SshJump {
+  target: SshTarget
+  options: SshConnectOptions
+}
+
+/** A client signed in to one server, and whether it has closed since. */
+interface SignedIn {
+  client: InstanceType<typeof Client>
+  readonly closed: boolean
+}
+
+/** Connects to one SSH server, over `sock` if given (a channel forwarded by a bastion), checks its host key and signs in. */
+function signIn(target: SshTarget, options: SshConnectOptions, sock?: Duplex): Promise<SignedIn> {
   const username = target.user
   // Only the one way of signing in is tried: the user picked it.
-  const signIn: AnyAuthMethod =
+  const method: AnyAuthMethod =
     'agent' in target
       ? { type: 'agent', username, agent: target.agent }
       : 'password' in target
         ? { type: 'password', username, password: target.password }
         : { type: 'publickey', username, key: privateKeyOf(target) }
-  const refused = { agent: 'refused every key in the SSH agent', password: 'refused the password', publickey: 'refused the key' }[signIn.type]
-  const address = `${target.user}@${target.host}:${target.port}`
+  const refused = { agent: 'refused every key in the SSH agent', password: 'refused the password', publickey: 'refused the key' }[method.type]
+  const address = addressOf(target)
   const client = new Client()
   let closed = false
   // Set when the host key check refuses the server, as that's why connecting failed.
   let refusal: CoreError | undefined
-  let sftp: Promise<SFTPWrapper> | undefined
 
   const hostVerifier = (blob: Buffer, verify: (valid: boolean) => void) => {
     const presented = { keyType: keyTypeOf(blob), fingerprint: fingerprintOf(blob), blob }
@@ -145,24 +157,9 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions):
     client.once('ready', () => {
       settled = true
       resolve({
-        sftp: () =>
-          (sftp ??= new Promise<SFTPWrapper>((resolveSftp, rejectSftp) => {
-            client.sftp((error, session) => {
-              if (!error) return resolveSftp(session)
-              sftp = undefined
-              rejectSftp(
-                closed
-                  ? new CoreError('UNREACHABLE', `${address}: the connection closed`)
-                  : new CoreError('SFTP_UNAVAILABLE', `${address} has no SFTP subsystem, or it's turned off: ${error.message}`)
-              )
-            })
-          })),
+        client,
         get closed() {
           return closed
-        },
-        close() {
-          closed = true
-          client.end()
         }
       })
     })
@@ -170,8 +167,9 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions):
       client.connect({
         host: target.host,
         port: target.port,
+        ...(sock && { sock }),
         username: target.user,
-        authHandler: [signIn],
+        authHandler: [method],
         readyTimeout: options.timeout ?? 20_000,
         keepaliveInterval: 15_000,
         hostVerifier,
@@ -181,4 +179,68 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions):
       fail(error as Error)
     }
   })
+}
+
+/** How a server is named in messages: `user@host:port`. */
+const addressOf = ({ user, host, port }: SshTarget) => `${user}@${host}:${port}`
+
+/** A channel from a signed-in bastion to the next server along, for the next connection to go over. */
+function forward(bastion: SignedIn, from: SshTarget, to: SshTarget) {
+  return new Promise<Duplex>((resolve, reject) => {
+    bastion.client.forwardOut('127.0.0.1', 0, to.host, to.port, (error, channel) => {
+      if (!error) return resolve(channel)
+      reject(new CoreError('UNREACHABLE', `${addressOf(from)} couldn't reach ${to.host}:${to.port}: ${error.message}`))
+    })
+  })
+}
+
+/**
+ * Connects to an SSH server, checks its host key and signs in. With `jumps`, it goes through each of them in turn,
+ * as ssh's ProxyJump does: each is connected to over a channel the one before forwards, its own host key checked.
+ */
+export async function connectSsh(target: SshTarget, options: SshConnectOptions, jumps: SshJump[] = []): Promise<SshConnection> {
+  const bastions: SignedIn[] = []
+  const closeBastions = () => {
+    for (const bastion of bastions) bastion.client.end()
+  }
+  let sock: Duplex | undefined
+  let signedIn: SignedIn
+  try {
+    for (const [index, jump] of jumps.entries()) {
+      const bastion = await signIn(jump.target, jump.options, sock)
+      bastions.push(bastion)
+      sock = await forward(bastion, jump.target, (jumps[index + 1] ?? { target }).target)
+    }
+    signedIn = await signIn(target, options, sock)
+  } catch (error) {
+    closeBastions()
+    throw error
+  }
+  const { client } = signedIn
+  const address = addressOf(target)
+  let sftp: Promise<SFTPWrapper> | undefined
+  // A bastion is closed along with the connection through it: when that closes, so does the channel through it.
+  client.on('close', closeBastions)
+
+  return {
+    sftp: () =>
+      (sftp ??= new Promise<SFTPWrapper>((resolveSftp, rejectSftp) => {
+        client.sftp((error, session) => {
+          if (!error) return resolveSftp(session)
+          sftp = undefined
+          rejectSftp(
+            signedIn.closed
+              ? new CoreError('UNREACHABLE', `${address}: the connection closed`)
+              : new CoreError('SFTP_UNAVAILABLE', `${address} has no SFTP subsystem, or it's turned off: ${error.message}`)
+          )
+        })
+      })),
+    get closed() {
+      return signedIn.closed
+    },
+    close() {
+      client.end()
+      closeBastions()
+    }
+  }
 }

@@ -102,8 +102,10 @@ export const en = {
   's3Source.proxy.hint': 'Optional, like http://proxy.corp:3128. Otherwise HTTPS_PROXY and NO_PROXY apply.',
 
   'sshSource.host': 'Host',
+  'sshSource.host.hint': 'A host name or address, or a Host alias from ~/.ssh/config, whose settings there are used.',
   'sshSource.port': 'Port',
   'sshSource.user': 'User',
+  'sshSource.user.hint': 'Leave blank to use the User from ~/.ssh/config.',
   'sshSource.path': 'Path',
   'sshSource.path.hint': 'The absolute path of the folder to browse, like /var/log.',
   'sshSource.auth': 'Sign in with',
@@ -113,7 +115,7 @@ export const en = {
   'sshSource.agent.hint':
     'Uses the keys in your SSH agent: SSH_AUTH_SOCK’s, or on Windows Pageant’s or the OpenSSH Authentication Agent’s (1Password’s agent too).',
   'sshSource.keyFile': 'Key file',
-  'sshSource.keyFile.hint': 'The private key that signs in, like ~/.ssh/id_ed25519.',
+  'sshSource.keyFile.hint': 'The private key that signs in, like ~/.ssh/id_ed25519. Leave blank to use the IdentityFile from ~/.ssh/config.',
   'sshSource.keyFile.allFiles': 'All files',
   'sshSource.browse': 'Browse…',
   'sshSource.passphrase': 'Passphrase',
@@ -438,10 +440,10 @@ export const en = {
   'error.CACHE_TOO_SMALL': 'The file is larger than the Large File cache has room for; raise the cache size in Settings. ({message})',
   'error.CACHE_UNWRITABLE': 'The Large File cache couldn’t be written. ({message})',
   'error.HOST_REQUIRED': 'Enter the server’s host name or address.',
-  'error.USER_REQUIRED': 'Enter the user to sign in as.',
+  'error.USER_REQUIRED': 'Enter the user to sign in as, or set its User in ~/.ssh/config.',
   'error.INVALID_PORT': 'Enter a port from 1 to 65535.',
   'error.INVALID_PATH': 'Enter an absolute path, like /var/log.',
-  'error.KEY_FILE_REQUIRED': 'Choose the key file to sign in with.',
+  'error.KEY_FILE_REQUIRED': 'Choose the key file to sign in with, or set its IdentityFile in ~/.ssh/config.',
   'error.PASSWORD_REQUIRED': 'Enter the password to sign in with.',
   'error.AGENT_NOT_FOUND': 'No SSH agent was found. Start one with your keys in it, or sign in another way: {message}',
   'error.KEY_FILE_UNREADABLE': 'The key file can’t be used: {message}',
@@ -452,6 +454,7 @@ export const en = {
     'The server’s host key isn’t the one known for it, so Polyscope won’t connect: someone may be impersonating it. Check with the server’s administrator. ({message})',
   'error.SIGN_IN_REFUSED': 'The server refused to let you sign in: {message}',
   'error.SFTP_UNAVAILABLE': 'The server’s SFTP subsystem is turned off, so its files can’t be read. ({message})',
+  'error.UNSUPPORTED_SSH_OPTION': 'Your ~/.ssh/config asks for something Polyscope doesn’t support: {message}',
   'error.UNKNOWN': 'Couldn’t complete that: {message}'
 } satisfies Record<string, string> &
   Record<`error.${CoreErrorCode}`, string> &
