@@ -13,6 +13,7 @@ export function createWebviewBridge({ post, listen }: Channel): ExtensionBridge 
   const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>()
   const listeners: { [E in BridgeEvent]: Set<(payload: BridgeEvents[E]) => void> } = {
     settingsChanged: new Set(),
+    connectionEvent: new Set(),
     followEvent: new Set(),
     largeFileEvent: new Set(),
     largeFileSearchEvent: new Set(),
@@ -69,6 +70,7 @@ export function createWebviewBridge({ post, listen }: Channel): ExtensionBridge 
     onOwnViewerChanged: on('ownViewerChanged'),
     onUpdateStatus: on('updateStatus'),
     onSettingsChanged: on('settingsChanged'),
+    onConnectionEvent: on('connectionEvent'),
     onFollowEvent: on('followEvent'),
     onLargeFileEvent: on('largeFileEvent'),
     onLargeFileSearchEvent: on('largeFileSearchEvent')

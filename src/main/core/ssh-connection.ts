@@ -44,10 +44,14 @@ export interface SshConnectOptions {
 
 /** One signed-in connection to an SSH server, shared by everything that talks to it until it's closed. */
 export interface SshConnection {
+  /** The user signed in as, whose permissions everything over the connection has. */
+  readonly user: string
   /** The connection's SFTP session, started the first time it's asked for. SFTP_UNAVAILABLE if the server has none. */
   sftp(): Promise<SFTPWrapper>
   /** Whether the connection has closed, by close() or because it dropped. */
   readonly closed: boolean
+  /** Calls `listener` once the connection drops, closing other than by close(); straight away if it already has. */
+  onDrop(listener: () => void): void
   close(): void
 }
 
@@ -221,8 +225,11 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions, 
   let sftp: Promise<SFTPWrapper> | undefined
   // A bastion is closed along with the connection through it: when that closes, so does the channel through it.
   client.on('close', closeBastions)
+  // Set by close(): the connection closing after that hasn't dropped.
+  let closing = false
 
   return {
+    user: target.user,
     sftp: () =>
       (sftp ??= new Promise<SFTPWrapper>((resolveSftp, rejectSftp) => {
         client.sftp((error, session) => {
@@ -238,7 +245,15 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions, 
     get closed() {
       return signedIn.closed
     },
+    onDrop(listener) {
+      if (signedIn.closed) {
+        if (!closing) queueMicrotask(listener)
+        return
+      }
+      client.once('close', () => closing || listener())
+    },
     close() {
+      closing = true
       client.end()
       closeBastions()
     }

@@ -1,10 +1,10 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync, zstdCompressSync } from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { HostKey, LargeFileEvent, LargeFileSearchEvent, NewSshFilesSource, TreeNode } from '@shared/core-api'
+import type { ConnectionEvent, FollowEvent, HostKey, LargeFileEvent, LargeFileSearchEvent, NewSshFilesSource, TreeNode } from '@shared/core-api'
 import { createCore } from './core'
 import type { SeedTree } from './file-source-contract'
 import { createSecretStore } from './secret-store'
@@ -454,6 +454,19 @@ describe('browsing and reading an SSH Files Source', () => {
     await core.closeLargeFile(opened.largeFileId)
   })
 
+  it('says a file or folder it can’t read isn’t readable by the SSH user, which the adm group, not sudo, can fix', async () => {
+    const { core, source, server, path } = await connected({ 'syslog': 'private', 'private/app.log': 'private' })
+    server.deny(`${path}/syslog`)
+    server.deny(`${path}/private`)
+    const denied = {
+      code: 'PERMISSION_DENIED',
+      message: expect.stringMatching(new RegExp(`^/syslog isn't readable by ${server.user}, the SSH user\\b.*without sudo.*\\badm group\\b`))
+    }
+
+    await expect(core.openFile(source.id, 'syslog')).rejects.toMatchObject(denied)
+    expect(await core.expand(source.id, 'private')).toMatchObject([{ kind: 'error', ...denied, message: expect.stringMatching(/^\/private isn't readable by .*adm group/) }])
+  })
+
   it('follows symlinks, and flags dangling and looping ones, as a Local Filesystem Source does', async () => {
     const { core, source, server, path } = await connected({ 'logs/a.log': 'a', 'logs/inner': null })
     const at = (p: string) => join(server.root, path, p)
@@ -470,6 +483,101 @@ describe('browsing and reading an SSH Files Source', () => {
     ])
     expect(await core.expand(source.id, 'current')).toMatchObject([{ kind: 'folder', name: 'inner' }, { kind: 'file', name: 'a.log' }])
     expect(await core.expand(source.id, 'logs/inner')).toMatchObject([{ kind: 'folder', name: 'back', problem: { code: 'SYMLINK_LOOP' } }])
+  })
+})
+
+/** A Follow's updates so far, as lines, marks in angle brackets. */
+const updatesOf = (events: FollowEvent[], followId: string) =>
+  events.filter((e) => e.followId === followId).flatMap((e) => (e.kind === 'lines' ? e.lines : [`<${e.kind}>`]))
+
+/** Waits for `check` to pass, long enough for a few looks at a followed file. */
+const eventually = (check: () => void) => vi.waitFor(check, { timeout: 5_000, interval: 100 })
+
+const numbered = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => `line ${from + i}\n`).join('')
+
+describe('following a file on an SSH Files Source', () => {
+  /** A Connected Source with app.log holding `content`, and a Follow of it showing its last two lines. */
+  const following = async (content: string) => {
+    const { core, source, server, path } = await connected({ 'app.log': content })
+    const events: FollowEvent[] = []
+    core.onFollowEvent((event) => events.push(event))
+    const followed = await core.followFile(source.id, 'app.log', { lastNLines: 2 })
+    return { core, source, server, followed, file: join(server.root, path, 'app.log'), updates: () => updatesOf(events, followed.followId) }
+  }
+
+  it('starts with its last N lines and adds lines as they are written, holding them back while paused', async () => {
+    const { core, followed, file, updates } = await following(numbered(1, 5))
+    expect(followed).toMatchObject({ view: 'log', of: 'file', content: 'line 4\nline 5' })
+
+    await appendFile(file, numbered(6, 7))
+    await eventually(() => expect(updates()).toEqual(['line 6', 'line 7']))
+    await core.pauseFollow(followed.followId)
+    await appendFile(file, 'line 8\n')
+    await new Promise((resolve) => setTimeout(resolve, 1_500))
+    expect(updates()).toEqual(['line 6', 'line 7'])
+    await core.resumeFollow(followed.followId)
+    expect(updates()).toEqual(['line 6', 'line 7', 'line 8'])
+    await core.stopFollow(followed.followId)
+  })
+
+  it('marks a file cut short and follows it from its start', async () => {
+    const { file, updates } = await following(numbered(1, 5))
+
+    await writeFile(file, 'anew\n')
+    await eventually(() => expect(updates()).toEqual(['<truncated>', 'anew']))
+  })
+
+  it('marks a file rotated out for a new one, already longer, and follows the new one', async () => {
+    const { file, updates } = await following(numbered(1, 5))
+
+    // SFTP tells no inode, so it's what the new file holds where the old one ended that gives it away.
+    await rename(file, `${file}.1`)
+    await writeFile(file, `${numbered(11, 19)}rotated in\n`)
+    // A look between the two finds no file, which is marked as failing for a moment.
+    const rotation = () => updates().filter((u) => u !== '<failed>' && u !== '<recovered>')
+    await eventually(() => expect(rotation()).toEqual(['<rotated>', ...numbered(11, 19).trimEnd().split('\n'), 'rotated in']))
+  }, 15_000)
+})
+
+describe('an SSH Files Source whose connection drops', () => {
+  it('connects again on the next browse, and on the next read, staying Connected', async () => {
+    const { core, source, server } = await connected({ 'app.log': 'a line' })
+
+    await server.dropConnections()
+    expect(names(await core.expand(source.id, ''))).toEqual(['app.log'])
+    expect(server.connectionCount()).toBe(1)
+    await server.dropConnections()
+    expect(await core.openFile(source.id, 'app.log')).toMatchObject({ view: 'editor', content: 'a line' })
+    expect(server.connectionCount()).toBe(1)
+    expect(await core.connectionState(source.id)).toEqual({ state: 'connected' })
+  })
+
+  it('goes to Error when connecting again fails, failing the calls waiting on it', async () => {
+    const { core, source, server } = await connected({ 'app.log': 'a line' })
+    const events: ConnectionEvent[] = []
+    core.onConnectionEvent((event) => events.push(event))
+
+    await server.close()
+    started.splice(started.indexOf(server), 1)
+    const calls = [core.expand(source.id, ''), core.openFile(source.id, 'app.log')]
+    await expect(Promise.all(calls)).rejects.toMatchObject({ code: 'UNREACHABLE' })
+    expect(await core.connectionState(source.id)).toMatchObject({ state: 'error', code: 'UNREACHABLE' })
+    // Told, as nothing asked to connect it: the sidebar shows the Source in Error.
+    expect(events).toEqual([{ sourceId: source.id, state: 'error', code: 'UNREACHABLE', message: expect.any(String) }])
+    await expect(core.expand(source.id, '')).rejects.toMatchObject({ code: 'SOURCE_DISCONNECTED' })
+  })
+
+  it('ends a Follow over it, saying the connection dropped, and the Source can be followed again', async () => {
+    const { core, source, server, path } = await connected({ 'app.log': numbered(1, 3) })
+    const events: FollowEvent[] = []
+    core.onFollowEvent((event) => events.push(event))
+    const followed = await core.followFile(source.id, 'app.log', { lastNLines: 2 })
+
+    await server.dropConnections()
+    await eventually(() => expect(events).toEqual([{ followId: followed.followId, kind: 'ended', reason: 'connectionLost' }]))
+    const again = await core.followFile(source.id, 'app.log', { lastNLines: 2 })
+    await appendFile(join(server.root, path, 'app.log'), 'line 4\n')
+    await eventually(() => expect(updatesOf(events, again.followId)).toEqual(['line 4']))
   })
 })
 

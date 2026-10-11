@@ -109,6 +109,7 @@ export function serveBridge({ core, log, shell, post }: Options) {
   const send = <E extends BridgeEvent>(event: E) => (payload: BridgeEvents[E]) => post({ kind: 'event', event, payload } as ToWebview)
   const unsubscribes = [
     core.onSettingsChanged(send('settingsChanged')),
+    core.onConnectionEvent(send('connectionEvent')),
     core.onFollowEvent(send('followEvent')),
     core.onLargeFileEvent(send('largeFileEvent')),
     core.onLargeFileSearchEvent(send('largeFileSearchEvent')),

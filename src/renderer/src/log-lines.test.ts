@@ -76,6 +76,13 @@ describe('what a Follow adds to its log view', () => {
     expect(ended).not.toMatch(/container/)
   })
 
+  it('says a Follow ended because its connection dropped', () => {
+    const [ended] = followLines({ kind: 'ended', reason: 'connectionLost' }, { ...plain, of: 'file' })
+
+    expect(isMarker(ended!)).toBe(true)
+    expect(ended).toMatch(/connection to the server dropped/)
+  })
+
   it('does not take a log line for a mark', () => {
     expect(isMarker('── not from Polyscope')).toBe(false)
   })

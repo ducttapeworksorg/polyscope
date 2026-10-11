@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
   Compression,
+  ConnectionEvent,
   ConnectionState,
   CoreApi,
   CoreEvents,
@@ -13,6 +14,7 @@ import type {
   Environment,
   FileLog,
   FilesWorkloadKind,
+  FollowEndReason,
   FollowEvent,
   FollowUpdate,
   KubernetesFilesSourceInfo,
@@ -391,8 +393,20 @@ export function createCore(options: CoreOptions = {}): Core {
   }
   // Only Sources that aren't Disconnected have an entry. Each connect attempt puts in a new entry,
   // so an attempt can tell when a disconnect (or a newer attempt) has replaced it.
-  type Connection = Exclude<ConnectionState, { state: 'connected' | 'disconnected' }> | { state: 'connected'; backend: Backend }
+  type Connected = {
+    state: 'connected'
+    backend: Backend
+    /** Set once what the backend held open dropped (an SSH connection): the next call connects again. */
+    dropped?: boolean
+    /** Connecting again after the drop, for every call that comes meanwhile to wait on. */
+    reconnecting?: Promise<Backend>
+  }
+  type Connection = Exclude<ConnectionState, { state: 'connected' | 'disconnected' }> | Connected
   const connections = new Map<string, Connection>()
+  const connectionListeners = new Set<(event: ConnectionEvent) => void>()
+  const announceConnection = (event: ConnectionEvent) => {
+    for (const listener of connectionListeners) listener(event)
+  }
 
   const sourceFor = (sourceId: string) => {
     const source = sources.find((s) => s.id === sourceId)
@@ -435,23 +449,31 @@ export function createCore(options: CoreOptions = {}): Core {
     return source
   }
 
-  const backendFor = (sourceId: string) => {
+  /** A Connected Source's backend, connected again first if its connection dropped; if that fails, the Source is in Error. */
+  const backendFor = async (sourceId: string) => {
     const source = sourceFor(sourceId)
     const connection = connections.get(source.id)
     if (connection?.state !== 'connected') {
       throw new CoreError('SOURCE_DISCONNECTED', `${source.name} is not connected`)
     }
-    return connection.backend
+    if (!connection.dropped) return connection.backend
+    return (connection.reconnecting ??= reconnect(source, connection))
   }
 
-  const fileSourceFor = (sourceId: string, path: SourcePath) => {
-    const backend = backendFor(sourceId)
+  /** A Source's backend as long as it's Connected and hasn't dropped: what a Follow starting now goes on using. */
+  const liveBackendOf = (sourceId: string) => {
+    const connection = connections.get(sourceId)
+    return connection?.state === 'connected' && !connection.dropped ? connection.backend : undefined
+  }
+
+  const fileSourceFor = async (sourceId: string, path: SourcePath) => {
+    const backend = await backendFor(sourceId)
     if (backend.kind !== 'files') throw new CoreError('NOT_A_FILE', `A Log Source has no files: ${path}`)
     return backend.fileSource
   }
 
-  const logSourceFor = (sourceId: string, path: SourcePath) => {
-    const backend = backendFor(sourceId)
+  const logSourceFor = async (sourceId: string, path: SourcePath) => {
+    const backend = await backendFor(sourceId)
     if (backend.kind !== 'logs') throw new CoreError('NOT_A_LOG_STREAM', `A File Source has no Log Streams: ${path}`)
     return backend.logSource
   }
@@ -514,8 +536,8 @@ export function createCore(options: CoreOptions = {}): Core {
   }
 
   /**
-   * A file's last lines, as openFileLog gives them, along with where following them goes on from and the file's
-   * identity then. When `forFollowing`, a last line not yet ended is left for the Follow to add once it is.
+   * A file's last lines, as openFileLog gives them, along with where following them goes on from, the bytes just
+   * before there, and the file's identity then. When `forFollowing`, a last line not yet ended is left for the Follow to add once it is.
    */
   const readFileLog = async (fileSource: FileSource, sourceId: string, path: SourcePath, options: FileLogOptions, forFollowing = false) => {
     const asked = options.lastNLines === undefined ? undefined : checkLastNLines(options.lastNLines)
@@ -530,17 +552,17 @@ export function createCore(options: CoreOptions = {}): Core {
     }
     // Lines long enough to take more than the threshold to find are more than a log view should hold anyway.
     const maxBytes = whole ? Infinity : threshold
-    const { lines, partial, end } = await readLastLines(fileSource, path, { size: info.size, lastNLines, maxBytes })
+    const { lines, partial, end, before } = await readLastLines(fileSource, path, { size: info.size, lastNLines, maxBytes })
     const shown = forFollowing || !partial ? lines : [...lines, partial].slice(whole ? 0 : -lastNLines)
     const name = path.slice(path.lastIndexOf('/') + 1)
     const fileLog: FileLog = { view: 'log', of: 'file', path, name, previous: false, lastNLines, timestamps: false, content: shown.join('\n') }
-    return { fileLog, end, identity: info.identity }
+    return { fileLog, end, before, identity: info.identity }
   }
 
   /** A file of a File Source as readUpTo reads it, once the settings it's read by are loaded. */
   const fileToRead = async (sourceId: string, path: SourcePath) => {
     await loaded
-    const fileSource = fileSourceFor(sourceId, path)
+    const fileSource = await fileSourceFor(sourceId, path)
     const info = await fileSource.stat(path)
     if (info.kind !== 'file') throw new CoreError('NOT_A_FILE', `Not a file: ${path}`)
     const name = path.slice(path.lastIndexOf('/') + 1)
@@ -576,13 +598,13 @@ export function createCore(options: CoreOptions = {}): Core {
     return followId
   }
 
-  /** Stops every Follow of a Source, telling its listeners: the connection it used is gone. */
-  const stopFollows = (sourceId: string) => {
+  /** Stops every Follow of a Source, telling its listeners why: the connection it used is gone. */
+  const stopFollows = (sourceId: string, reason: Extract<FollowEndReason, 'disconnected' | 'connectionLost'>) => {
     for (const [followId, entry] of follows) {
       if (entry.sourceId !== sourceId) continue
       entry.follow.stop()
       follows.delete(followId)
-      announceFollow({ followId, kind: 'ended', reason: 'disconnected' })
+      announceFollow({ followId, kind: 'ended', reason })
     }
   }
 
@@ -604,11 +626,16 @@ export function createCore(options: CoreOptions = {}): Core {
     return open.large
   }
 
-  /** Stops what's going on against a Source's connection, as it's gone or being replaced: its Follows, and Large Files still caching. */
-  const stopActivity = (sourceId: string) => {
-    stopFollows(sourceId)
+  /**
+   * Stops what's going on against a Source's connection, as it's gone (disconnected, replaced, or `lost` when it
+   * dropped): its Follows, and Large Files still caching.
+   */
+  const stopActivity = (sourceId: string, { lost = false } = {}) => {
+    stopFollows(sourceId, lost ? 'connectionLost' : 'disconnected')
     for (const open of largeFiles.values()) {
-      if (open.sourceId === sourceId) open.large.abort('SOURCE_DISCONNECTED', 'The Source was disconnected while the file was being cached')
+      if (open.sourceId !== sourceId) continue
+      if (lost) open.large.abort('UNREACHABLE', 'The connection to the server dropped while the file was being cached')
+      else open.large.abort('SOURCE_DISCONNECTED', 'The Source was disconnected while the file was being cached')
     }
   }
 
@@ -623,6 +650,59 @@ export function createCore(options: CoreOptions = {}): Core {
     const connection = connections.get(sourceId)
     if (connection?.state === 'connected') closeBackend(connection.backend)
     connections.delete(sourceId)
+  }
+
+  /** A Source's connection to `backend`, marked dropped, its Follows and caching stopped, if what it holds open drops. */
+  const connectedTo = (sourceId: string, backend: Backend): Connected => {
+    const connection: Connected = { state: 'connected', backend }
+    if (backend.kind === 'files') {
+      backend.fileSource.onDropped?.(() => {
+        if (connections.get(sourceId) !== connection) return
+        connection.dropped = true
+        stopActivity(sourceId, { lost: true })
+      })
+    }
+    return connection
+  }
+
+  /** A Source's connection in Error, failing with `failure`. */
+  const failedWith = (failure: CoreError): Extract<Connection, { state: 'error' }> => ({
+    state: 'error',
+    code: failure.code,
+    message: failure.message,
+    ...(failure.hostKey && { hostKey: failure.hostKey })
+  })
+
+  /** The secret a Source signs in with, if it has one: an S3 secret key, or an SSH key file's passphrase or password. */
+  const storedSecretOf = async (source: SavedSource) => {
+    const secretName = secretNameOf(source)
+    return secretName === undefined ? undefined : secrets.get(source.id, secretName)
+  }
+
+  /**
+   * Connects a Source again once, after its connection dropped: Connected afresh if that works, in Error if not. A
+   * disconnect, or a connect, meanwhile wins.
+   */
+  const reconnect = async (source: SavedSource, dropped: Connected) => {
+    closeBackend(dropped.backend)
+    const replaced = () => new CoreError('SOURCE_DISCONNECTED', `${source.name} was disconnected or reconnected while connecting again`)
+    let opened: Awaited<ReturnType<typeof open>>
+    try {
+      opened = await open(source, await storedSecretOf(source))
+    } catch (error) {
+      if (connections.get(source.id) !== dropped) throw replaced()
+      const failure = asCoreError(error)
+      const failed = failedWith(failure)
+      connections.set(source.id, failed)
+      announceConnection({ ...failed, sourceId: source.id })
+      throw failure
+    }
+    if (connections.get(source.id) !== dropped) {
+      closeBackend(opened.backend)
+      throw replaced()
+    }
+    connections.set(source.id, connectedTo(source.id, opened.backend))
+    return opened.backend
   }
 
   /** Where a file's content, as it is now, is cached: the same file of a Source pointing the same place, unchanged since. */
@@ -1070,15 +1150,14 @@ export function createCore(options: CoreOptions = {}): Core {
       }
       let opened: Awaited<ReturnType<typeof open>>
       try {
-        const secretName = secretNameOf(source)
-        opened = await open(source, secretName === undefined ? undefined : await secrets.get(sourceId, secretName))
+        opened = await open(source, await storedSecretOf(source))
       } catch (error) {
         const failure = asCoreError(error)
-        settle({ state: 'error', code: failure.code, message: failure.message, ...(failure.hostKey && { hostKey: failure.hostKey }) })
+        settle(failedWith(failure))
         throw failure
       }
       try {
-        settle({ state: 'connected', backend: opened.backend })
+        settle(connectedTo(sourceId, opened.backend))
       } catch (error) {
         // Disconnected while connecting: nothing will use what was opened.
         closeBackend(opened.backend)
@@ -1103,7 +1182,7 @@ export function createCore(options: CoreOptions = {}): Core {
 
     async expand(sourceId, path, cursor) {
       await loaded
-      const backend = backendFor(sourceId)
+      const backend = await backendFor(sourceId)
       try {
         return await listBackend(backend, path, cursor)
       } catch (error) {
@@ -1115,7 +1194,7 @@ export function createCore(options: CoreOptions = {}): Core {
     async openFile(sourceId, path, options = {}) {
       await loaded
       const askedEncoding = options.encoding === undefined ? undefined : checkEncoding(options.encoding)
-      const fileSource = fileSourceFor(sourceId, path)
+      const fileSource = await fileSourceFor(sourceId, path)
       const info = await fileSource.stat(path)
       if (info.kind !== 'file') throw new CoreError('NOT_A_FILE', `Not a file: ${path}`)
       const name = path.slice(path.lastIndexOf('/') + 1)
@@ -1140,7 +1219,7 @@ export function createCore(options: CoreOptions = {}): Core {
 
     async statPath(sourceId, path) {
       await loaded
-      return fileSourceFor(sourceId, path).stat(path)
+      return (await fileSourceFor(sourceId, path)).stat(path)
     },
 
     async readFile(sourceId, path) {
@@ -1194,12 +1273,12 @@ export function createCore(options: CoreOptions = {}): Core {
 
     async openLog(sourceId, path, options = {}) {
       await loaded
-      return (await readSnapshot(logSourceFor(sourceId, path), sourceId, path, options)).snapshot
+      return (await readSnapshot(await logSourceFor(sourceId, path), sourceId, path, options)).snapshot
     },
 
     async followLog(sourceId, path, options = {}) {
       await loaded
-      const logSource = logSourceFor(sourceId, path)
+      const logSource = await logSourceFor(sourceId, path)
       if (options.previous) throw new CoreError('NOT_FOLLOWABLE', `A Previous Log has ended: ${path}`)
       // The snapshot has to be of the run the Follow starts from: one read while the container restarted is read again.
       let restarts = (await logSource.containerInstance(path)).restarts
@@ -1212,7 +1291,8 @@ export function createCore(options: CoreOptions = {}): Core {
       }
       const { snapshot, lastTimestamp, lastTimestampCount } = read
       // Disconnected or reconnected while reading: this Follow would outlive the connection it was for.
-      if (logSourceFor(sourceId, path) !== logSource) throw new CoreError('SOURCE_DISCONNECTED', `${sourceFor(sourceId).name} was reconnected`)
+      const live = liveBackendOf(sourceId)
+      if (live?.kind !== 'logs' || live.logSource !== logSource) throw new CoreError('SOURCE_DISCONNECTED', `${sourceFor(sourceId).name} was reconnected`)
       const followId = track(sourceId, (emit) =>
         startFollow(logSource, path, {
           ...(lastTimestamp !== undefined && { after: lastTimestamp, afterCount: lastTimestampCount }),
@@ -1227,20 +1307,23 @@ export function createCore(options: CoreOptions = {}): Core {
 
     async openFileLog(sourceId, path, options = {}) {
       await loaded
-      return (await readFileLog(fileSourceFor(sourceId, path), sourceId, path, options)).fileLog
+      return (await readFileLog(await fileSourceFor(sourceId, path), sourceId, path, options)).fileLog
     },
 
     async followFile(sourceId, path, options = {}) {
       await loaded
       if (!followableSourceTypes.includes(sourceFor(sourceId).type)) {
-        throw new CoreError('NOT_FOLLOWABLE', `Only Local and Kubernetes Files Sources’ files grow, so only they can be followed: ${path}`)
+        throw new CoreError('NOT_FOLLOWABLE', `Only Local, Kubernetes Files and SSH Files Sources’ files grow, so only they can be followed: ${path}`)
       }
-      const fileSource = fileSourceFor(sourceId, path)
-      const { fileLog, end, identity } = await readFileLog(fileSource, sourceId, path, options, true)
-      // Disconnected or reconnected while reading: this Follow would outlive the connection it was for.
-      if (fileSourceFor(sourceId, path) !== fileSource) throw new CoreError('SOURCE_DISCONNECTED', `${sourceFor(sourceId).name} was reconnected`)
+      const fileSource = await fileSourceFor(sourceId, path)
+      const { fileLog, end, before, identity } = await readFileLog(fileSource, sourceId, path, options, true)
+      // Disconnected, reconnected or dropped while reading: this Follow would outlive the connection it was for.
+      const live = liveBackendOf(sourceId)
+      if (live?.kind !== 'files' || live.fileSource !== fileSource) {
+        throw new CoreError('SOURCE_DISCONNECTED', `${sourceFor(sourceId).name} was disconnected or reconnected, or its connection dropped, while the file was read`)
+      }
       const followId = track(sourceId, (emit) =>
-        startFileFollow(fileSource, path, { from: end, ...(identity !== undefined && { identity }), cap: fileLog.lastNLines, emit })
+        startFileFollow(fileSource, path, { from: end, before, ...(identity !== undefined && { identity }), cap: fileLog.lastNLines, emit })
       )
       return { ...fileLog, followId }
     },
@@ -1320,6 +1403,12 @@ export function createCore(options: CoreOptions = {}): Core {
       const subscription = (event: FollowEvent) => listener(event)
       followListeners.add(subscription)
       return () => followListeners.delete(subscription)
+    },
+
+    onConnectionEvent(listener) {
+      const subscription = (event: ConnectionEvent) => listener(event)
+      connectionListeners.add(subscription)
+      return () => connectionListeners.delete(subscription)
     },
 
     onLargeFileEvent(listener) {

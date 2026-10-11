@@ -144,7 +144,7 @@ docs/              User docs, ADRs, this file
 The contract every other layer agrees on. Its main file, `core-api.ts`, defines:
 
 - **`CoreApi`**: every request the UI can make, as `async` methods: Source management (`addSource`, `editSource`…), connecting and browsing (`connect`, `expand`), reading (`openFile`, `openLog`, `readLargeFileLines`…), following (`followLog`, `followFile`, `pauseFollow`…), helpers for dialogs (`listKubeContexts`, `listAwsProfiles`…), and settings.
-- **`CoreEvents`**: what the core pushes without being asked: settings changes, Follow updates, Large File caching progress, Large File search results.
+- **`CoreEvents`**: what the core pushes without being asked: settings changes, a Source going to Error by itself, Follow updates, Large File caching progress, Large File search results.
 - **The data types** passed both ways: `NewSource` (what a dialog submits), `SourceInfo` (what the core hands out), `TreeNode` (rows in the sidebar tree), `OpenedFile` (a file ready to show), `FollowEvent`, and so on. Most are discriminated unions on `type`, `kind` or `view`, so a `switch` narrows them.
 - **`CoreErrorCode`**: every way a call can fail, as a string code the UI maps to a message.
 - **`coreMethods`**: the list of method names, used at runtime to reject unknown calls.
@@ -207,7 +207,7 @@ flowchart TB
 `createCore` holds the core's in-memory state and implements every `CoreApi` method:
 
 - **The registry**: the list of Sources and the order of their sidebar groups, loaded from disk at start-up. Every change goes through `commit()`, which applies it, saves it, and rolls the in-memory state back if saving fails.
-- **Connections**: a `Map` from Source id to its state (`connecting`, `connected` with its backend, or `error`). No entry means Disconnected. `connect()` builds a backend for the Source and lists its root. `disconnect()` drops it, stopping its Follows and Large File caching.
+- **Connections**: a `Map` from Source id to its state (`connecting`, `connected` with its backend, or `error`). No entry means Disconnected. `connect()` builds a backend for the Source and lists its root. `disconnect()` drops it, stopping its Follows and Large File caching. A backend whose connection drops by itself (an SSH Files Source's, `FileSource.onDropped`) stays Connected but is marked dropped: its Follows end (`connectionLost`) and its caching stops, and the next call that needs it connects once more, putting the Source in Error, told through `onConnectionEvent`, if that fails.
 - **Open Large Files, Follows and searches**, by id, so the UI can refer to them in later calls.
 - **Validation**: every input from the UI is checked and normalised here (URLs, namespaces, line counts, encodings…), because the UI is untrusted input as far as the core is concerned.
 
@@ -242,7 +242,7 @@ These do the heavy lifting on top of the contracts, so every backend gets them f
 
 - **`file-content.ts`**: decides how to show bytes: detects text encodings and binary files, decompresses gzip and zstd as a stream, makes hex dumps.
 - **Large Files** (`large-file.ts`, `large-file-cache.ts`, `line-index.ts`, `large-file-search.ts`): a file over the threshold (50 MB by default) opens end-first. The core reads its last lines straight away, then copies the whole file into a size-capped LRU disk cache in the background (local, uncompressed files are read in place instead), building a sparse index of line offsets as it goes. After that, `readLargeFileLines` can jump to any line, and `searchLargeFile` runs a regex over the cached file, streaming matches back as events.
-- **Follows** (`log-follow.ts`, `file-follow.ts`): keep a view up to date. A Log Stream Follow holds a streaming connection to the Kubernetes API, reconnecting with backoff and carrying on across container restarts. A file Follow polls `stat` and reads what was added, noticing when the file is truncated or rotated. Both can pause, holding back at most the view's "Last N lines" until resumed.
+- **Follows** (`log-follow.ts`, `file-follow.ts`): keep a view up to date. A Log Stream Follow holds a streaming connection to the Kubernetes API, reconnecting with backoff and carrying on across container restarts. A file Follow polls `stat` and reads what was added, noticing when the file is truncated or rotated: by its identity (device and inode) where the File Source tells one, and otherwise, as over SFTP, by the bytes just before where it had read up to changing. Both can pause, holding back at most the view's "Last N lines" until resumed.
 
 #### Persistence and secrets
 
@@ -299,7 +299,7 @@ The bridge carries calls and events between the UI and its host. The UI only eve
 - `invokeCore(method, args)`: call any `CoreApi` method.
 - Shell helpers: `pickFolder`, `pickFile`, `copyText`, `copyDiagnostics`, `secretStorageIsWeak`.
 - Updates: `appVersion`, `getUpdateStatus`, `checkForUpdates`, `applyUpdate`.
-- Subscriptions: `onSettingsChanged`, `onFollowEvent`, `onLargeFileEvent`, `onLargeFileSearchEvent`, `onUpdateStatus`, each returning an unsubscribe function.
+- Subscriptions: `onSettingsChanged`, `onConnectionEvent`, `onFollowEvent`, `onLargeFileEvent`, `onLargeFileSearchEvent`, `onUpdateStatus`, each returning an unsubscribe function.
 - `copy`: `'desktop'` or `'extension'`, for the few places the UI differs.
 
 It has two implementations:

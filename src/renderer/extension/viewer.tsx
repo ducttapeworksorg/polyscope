@@ -73,6 +73,8 @@ function ViewerTab() {
 
   // The sidebar connects and disconnects the Source; a Follow ending on its own says it may have.
   useEffect(() => core.onFollowEvent((event) => event.kind === 'ended' && void syncConnection()), [])
+  // The Source can go to Error by itself, when connecting it again after its connection dropped fails.
+  useEffect(() => core.onConnectionEvent(({ sourceId: changed, ...state }) => changed === sourceId && setConnection(state)), [])
 
   if (!settings) return null
 

@@ -15,6 +15,7 @@ export function registerCoreIpc(core: CoreApi, log: AppLog): void {
 /** Forwards the core's events to whichever window is open. */
 export function forwardCoreEvents(core: CoreEvents, getWindow: () => BrowserWindow | null): void {
   core.onSettingsChanged((settings) => getWindow()?.webContents.send('core:settingsChanged', settings))
+  core.onConnectionEvent((event) => getWindow()?.webContents.send('core:connectionEvent', event))
   core.onFollowEvent((event) => getWindow()?.webContents.send('core:followEvent', event))
   core.onLargeFileEvent((event) => getWindow()?.webContents.send('core:largeFileEvent', event))
   core.onLargeFileSearchEvent((event) => getWindow()?.webContents.send('core:largeFileSearchEvent', event))

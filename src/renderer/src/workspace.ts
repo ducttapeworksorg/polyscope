@@ -62,7 +62,7 @@ export const isLog = (content: TabContent): content is LogSnapshot | FileLog | L
 export const canShowPrevious = ({ file, restarted }: Pick<OpenTab, 'file' | 'restarted'>) =>
   isLog(file) && file.of === 'logStream' && (file.previous || restarted === true)
 
-/** Whether a Source's files can be Followed: those of Local and Kubernetes Files Sources grow; S3 objects don't. */
+/** Whether a Source's files can be Followed: those of Local, Kubernetes Files and SSH Files Sources grow; S3 objects don't. */
 export const followsFiles = (source: SourceInfo) => followableSourceTypes.includes(source.type)
 
 /** Whether a tab offers to Follow its file: text of a Source whose files grow, not followed already. */

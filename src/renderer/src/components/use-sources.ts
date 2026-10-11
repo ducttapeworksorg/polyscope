@@ -87,6 +87,9 @@ export function useSources({ onSourcesReloaded }: Options = {}): SourcesModel {
     void reloadEnvironments()
   }, [reloadSources, reloadEnvironments])
 
+  // A Source can go to Error by itself, when connecting it again after its connection dropped fails.
+  useEffect(() => core.onConnectionEvent(({ sourceId, ...state }) => setConnection(sourceId, state)), [])
+
   // The new value arrives through onSettingsChanged; if it can't be saved, the toggle stays as it was.
   const toggleTreeDetails = async () => {
     if (settings) await core.updateSettings({ showTreeDetails: !settings.showTreeDetails }).catch(() => undefined)

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import type { FollowEvent, LargeFileEvent, LargeFileSearchEvent } from '@shared/core-api'
+import type { ConnectionEvent, FollowEvent, LargeFileEvent, LargeFileSearchEvent } from '@shared/core-api'
 import type { Settings } from '@shared/settings'
 import type { UpdateStatus } from '@shared/updates'
 import type { PolyscopeBridge } from './bridge'
@@ -25,6 +25,11 @@ const bridge: PolyscopeBridge = {
     const forward = (_event: IpcRendererEvent, settings: Settings) => listener(settings)
     ipcRenderer.on('core:settingsChanged', forward)
     return () => ipcRenderer.off('core:settingsChanged', forward)
+  },
+  onConnectionEvent: (listener) => {
+    const forward = (_event: IpcRendererEvent, event: ConnectionEvent) => listener(event)
+    ipcRenderer.on('core:connectionEvent', forward)
+    return () => ipcRenderer.off('core:connectionEvent', forward)
   },
   onFollowEvent: (listener) => {
     const forward = (_event: IpcRendererEvent, event: FollowEvent) => listener(event)

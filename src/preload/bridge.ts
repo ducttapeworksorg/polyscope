@@ -1,4 +1,4 @@
-import type { CoreMethod, CoreResult, FollowEvent, LargeFileEvent, LargeFileSearchEvent } from '@shared/core-api'
+import type { ConnectionEvent, CoreMethod, CoreResult, FollowEvent, LargeFileEvent, LargeFileSearchEvent } from '@shared/core-api'
 import type { Settings } from '@shared/settings'
 import type { UpdateStatus } from '@shared/updates'
 
@@ -27,6 +27,8 @@ export interface PolyscopeBridge {
   onUpdateStatus(listener: (status: UpdateStatus) => void): () => void
   /** Subscribes to the core's settings changes; returns a function that unsubscribes. */
   onSettingsChanged(listener: (settings: Settings) => void): () => void
+  /** Subscribes to Sources' connections changing by themselves; returns a function that unsubscribes. */
+  onConnectionEvent(listener: (event: ConnectionEvent) => void): () => void
   /** Subscribes to every Follow's updates; returns a function that unsubscribes. */
   onFollowEvent(listener: (event: FollowEvent) => void): () => void
   /** Subscribes to every Large File's status changes; returns a function that unsubscribes. */
