@@ -14,7 +14,7 @@ Point at a Source's row to see its actions:
 - **Disconnect** stops every live Follow of the Source but leaves its tabs open, with a **Reconnect** button.
 - **Edit…**, **Duplicate** and **Delete…**. Deleting a Source forgets its settings and any secrets stored for it. What it points at is never touched.
 
-Drag a Source to reorder it within its group. The first of the icons at the top right of the sidebar shows or hides file sizes and modified times.
+Drag a Source to reorder it within its group. Click a group's header to collapse or expand it; a collapsed group still shows how many Sources it holds, and stays collapsed the next time you open Polyscope. The first of the icons at the top right of the sidebar shows or hides file sizes and modified times.
 
 ## Local Filesystem
 

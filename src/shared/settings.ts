@@ -1,6 +1,8 @@
 // App-wide settings, shared by the core (which keeps and enforces them) and the Settings screen
 // (which checks them as the user types, with the same rules).
 
+import { sourceTypeIds, type SourceTypeId } from './core-api'
+
 export type Theme = 'dark' | 'light'
 
 export const themes: readonly Theme[] = ['dark', 'light']
@@ -19,9 +21,11 @@ export interface Settings {
   showTreeDetails: boolean
   /** Whether the viewer shows a minimap of the whole file or log beside it; toggled from the viewer's toolbar. */
   showMinimap: boolean
+  /** The Source Types whose groups are collapsed in the sidebar, showing only their header; toggled from the sidebar. */
+  collapsedSourceGroups: SourceTypeId[]
 }
 
-export type NumberSetting = Exclude<keyof Settings, 'theme' | 'showTreeDetails' | 'showMinimap'>
+export type NumberSetting = Exclude<keyof Settings, 'theme' | 'showTreeDetails' | 'showMinimap' | 'collapsedSourceGroups'>
 
 /** The limits measured in bytes, which have to agree with one another. */
 export const sizeSettings = ['largeFileThreshold', 'openAnywayLimit', 'cacheSizeCap'] as const satisfies NumberSetting[]
@@ -37,13 +41,15 @@ export const defaultSettings: Readonly<Settings> = {
   defaultLastNLines: 10_000,
   theme: 'dark',
   showTreeDetails: true,
-  showMinimap: true
+  showMinimap: true,
+  collapsedSourceGroups: []
 }
 
 export type SettingProblem =
   | 'notPositiveWholeNumber'
   | 'notATheme'
   | 'notTrueOrFalse'
+  | 'notSourceTypes'
   /** The "open anyway" limit is below the Large File threshold, so it could never apply. */
   | 'belowLargeFileThreshold'
   /** The cache is too small to hold a file of the "open anyway" limit. */
@@ -70,6 +76,10 @@ export function settingProblems(settings: Settings): SettingProblems {
   if (!themes.includes(settings.theme)) problems.theme = 'notATheme'
   if (typeof settings.showTreeDetails !== 'boolean') problems.showTreeDetails = 'notTrueOrFalse'
   if (typeof settings.showMinimap !== 'boolean') problems.showMinimap = 'notTrueOrFalse'
+  const collapsed: unknown = settings.collapsedSourceGroups
+  if (!Array.isArray(collapsed) || !collapsed.every((type) => sourceTypeIds.includes(type))) {
+    problems.collapsedSourceGroups = 'notSourceTypes'
+  }
   // Limits are only compared once each is a number at all.
   if (!problems.openAnywayLimit && !problems.largeFileThreshold && settings.openAnywayLimit < settings.largeFileThreshold) {
     problems.openAnywayLimit = 'belowLargeFileThreshold'

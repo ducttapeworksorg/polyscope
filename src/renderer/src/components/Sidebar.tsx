@@ -8,7 +8,7 @@ import { targetOf, uiFor } from '../source-types'
 import { createTypeAhead, treeFocusTarget, treeNavigationKeys, typeAheadTarget, type TreeRow } from '../tree-navigation'
 import { ConfirmDialog } from './ConfirmDialog'
 import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
-import { DetailsIcon, DuplicateIcon, GearIcon, PencilIcon, PlusIcon, ThemeIcon, TrashIcon, UnlinkIcon } from './icons'
+import { ChevronIcon, DetailsIcon, DuplicateIcon, GearIcon, PencilIcon, PlusIcon, ThemeIcon, TrashIcon, UnlinkIcon } from './icons'
 import { SourceDialog } from './SourceDialog'
 import { SourceTree, type SourceAction } from './SourceTree'
 
@@ -36,6 +36,9 @@ interface Props {
   /** Whether tree rows show their size and modified time. */
   showDetails: boolean
   onToggleDetails(): void
+  /** The Source Types whose groups show only their header. */
+  collapsedGroups: readonly SourceTypeId[]
+  onToggleGroup(type: SourceTypeId): void
   theme: Theme
   /** Switches between the dark and light themes; without it, as in an Extension Copy showing VS Code's, there's no toggle. */
   onToggleTheme?(): void
@@ -89,6 +92,7 @@ const settingsShortcut = navigator.userAgent.includes('Mac') ? '⌘,' : 'Ctrl+,'
 export function Sidebar(props: Props) {
   const { sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile, onOpenLog, onFollowFile, onOpenSettings } = props
   const { showDetails, onToggleDetails, theme, onToggleTheme, environments, onManageEnvironments, ref } = props
+  const { collapsedGroups, onToggleGroup } = props
   const [dialog, setDialog] = useState<Dialog | null>(null)
   const { menu, open: openContextMenu, close: closeMenu } = useContextMenu<{ label: string; items: MenuItem[] }>()
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
@@ -166,7 +170,7 @@ export function Sidebar(props: Props) {
   })
 
   const groupProps = (group: Group): HTMLAttributes<HTMLElement> => ({
-    className: `source-group ${dropClass(group.type)}`,
+    className: `source-group source-group--${group.type} ${dropClass(group.type)}`,
     onDragOver: (event) => {
       if (dragging?.kind === 'group') trackDrop(event, group.type)
     },
@@ -186,7 +190,8 @@ export function Sidebar(props: Props) {
   const onTreeKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     const target = event.target as HTMLElement
     if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || target.getAttribute('role') !== 'treeitem') return
-    const items = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="treeitem"]')]
+    // A collapsed group keeps its trees, hidden, so their rows are skipped.
+    const items = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="treeitem"]')].filter((item) => !item.closest('[hidden]'))
     const rows = items.map(treeRowOf)
     const index = items.indexOf(target)
     const typed = event.key.length === 1 && event.key !== ' '
@@ -265,6 +270,9 @@ export function Sidebar(props: Props) {
         )}
         {groups.map((group) => {
           const { Icon, label } = uiFor(group.type)
+          const collapsed = collapsedGroups.includes(group.type)
+          const bodyId = `source-group-${group.type}`
+          const count = group.sources.length
           return (
             <section key={group.type} aria-label={t(label)} {...groupProps(group)}>
               <h3
@@ -273,30 +281,48 @@ export function Sidebar(props: Props) {
                 onDragStart={(event) => startDrag(event, { kind: 'group', type: group.type }, t(label))}
                 onDragEnd={endDrag}
               >
-                <Icon />
-                {t(label)}
+                <button
+                  type="button"
+                  className="source-group__toggle"
+                  aria-expanded={!collapsed}
+                  aria-controls={bodyId}
+                  aria-label={t(count === 1 ? 'sidebar.group.one' : 'sidebar.group.many', { type: t(label), count })}
+                  onClick={() => onToggleGroup(group.type)}
+                >
+                  <span className={`source-group__twisty ${collapsed ? '' : 'is-open'}`}>
+                    <ChevronIcon />
+                  </span>
+                  <span className="source-group__icon">
+                    <Icon />
+                  </span>
+                  <span className="source-group__label">{t(label)}</span>
+                  <span className="source-group__count">{count}</span>
+                </button>
               </h3>
-              {group.sources.map((source) => (
-                <SourceTree
-                  // A new target means a new tree: nothing expanded under the old one carries over.
-                  key={`${source.id}:${targetOf(source)}`}
-                  source={source}
-                  connection={connections.get(source.id) ?? disconnected}
-                  environment={environmentOf(environments, source)}
-                  onConnect={() => onConnect(source)}
-                  sourceActions={sourceActions(source)}
-                  onContextMenu={openMenu}
-                  selectedKey={selectedKey}
-                  onSelect={setSelectedKey}
-                  onOpenFile={onOpenFile}
-                  onOpenLog={onOpenLog}
-                  onFollowFile={onFollowFile}
-                  sourceRowProps={sourceRowProps(source)}
-                  treeProps={treeProps(source, group)}
-                  showDetails={showDetails}
-                  theme={theme}
-                />
-              ))}
+              {/* Hidden rather than unmounted, so a collapsed group's trees keep what was expanded in them. */}
+              <div id={bodyId} className="source-group__body" hidden={collapsed}>
+                {group.sources.map((source) => (
+                  <SourceTree
+                    // A new target means a new tree: nothing expanded under the old one carries over.
+                    key={`${source.id}:${targetOf(source)}`}
+                    source={source}
+                    connection={connections.get(source.id) ?? disconnected}
+                    environment={environmentOf(environments, source)}
+                    onConnect={() => onConnect(source)}
+                    sourceActions={sourceActions(source)}
+                    onContextMenu={openMenu}
+                    selectedKey={selectedKey}
+                    onSelect={setSelectedKey}
+                    onOpenFile={onOpenFile}
+                    onOpenLog={onOpenLog}
+                    onFollowFile={onFollowFile}
+                    sourceRowProps={sourceRowProps(source)}
+                    treeProps={treeProps(source, group)}
+                    showDetails={showDetails}
+                    theme={theme}
+                  />
+                ))}
+              </div>
             </section>
           )
         })}

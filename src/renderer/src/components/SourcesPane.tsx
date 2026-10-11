@@ -42,6 +42,8 @@ export function SourcesPane({ ref, model, update, onOpenFile, onOpenLog, onFollo
         onOpenSettings={() => model.setSettingsOpen(true)}
         showDetails={settings.showTreeDetails}
         onToggleDetails={() => void model.toggleTreeDetails()}
+        collapsedGroups={settings.collapsedSourceGroups}
+        onToggleGroup={(type) => void model.toggleSourceGroup(type)}
         theme={model.theme ?? settings.theme}
         // An Extension Copy shows VS Code's theme.
         onToggleTheme={isExtensionCopy() ? undefined : () => void model.toggleTheme()}

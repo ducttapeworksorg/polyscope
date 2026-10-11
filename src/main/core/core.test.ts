@@ -1061,7 +1061,8 @@ describe('settings', () => {
     defaultLastNLines: 10_000,
     theme: 'dark',
     showTreeDetails: true,
-    showMinimap: true
+    showMinimap: true,
+    collapsedSourceGroups: []
   }
   const settingsFile = () => join(dataDir(), 'settings.json')
 
@@ -1087,6 +1088,8 @@ describe('settings', () => {
     ['an unknown theme', { theme: 'sepia' as 'dark' }, 'theme'],
     ['tree details shown as neither true nor false', { showTreeDetails: 'no' as unknown as boolean }, 'showTreeDetails'],
     ['a minimap shown as neither true nor false', { showMinimap: 'no' as unknown as boolean }, 'showMinimap'],
+    ['a collapsed group that is not a Source Type', { collapsedSourceGroups: ['ftp'] as unknown as [] }, 'collapsedSourceGroups'],
+    ['collapsed groups that are not a list', { collapsedSourceGroups: 's3' as unknown as [] }, 'collapsedSourceGroups'],
     ['an "open anyway" limit below the threshold', { openAnywayLimit: 40 * MB }, 'openAnywayLimit'],
     ['a threshold above the "open anyway" limit', { largeFileThreshold: 300 * MB }, 'openAnywayLimit'],
     ['a cache too small for the "open anyway" limit', { cacheSizeCap: 100 * MB }, 'cacheSizeCap']
@@ -1116,7 +1119,13 @@ describe('settings', () => {
   })
 
   it('are restored in a later launch', async () => {
-    const changes = { theme: 'light' as const, largeFileThreshold: 20 * MB, showTreeDetails: false, showMinimap: false }
+    const changes = {
+      theme: 'light' as const,
+      largeFileThreshold: 20 * MB,
+      showTreeDetails: false,
+      showMinimap: false,
+      collapsedSourceGroups: ['s3' as const, 'kubernetesLogs' as const]
+    }
     await createCore({ dataDir: dataDir() }).updateSettings(changes)
 
     expect(await createCore({ dataDir: dataDir() }).getSettings()).toEqual({ ...defaults, ...changes })
@@ -1124,7 +1133,15 @@ describe('settings', () => {
 
   it('fall back to the default for each saved value that is invalid, keeping the rest', async () => {
     await mkdir(dataDir())
-    const saved = { theme: 'sepia', defaultLastNLines: 500, cacheSizeCap: 'lots', openAnywayLimit: 10 * MB, showTreeDetails: 1, showMinimap: 'yes' }
+    const saved = {
+      theme: 'sepia',
+      defaultLastNLines: 500,
+      cacheSizeCap: 'lots',
+      openAnywayLimit: 10 * MB,
+      showTreeDetails: 1,
+      showMinimap: 'yes',
+      collapsedSourceGroups: ['local', 'ftp']
+    }
     await writeFile(settingsFile(), JSON.stringify(saved))
 
     expect(await createCore({ dataDir: dataDir() }).getSettings()).toEqual({ ...defaults, defaultLastNLines: 500 })
