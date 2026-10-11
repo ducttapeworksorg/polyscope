@@ -54,6 +54,7 @@ export const core: CoreApi & CoreEvents = {
   stopFollow: call('stopFollow'),
   rememberLastNLines: call('rememberLastNLines'),
   listAwsProfiles: call('listAwsProfiles'),
+  listSshHosts: call('listSshHosts'),
   listKubeContexts: call('listKubeContexts'),
   listKubeNamespaces: call('listKubeNamespaces'),
   listKubeWorkloads: call('listKubeWorkloads'),

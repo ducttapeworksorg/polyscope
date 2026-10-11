@@ -55,6 +55,22 @@ test('an SSH Files Source has host, port, user and path fields, and is named aft
   await expect(name).toHaveValue('Web logs')
 })
 
+test('the host field suggests the aliases in ~/.ssh/config, and shows what the config says about the one picked', async () => {
+  await writeFile(join(home, '.ssh', 'config'), 'Host web db\n  Port 2222\nHost web\n  User deploy\nHost *.prod\n  User ops\n')
+  const window = await app.firstWindow()
+  const dialog = await openAddSshSource(window)
+  const host = dialog.getByRole('combobox', { name: 'Host' })
+  const options = dialog.getByRole('listbox').getByRole('option')
+
+  await host.click()
+  await expect(options).toHaveText(['web', 'db'])
+  await options.filter({ hasText: 'web' }).click()
+
+  await expect(host).toHaveValue('web')
+  await expect(dialog.getByLabel('Port')).toHaveAttribute('placeholder', '2222')
+  await expect(dialog.getByLabel('User')).toHaveAttribute('placeholder', 'deploy')
+})
+
 test('an SSH Files Source signs in through the agent unless a key file or password is picked', async () => {
   const window = await app.firstWindow()
   const dialog = await openAddSshSource(window)

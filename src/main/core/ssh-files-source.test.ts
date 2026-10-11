@@ -96,7 +96,7 @@ const settingsFor = async (server: TestSshServer, path: string, changes: Partial
 const names = (nodes: TreeNode[]) => nodes.map((node) => (node.kind === 'more' ? '…more' : node.kind === 'error' ? node.code : node.name))
 
 describe('adding an SSH Files Source', () => {
-  it('is listed with its settings normalised, port 22 by default, and only whether a passphrase is set', async () => {
+  it('is listed with its settings normalised, no port unless given, and only whether a passphrase is set', async () => {
     const core = createCore()
 
     const added = await core.addSource(offline({ host: ' logs.internal ', user: ' ops ', path: '/var//log/app/', keyFile: ' /keys/id ' }))
@@ -107,7 +107,6 @@ describe('adding an SSH Files Source', () => {
       name: 'Server',
       host: 'logs.internal',
       user: 'ops',
-      port: 22,
       path: '/var/log/app',
       auth: 'keyFile',
       keyFile: '/keys/id',
@@ -593,6 +592,224 @@ describe('connecting an SSH Files Source', () => {
 
     await core.testConnection(await settingsFor(server, '/'))
     await vi.waitFor(() => expect(server.connectionCount()).toBe(0))
+  })
+})
+
+/** The user's ~/.ssh/config, holding `lines`. */
+const sshConfig = (...lines: string[]) => writeFile(join(home, '.ssh', 'config'), lines.map((line) => `${line}\n`).join(''))
+
+/** Settings for a Source on an SSH config alias, leaving the rest to the config: it signs in with a key file it names. */
+const aliasSettings = (host: string, path: string, changes: Partial<NewSshFilesSource> = {}): NewSshFilesSource => ({
+  type: 'sshFiles',
+  name: 'Server',
+  host,
+  user: '',
+  path,
+  auth: 'keyFile',
+  keyFile: '',
+  ...changes
+})
+
+describe('an SSH Files Source on an SSH config alias', () => {
+  it('connects with the alias’s HostName, User, Port and IdentityFile', async () => {
+    const server = await startServer()
+    const path = await server.seed({ 'app.log': 'a' })
+    await sshConfig('Host logs', `  HostName ${server.host}`, `  Port ${server.port}`, `  User ${server.user}`, `  IdentityFile ${await keyFile(server.clientKey)}`)
+    await knownHosts(knownHostsLine(server))
+    const core = createCore()
+
+    const source = await core.addSource(aliasSettings('logs', path))
+
+    expect(source).toMatchObject({ host: 'logs', user: '', keyFile: '' })
+    expect(source).not.toHaveProperty('port')
+    expect(names(await core.connect(source.id))).toEqual(['app.log'])
+  })
+
+  it('matches wildcard Host patterns, and Included files, as ssh does', async () => {
+    const server = await startServer()
+    const path = await server.seed({ 'app.log': 'a' })
+    await mkdir(join(home, '.ssh', 'config.d'))
+    await writeFile(join(home, '.ssh', 'config.d', 'servers'), `Host *.test\n  HostName ${server.host}\n  Port ${server.port}\n`)
+    await sshConfig('Include config.d/*', 'Host *', `  User ${server.user}`, `  IdentityFile ${await keyFile(server.clientKey)}`)
+    await knownHosts(knownHostsLine(server))
+
+    await expect(createCore().testConnection(aliasSettings('web.test', path))).resolves.toBeUndefined()
+  })
+
+  it('lets settings typed in the Source win over the config’s, as ssh’s command line does', async () => {
+    const server = await startServer()
+    const path = await server.seed({ 'app.log': 'a' })
+    await sshConfig('Host logs', `  HostName ${server.host}`, '  Port 1', '  User someone-else', `  IdentityFile ${join(dir, 'missing-key')}`)
+    await knownHosts(knownHostsLine(server))
+
+    const typed = aliasSettings('logs', path, { port: server.port, user: server.user, keyFile: await keyFile(server.clientKey) })
+    await expect(createCore().testConnection(typed)).resolves.toBeUndefined()
+  })
+
+  it('signs in through the SSH agent as the config’s User', async () => {
+    const server = await startServer()
+    const path = await server.seed({ 'app.log': 'a' })
+    await startAgent(server.clientKey)
+    await sshConfig('Host logs', `  HostName ${server.host}`, `  Port ${server.port}`, `  User ${server.user}`)
+    await knownHosts(knownHostsLine(server))
+
+    await expect(createCore().testConnection(aliasSettings('logs', path, { auth: 'agent' }))).resolves.toBeUndefined()
+  })
+
+  it('needs a user, and a key file, from the Source or the config', async () => {
+    await sshConfig('Host logs', '  HostName logs.internal')
+    const core = createCore()
+
+    await expect(core.addSource(aliasSettings('logs', '/var/log'))).rejects.toMatchObject({ code: 'USER_REQUIRED' })
+    await expect(core.addSource(aliasSettings('logs', '/var/log', { user: 'ops' }))).rejects.toMatchObject({ code: 'KEY_FILE_REQUIRED' })
+  })
+
+  it('fails naming ProxyCommand when the host needs it', async () => {
+    await sshConfig('Host piped', '  User ops', '  ProxyCommand nc %h %p')
+    const core = createCore()
+    const source = await core.addSource(aliasSettings('piped', '/var/log', { auth: 'agent' }))
+
+    await expect(core.connect(source.id)).rejects.toMatchObject({ code: 'UNSUPPORTED_SSH_OPTION', message: expect.stringContaining('ProxyCommand') })
+  })
+
+  it('is the same server as its HostName when deleting a Source forgets the host keys trusted for it', async () => {
+    const server = await startServer()
+    await sshConfig('Host logs', `  HostName ${server.host}`, `  Port ${server.port}`)
+    const dataDir = join(dir, 'user-data')
+    const core = createCore({ dataDir })
+    const byAlias = await core.addSource(aliasSettings('logs', '/', { user: server.user, keyFile: await keyFile(server.clientKey) }))
+    const byName = await core.addSource(await settingsFor(server, '/'))
+    const failure = (await core.connect(byAlias.id).catch((error: unknown) => error)) as { hostKey: HostKey }
+    await core.trustHostKey(failure.hostKey)
+
+    await core.deleteSource(byName.id)
+    expect(await core.connect(byAlias.id)).toEqual([])
+
+    await core.deleteSource(byAlias.id)
+    await expect(createCore({ dataDir }).testConnection(await settingsFor(server, '/'))).rejects.toMatchObject({ code: 'HOST_KEY_UNKNOWN' })
+  })
+
+  it('is suggested, with what the config says about it', async () => {
+    await sshConfig('Host logs db', '  HostName %h.internal', '  Port 2222', 'Host *.prod', '  User deploy', 'Host *', '  User ops')
+
+    expect(await createCore().listSshHosts()).toEqual([
+      { alias: 'logs', hostName: 'logs.internal', user: 'ops', port: 2222 },
+      { alias: 'db', hostName: 'db.internal', user: 'ops', port: 2222 }
+    ])
+  })
+})
+
+describe('an SSH Files Source through ProxyJump', () => {
+  /**
+   * A server reachable only through two bastions, `first` and `second`, as ~/.ssh/config's `logs` alias says, each
+   * signing in with a key of its own the config names. The second bastion and the server are under .invalid, which
+   * only the bastion before them resolves.
+   */
+  async function behindBastions() {
+    const [first, second, server] = [await startServer(), await startServer(), await startServer()]
+    const path = await server.seed({ 'app.log': 'a' })
+    await sshConfig(
+      'Host logs',
+      '  HostName logs.invalid',
+      `  Port ${server.port}`,
+      '  ProxyJump first,second',
+      `  IdentityFile ${await keyFile(server.clientKey)}`,
+      'Host first',
+      `  HostName ${first.host}`,
+      `  Port ${first.port}`,
+      `  IdentityFile ${await keyFile(first.clientKey)}`,
+      'Host second',
+      '  HostName second.invalid',
+      `  Port ${second.port}`,
+      `  IdentityFile ${await keyFile(second.clientKey)}`,
+      'Host *',
+      `  User ${server.user}`
+    )
+    const known = {
+      first: knownHostsLine(first),
+      second: knownHostsLine({ host: 'second.invalid', port: second.port, hostKey: second.hostKey }),
+      server: knownHostsLine({ host: 'logs.invalid', port: server.port, hostKey: server.hostKey })
+    }
+    return { first, second, server, path, known }
+  }
+
+  it('goes through each bastion in turn, signing in to each with its own IdentityFile', async () => {
+    const { first, second, server, path, known } = await behindBastions()
+    await knownHosts(known.first, known.second, known.server)
+    const core = createCore()
+    const source = await core.addSource(aliasSettings('logs', path))
+
+    expect(names(await core.connect(source.id))).toEqual(['app.log'])
+    expect(first.forwarded()).toEqual([`second.invalid:${second.port}`])
+    expect(second.forwarded()).toEqual([`logs.invalid:${server.port}`])
+  })
+
+  it('offers each server’s unknown host key to trust in turn, bastions first', async () => {
+    const { first, second, server, path } = await behindBastions()
+    const core = createCore({ dataDir: join(dir, 'user-data') })
+    const settings = aliasSettings('logs', path)
+    const offered: HostKey[] = []
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const failure = (await core.testConnection(settings).catch((error: unknown) => error)) as { code: string; hostKey: HostKey }
+      expect(failure.code).toBe('HOST_KEY_UNKNOWN')
+      offered.push(failure.hostKey)
+      await core.trustHostKey(failure.hostKey)
+    }
+
+    expect(offered).toEqual([
+      { host: first.host, port: first.port, keyType: 'ssh-ed25519', fingerprint: fingerprintOf(first.hostKey) },
+      { host: 'second.invalid', port: second.port, keyType: 'ssh-ed25519', fingerprint: fingerprintOf(second.hostKey) },
+      { host: 'logs.invalid', port: server.port, keyType: 'ssh-ed25519', fingerprint: fingerprintOf(server.hostKey) }
+    ])
+    await expect(core.testConnection(settings)).resolves.toBeUndefined()
+  })
+
+  it('refuses a bastion whose host key isn’t the one known for it', async () => {
+    const { second, path, known } = await behindBastions()
+    await knownHosts(known.first, knownHostsLine({ host: 'second.invalid', port: second.port, hostKey: generateKey().public }), known.server)
+
+    await expect(createCore().testConnection(aliasSettings('logs', path))).rejects.toMatchObject({ code: 'HOST_KEY_CHANGED' })
+  })
+
+  it('signs in to the bastions through the SSH agent too, and disconnecting closes every connection', async () => {
+    const { first, second, server, path, known } = await behindBastions()
+    await knownHosts(known.first, known.second, known.server)
+    await startAgent(first.clientKey, second.clientKey, server.clientKey)
+    const core = createCore()
+    const source = await core.addSource(aliasSettings('logs', path, { auth: 'agent' }))
+
+    expect(names(await core.connect(source.id))).toEqual(['app.log'])
+    expect([first, second, server].map((s) => s.connectionCount())).toEqual([1, 1, 1])
+    await core.disconnect(source.id)
+    await vi.waitFor(() => expect([first, second, server].map((s) => s.connectionCount())).toEqual([0, 0, 0]))
+  })
+
+  it('takes a bastion’s user and port from the ProxyJump itself', async () => {
+    const { first, server, path, known } = await behindBastions()
+    await knownHosts(known.first, known.server)
+    await sshConfig(
+      'Host logs',
+      '  HostName logs.invalid',
+      `  Port ${server.port}`,
+      `  ProxyJump ${server.user}@${first.host}:${first.port}`,
+      `  IdentityFile ${await keyFile(server.clientKey)}`,
+      `  User ${server.user}`
+    )
+
+    // The bastion has no IdentityFile of its own here, so it's signed into with the agent, as the server is.
+    await startAgent(first.clientKey, server.clientKey)
+    await expect(createCore().testConnection(aliasSettings('logs', path, { auth: 'agent' }))).resolves.toBeUndefined()
+  })
+
+  it('fails naming ProxyCommand when a bastion needs it', async () => {
+    await sshConfig('Host logs', '  ProxyJump bastion', '  User ops', 'Host bastion', '  ProxyCommand ssh -W %h:%p gateway')
+    const core = createCore()
+
+    await expect(core.testConnection(aliasSettings('logs', '/var/log', { auth: 'agent' }))).rejects.toMatchObject({
+      code: 'UNSUPPORTED_SSH_OPTION',
+      message: expect.stringMatching(/bastion.*ProxyCommand/)
+    })
   })
 })
 

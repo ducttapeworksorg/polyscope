@@ -107,13 +107,23 @@ function SshFields({ value, onChange, editing }: FieldsProps<SshSettings>) {
     const next = { ...value, ...changes }
     onChange({ ...next, name: nameFollowing(value.name, sshName(value), sshName(next)) })
   }
-  const text = (key: 'host' | 'user' | 'path', label: MessageKey, hint?: MessageKey) => (
+  const text = (key: 'user' | 'path', label: MessageKey, hint?: MessageKey, placeholder?: string) => (
     <label className="field">
       <span className="field__label">{t(label)}</span>
-      <input className="field__input field__input--path" value={value[key]} onChange={(e) => set({ [key]: e.target.value })} spellCheck={false} />
+      <input
+        className="field__input field__input--path"
+        value={value[key]}
+        onChange={(e) => set({ [key]: e.target.value })}
+        placeholder={placeholder}
+        spellCheck={false}
+      />
       {hint && <span className="field__hint">{t(hint)}</span>}
     </label>
   )
+  // Only suggestions: any host can be typed in. What ~/.ssh/config says about an alias shows where it's left blank.
+  const sshHosts = useListing(() => core.listSshHosts(), [])
+  const configured = sshHosts.items?.find((h) => h.alias === value.host.trim())
+  const hostId = useId()
   const auth = value.auth ?? 'keyFile'
   // Only a secret stored for the way it signs in counts.
   const signsInSame = editing?.type === 'sshFiles' && editing.auth === auth
@@ -127,21 +137,33 @@ function SshFields({ value, onChange, editing }: FieldsProps<SshSettings>) {
   return (
     <>
       <div className="field-pair">
-        {text('host', 'sshSource.host')}
+        <div className="field">
+          <label className="field__label" htmlFor={hostId}>
+            {t('sshSource.host')}
+          </label>
+          <ComboBox
+            id={hostId}
+            className="field__input--path"
+            value={value.host}
+            options={sshHosts.items?.map((h) => h.alias) ?? []}
+            onChange={(host) => set({ host })}
+          />
+          <span className="field__hint">{t('sshSource.host.hint')}</span>
+        </div>
         <label className="field">
           <span className="field__label">{t('sshSource.port')}</span>
-          {/* Blank is port 22; anything that isn't a port is the core's to refuse. */}
+          {/* Blank is the SSH config's port, or 22; anything that isn't a port is the core's to refuse. */}
           <input
             className="field__input field__input--path"
             inputMode="numeric"
-            placeholder="22"
+            placeholder={String(configured?.port ?? 22)}
             value={value.port === undefined ? '' : String(value.port)}
             onChange={(e) => onChange({ ...value, ...(e.target.value.trim() ? { port: Number(e.target.value) } : { port: undefined }) })}
             spellCheck={false}
           />
         </label>
       </div>
-      {text('user', 'sshSource.user')}
+      {text('user', 'sshSource.user', 'sshSource.user.hint', configured?.user)}
       {text('path', 'sshSource.path', 'sshSource.path.hint')}
       <div className="field">
         <span className="field__label" id="ssh-auth-label">
@@ -234,9 +256,9 @@ function KeyFileFields({
   )
 }
 
-/** Where a Source path is on its server, as scp would put it: `user@host:/path`. */
+/** Where a Source path is on its server, as scp would put it: `user@host:/path`, or `host:/path` if the user is the SSH config's. */
 function remotePath({ user, host, path: folder }: SshFilesSourceInfo, path: SourcePath) {
-  return `${user}@${host}:${path ? `${folder === '/' ? '' : folder}/${path}` : folder}`
+  return `${user ? `${user}@` : ''}${host}:${path ? `${folder === '/' ? '' : folder}/${path}` : folder}`
 }
 
 type S3Settings = Extract<NewSource, { type: 's3' }>
@@ -641,7 +663,7 @@ export const sourceTypeUi: SourceTypeUis = {
       type: 'sshFiles',
       name,
       host,
-      ...(port !== 22 && { port }),
+      ...(port !== undefined && { port }),
       user,
       path,
       auth,

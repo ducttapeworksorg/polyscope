@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -34,6 +35,7 @@ import type {
   SourceInfo,
   SourcePath,
   SourceTypeId,
+  SshAuth,
   SshFilesSourceInfo,
   TextEncoding,
   FileLogOptions,
@@ -76,7 +78,8 @@ import { createS3FileSource, readCaBundle, type S3Target } from './s3-file-sourc
 import { createSecretStore, type SecretStore } from './secret-store'
 import { createSettingsStore } from './settings-store'
 import { findSshAgent } from './ssh-agent'
-import { connectSsh, type SshSignIn } from './ssh-connection'
+import { readSshConfig, routeTo } from './ssh-config'
+import { connectSsh, type PresentedHostKey, type SshSignIn } from './ssh-connection'
 import { createSshFileSource } from './ssh-file-source'
 
 const asCoreError = (error: unknown) =>
@@ -178,14 +181,38 @@ function normaliseAbsolutePath(input: string, code: 'INVALID_CONTAINER_PATH' | '
 function sshTargetOf(input: NewSshFilesSource): Extract<Target, { type: 'sshFiles' }> {
   const host = input.host?.trim() ?? ''
   if (!host) throw new CoreError('HOST_REQUIRED', 'An SSH Files Source needs a host')
-  const user = input.user?.trim() ?? ''
-  if (!user) throw new CoreError('USER_REQUIRED', 'An SSH Files Source needs a user to sign in as')
-  const port = input.port ?? 22
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new CoreError('INVALID_PORT', `Not a port from 1 to 65535: ${String(port)}`)
+  const { port } = input
+  if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65_535)) {
+    throw new CoreError('INVALID_PORT', `Not a port from 1 to 65535: ${String(port)}`)
+  }
   const auth = input.auth ?? 'keyFile'
   const keyFile = auth === 'keyFile' ? (input.keyFile?.trim() ?? '') : ''
-  if (auth === 'keyFile' && !keyFile) throw new CoreError('KEY_FILE_REQUIRED', 'An SSH Files Source needs a key file to sign in with')
-  return { type: 'sshFiles', host, user, port, path: normaliseAbsolutePath(input.path ?? '', 'INVALID_PATH'), auth, keyFile }
+  const user = input.user?.trim() ?? ''
+  return { type: 'sshFiles', host, user, ...(port !== undefined && { port }), path: normaliseAbsolutePath(input.path ?? '', 'INVALID_PATH'), auth, keyFile }
+}
+
+/**
+ * The servers an SSH Files Source goes through, as ~/.ssh/config routes its host, bastions first and its own server
+ * last; each with a user to sign in as, and a key file where it signs in with one. Its own server's user and key
+ * file are those in its settings, or else the config's; a bastion's, the config's, or else its own server's.
+ */
+async function sshRouteOf(target: Extract<Target, { type: 'sshFiles' }>) {
+  const route = routeTo(await readSshConfig(), { host: target.host, ...(target.user && { user: target.user }), ...(target.port && { port: target.port }) })
+  const server = route.at(-1)!
+  const user = server.user
+  if (!user) throw new CoreError('USER_REQUIRED', 'An SSH Files Source needs a user to sign in as, here or as the User in ~/.ssh/config')
+  // As ssh does, the first IdentityFile that's there; if none is, the first, for the failure to name.
+  const configured = (files: string[]) => files.find((file) => existsSync(file)) ?? files[0]
+  const keyFile = target.keyFile || configured(server.identityFiles) || ''
+  if (target.auth === 'keyFile' && !keyFile) {
+    throw new CoreError('KEY_FILE_REQUIRED', 'An SSH Files Source needs a key file to sign in with, here or as the IdentityFile in ~/.ssh/config')
+  }
+  return route.map((endpoint) => ({
+    host: endpoint.host,
+    port: endpoint.port,
+    user: endpoint.user ?? user,
+    keyFile: endpoint === server ? keyFile : (configured(endpoint.identityFiles) ?? keyFile)
+  }))
 }
 
 /** A kubeconfig context's name, checked and trimmed. */
@@ -714,17 +741,27 @@ export function createCore(options: CoreOptions = {}): Core {
     return fileSource
   }
 
-  /** How an SSH Files Source signs in: `secret` is its key file's passphrase, or its password. */
-  const sshSignInOf = async ({ auth, keyFile }: Extract<Target, { type: 'sshFiles' }>, secret?: string): Promise<SshSignIn> => {
-    if (auth === 'agent') return { agent: await findSshAgent(options.pageantHelper ? { pageantHelper: options.pageantHelper } : {}) }
+  /**
+   * How an SSH Files Source signs in to each server on its route, its own and any bastions alike: through the one
+   * agent, with the one password, or with each server's key file. `secret` is the key file's passphrase, or the password.
+   */
+  const sshSignInsOf = async (auth: SshAuth, keyFiles: string[], secret?: string): Promise<SshSignIn[]> => {
+    if (auth === 'agent') {
+      const agent = await findSshAgent(options.pageantHelper ? { pageantHelper: options.pageantHelper } : {})
+      return keyFiles.map(() => ({ agent }))
+    }
     if (auth === 'password') {
       if (secret === undefined) throw new CoreError('PASSWORD_REQUIRED', 'Enter the password to sign in with')
-      return { password: secret }
+      return keyFiles.map(() => ({ password: secret }))
     }
-    const privateKey = await readFile(keyFile).catch((error: Error) => {
-      throw new CoreError('KEY_FILE_UNREADABLE', `Couldn't read the key file ${keyFile}: ${error.message}`)
-    })
-    return { privateKey, ...(secret !== undefined && { passphrase: secret }) }
+    return Promise.all(
+      keyFiles.map(async (keyFile) => {
+        const privateKey = await readFile(keyFile).catch((error: Error) => {
+          throw new CoreError('KEY_FILE_UNREADABLE', `Couldn't read the key file ${keyFile}: ${error.message}`)
+        })
+        return { privateKey, ...(secret !== undefined && { passphrase: secret }) }
+      })
+    )
   }
 
   /**
@@ -732,11 +769,18 @@ export function createCore(options: CoreOptions = {}): Core {
    * or its password, if it has one), and opens its folder, once it's clear the folder is there.
    */
   const reachSsh = async (target: Extract<Target, { type: 'sshFiles' }>, secret?: string) => {
-    const { host, port, user, path } = target
-    const connection = await connectSsh(
-      { host, port, user, ...(await sshSignInOf(target, secret)) },
-      { checkHostKey: (key) => hostKeys.check(host, port, key), preferredHostKeyTypes: await hostKeys.knownTypes(host, port) }
+    const { host, path } = target
+    const route = await sshRouteOf(target)
+    const signIns = await sshSignInsOf(target.auth, route.map((endpoint) => endpoint.keyFile), secret)
+    // Every server's host key is checked, bastions' too.
+    const hops = await Promise.all(
+      route.map(async ({ host, port, user }, index) => ({
+        target: { host, port, user, ...signIns[index]! },
+        options: { checkHostKey: (key: PresentedHostKey) => hostKeys.check(host, port, key), preferredHostKeyTypes: await hostKeys.knownTypes(host, port) }
+      }))
     )
+    const server = hops.pop()!
+    const connection = await connectSsh(server.target, server.options, hops)
     const fileSource = createSshFileSource(connection, path)
     try {
       const root = await fileSource.stat('').catch((error: unknown) => {
@@ -819,6 +863,12 @@ export function createCore(options: CoreOptions = {}): Core {
     const typed = await secretFor(input)
     if (target.type === 's3' && target.auth === 'keys' && typed === undefined && (await secretFor(input, editing)) === undefined) {
       throw new CoreError('SECRET_KEY_REQUIRED', 'An S3 Source needs a secret key')
+    }
+    if (target.type === 'sshFiles') {
+      await sshRouteOf(target).catch((error: unknown) => {
+        // A host needing what Polyscope doesn't support may not by the time it's connected: the config may change.
+        if (!(error instanceof CoreError && error.code === 'UNSUPPORTED_SSH_OPTION')) throw error
+      })
     }
     if (target.type === 'sshFiles' && target.auth === 'password' && typed === undefined && (await secretFor(input, editing)) === undefined) {
       throw new CoreError('PASSWORD_REQUIRED', 'An SSH Files Source signing in with a password needs one')
@@ -921,8 +971,21 @@ export function createCore(options: CoreOptions = {}): Core {
       await secrets.remove(sourceId)
       // As do the host keys trusted in Polyscope for its server, unless another Source reaches the same server: at worst,
       // a Source that fails to delete has its server's key offered to trust again.
-      const onSameServer = (s: SavedSource) => s.type === 'sshFiles' && source.type === 'sshFiles' && s.host.toLowerCase() === source.host.toLowerCase() && s.port === source.port
-      if (source.type === 'sshFiles' && !sources.some((s) => s !== source && onSameServer(s))) await hostKeys.forget(source.host, source.port)
+      if (source.type === 'sshFiles') {
+        // Where ~/.ssh/config puts each Source's server: an alias and the host name it stands for are one server.
+        const config = await readSshConfig()
+        const serverOf = ({ host, port }: { host: string; port?: number }) => {
+          const resolved = config.resolve(host)
+          return { host: resolved.hostName, port: port ?? resolved.port ?? 22 }
+        }
+        const server = serverOf(source)
+        const onSameServer = (s: SavedSource) => {
+          if (s === source || s.type !== 'sshFiles') return false
+          const other = serverOf(s)
+          return other.host.toLowerCase() === server.host.toLowerCase() && other.port === server.port
+        }
+        if (!sources.some(onSameServer)) await hostKeys.forget(server.host, server.port)
+      }
       await commit(() => sources.splice(sources.indexOf(sourceFor(sourceId)), 1))
       dropConnection(sourceId)
     },
@@ -1204,6 +1267,13 @@ export function createCore(options: CoreOptions = {}): Core {
     },
 
     listAwsProfiles,
+    async listSshHosts() {
+      const config = await readSshConfig()
+      return config.hosts().map((alias) => {
+        const { hostName, user, port } = config.resolve(alias)
+        return { alias, hostName, ...(user && { user }), ...(port && { port }) }
+      })
+    },
     listKubeContexts,
 
     async listKubeNamespaces(context) {
