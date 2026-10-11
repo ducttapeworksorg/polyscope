@@ -35,6 +35,15 @@ export const HardDriveIcon = () => (
   </svg>
 )
 
+/** A terminal window with a prompt, for a folder on a server reached over SSH. */
+export const TerminalIcon = () => (
+  <svg {...base}>
+    <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.25" />
+    <path d="M4.5 6.25l2 1.75-2 1.75" />
+    <path d="M8.5 10.25h3" />
+  </svg>
+)
+
 /** A generic bucket: an open-topped pail, for S3-compatible storage (never the AWS logo). */
 export const BucketIcon = () => (
   <svg {...base}>
@@ -140,6 +149,14 @@ export const PencilIcon = () => (
   <svg {...base}>
     <path d="M10.75 2.5l2.75 2.75-7.5 7.5-3.5.75.75-3.5z" />
     <path d="M9.25 4l2.75 2.75" />
+  </svg>
+)
+
+/** A key, for trusting a server's host key. */
+export const KeyIcon = () => (
+  <svg {...base}>
+    <circle cx="5.25" cy="10.75" r="2.75" />
+    <path d="M7.25 8.75l6-6M11.25 4.75l1.75 1.75M9.75 6.25l1.25 1.25" />
   </svg>
 )
 

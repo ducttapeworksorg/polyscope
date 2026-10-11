@@ -3,6 +3,7 @@ import type { Environment } from '@shared/core-api'
 import { environmentOf, environmentStyle } from '../environments'
 import { canFollowFile, isLog, tabName, type OpenTab } from '../workspace'
 import { t } from '../i18n'
+import { uiFor } from '../source-types'
 import { ContextMenu, useContextMenu, type MenuItem } from './ContextMenu'
 import { CloseIcon, FileIcon, LogIcon, MinimapIcon, ReloadIcon } from './icons'
 
@@ -122,7 +123,7 @@ export function Tabs(props: Props) {
               aria-selected={active}
               aria-controls={active ? panelId : undefined}
               aria-description={tab.pinned ? undefined : t('tabs.preview')}
-              title={`${tab.source.name}: ${tab.file.path}`}
+              title={`${tab.source.name}: ${uiFor(tab.source.type).fullPath(tab.source, tab.file.path)}`}
               className={`tab ${active ? 'is-active' : ''} ${tab.pinned ? '' : 'is-preview'} ${environment ? 'has-environment' : ''}`}
               style={environment && environmentStyle(environment)}
               onClick={() => onActivate(tab.key)}

@@ -18,6 +18,8 @@ export const en = {
 
   'sourceType.local': 'Local Filesystem',
   'sourceType.local.hint': 'A folder on this computer or UNC share (Windows only)',
+  'sourceType.sshFiles': 'SSH Files',
+  'sourceType.sshFiles.hint': 'A folder on a server, read over SFTP',
   'sourceType.s3': 'S3-compatible Storage',
   'sourceType.s3.hint': 'A bucket on AWS, MinIO, Ceph…',
   'sourceType.kubernetesFiles': 'Kubernetes Files',
@@ -35,6 +37,9 @@ export const en = {
   'sourceDialog.test': 'Test connection',
   'sourceDialog.testing': 'Testing…',
   'sourceDialog.testSucceeded': 'Connection succeeded.',
+  'sourceDialog.hostKeyUnknown':
+    'Polyscope hasn’t seen {host}’s host key before. Check its fingerprint with the server’s administrator, then trust it to connect.',
+  'sourceDialog.trustHostKey': 'Trust and test again',
   'sourceDialog.environment': 'Environment',
   'sourceDialog.noEnvironment': 'None',
   'sourceDialog.manageEnvironments': 'Manage…',
@@ -96,6 +101,24 @@ export const en = {
   's3Source.proxy': 'Proxy',
   's3Source.proxy.hint': 'Optional, like http://proxy.corp:3128. Otherwise HTTPS_PROXY and NO_PROXY apply.',
 
+  'sshSource.host': 'Host',
+  'sshSource.port': 'Port',
+  'sshSource.user': 'User',
+  'sshSource.path': 'Path',
+  'sshSource.path.hint': 'The absolute path of the folder to browse, like /var/log.',
+  'sshSource.keyFile': 'Key file',
+  'sshSource.keyFile.hint': 'The private key that signs in, like ~/.ssh/id_ed25519.',
+  'sshSource.keyFile.allFiles': 'All files',
+  'sshSource.browse': 'Browse…',
+  'sshSource.passphrase': 'Passphrase',
+  'sshSource.passphrase.hint': 'Only for an encrypted key file.',
+  'sshSource.passphrase.stored': 'Stored encrypted. Leave blank to keep it.',
+  'sshSource.passphrase.weak':
+    'No keyring (GNOME Keyring or KWallet) is running, so the passphrase is only obfuscated on disk, not securely encrypted.',
+
+  'hostKey.type': 'Key type: {keyType}',
+  'hostKey.fingerprint': 'Fingerprint: {fingerprint}',
+
   'kubernetesSource.context': 'Context',
   'kubernetesSource.context.choose': 'Choose a context',
   'kubernetesSource.context.hint': 'From your kubeconfig. Auth plugins like aws or kubelogin work as they do for kubectl.',
@@ -142,6 +165,12 @@ export const en = {
   'sourceActions.edit': 'Edit…',
   'sourceActions.duplicate': 'Duplicate',
   'sourceActions.delete': 'Delete…',
+  'sourceActions.trustHostKey': 'Trust host key…',
+
+  'trustHostKey.title': 'Trust {host}’s host key?',
+  'trustHostKey.body':
+    'Polyscope hasn’t seen this server’s host key before. Check its fingerprint with the server’s administrator: trusting the key of an impostor would let it read what Polyscope sends. {keyType} key, fingerprint {fingerprint}.',
+  'trustHostKey.confirm': 'Trust and connect',
 
   'deleteSource.title': 'Delete {name}?',
   'deleteSource.body': 'Polyscope forgets this Source and any secrets stored for it. Nothing it points at is touched.',
@@ -397,6 +426,19 @@ export const en = {
   'error.INVALID_PATTERN': 'That isn’t a regular expression: {message}',
   'error.CACHE_TOO_SMALL': 'The file is larger than the Large File cache has room for; raise the cache size in Settings. ({message})',
   'error.CACHE_UNWRITABLE': 'The Large File cache couldn’t be written. ({message})',
+  'error.HOST_REQUIRED': 'Enter the server’s host name or address.',
+  'error.USER_REQUIRED': 'Enter the user to sign in as.',
+  'error.INVALID_PORT': 'Enter a port from 1 to 65535.',
+  'error.INVALID_PATH': 'Enter an absolute path, like /var/log.',
+  'error.KEY_FILE_REQUIRED': 'Choose the key file to sign in with.',
+  'error.KEY_FILE_UNREADABLE': 'The key file can’t be used: {message}',
+  'error.PASSPHRASE_REQUIRED': 'The key file is encrypted. Enter its passphrase.',
+  'error.PASSPHRASE_WRONG': 'That passphrase doesn’t decrypt the key file.',
+  'error.HOST_KEY_UNKNOWN': 'The server’s host key isn’t known yet: {message}',
+  'error.HOST_KEY_CHANGED':
+    'The server’s host key isn’t the one known for it, so Polyscope won’t connect: someone may be impersonating it. Check with the server’s administrator. ({message})',
+  'error.SIGN_IN_REFUSED': 'The server refused to let you sign in: {message}',
+  'error.SFTP_UNAVAILABLE': 'The server’s SFTP subsystem is turned off, so its files can’t be read. ({message})',
   'error.UNKNOWN': 'Couldn’t complete that: {message}'
 } satisfies Record<string, string> &
   Record<`error.${CoreErrorCode}`, string> &

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
-import { sourceTypeIds, type Environment, type NewSource, type SourceInfo, type SourceTypeId } from '@shared/core-api'
-import { core, describeError } from '../core-client'
+import { sourceTypeIds, type Environment, type HostKey, type NewSource, type SourceInfo, type SourceTypeId } from '@shared/core-api'
+import { core, CoreCallError, describeError } from '../core-client'
 import { environmentOf } from '../environments'
 import { t } from '../i18n'
 import { uiFor } from '../source-types'
@@ -16,7 +16,8 @@ interface Props {
   onClose(): void
 }
 
-type TestRun = { state: 'testing' } | { state: 'passed' } | { state: 'failed'; message: string }
+/** A connection test, and how it went; one that met an SSH server whose host key isn't known offers to trust it. */
+type TestRun = { state: 'testing' } | { state: 'passed' } | { state: 'failed'; message: string; hostKey?: HostKey }
 
 /** Settings with their Environment label set to `environmentId`, or taken off when it's undefined. */
 const labelled = ({ environmentId: _, ...settings }: NewSource, environmentId: string | undefined): NewSource =>
@@ -50,8 +51,20 @@ export function SourceDialog({ editing, environments, onManageEnvironments, onSa
       await core.testConnection(settings, editing?.id)
       finish({ state: 'passed' })
     } catch (e) {
-      finish({ state: 'failed', message: describeError(e) })
+      const hostKey = e instanceof CoreCallError && e.code === 'HOST_KEY_UNKNOWN' ? e.hostKey : undefined
+      finish({ state: 'failed', message: describeError(e), ...(hostKey && { hostKey }) })
     }
+  }
+
+  // Trusting a key keeps it in Polyscope's own store, then the test runs again with it trusted.
+  const trustAndTest = async (hostKey: HostKey) => {
+    try {
+      await core.trustHostKey(hostKey)
+    } catch (e) {
+      setTest({ state: 'failed', message: describeError(e) })
+      return
+    }
+    await testConnection()
   }
 
   const submit = async (event: FormEvent) => {
@@ -137,11 +150,22 @@ export function SourceDialog({ editing, environments, onManageEnvironments, onSa
           <button type="button" className="button button--quiet" disabled={test?.state === 'testing'} onClick={testConnection}>
             {t(test?.state === 'testing' ? 'sourceDialog.testing' : 'sourceDialog.test')}
           </button>
-          <p className={`dialog__test-result ${test?.state === 'failed' ? 'is-failed' : ''}`} role="status">
+          <p className={`dialog__test-result ${test?.state === 'failed' && !test.hostKey ? 'is-failed' : ''}`} role="status">
             {test?.state === 'passed' && t('sourceDialog.testSucceeded')}
-            {test?.state === 'failed' && test.message}
+            {test?.state === 'failed' && (test.hostKey ? t('sourceDialog.hostKeyUnknown', { host: test.hostKey.host }) : test.message)}
           </p>
         </div>
+        {test?.state === 'failed' && test.hostKey && (
+          <div className="dialog__host-key">
+            <p className="dialog__host-key-facts">
+              <span>{t('hostKey.type', { keyType: test.hostKey.keyType })}</span>
+              <span className="dialog__host-key-fingerprint">{t('hostKey.fingerprint', { fingerprint: test.hostKey.fingerprint })}</span>
+            </p>
+            <button type="button" className="button button--quiet" onClick={() => void trustAndTest(test.hostKey!)}>
+              {t('sourceDialog.trustHostKey')}
+            </button>
+          </div>
+        )}
 
         {error && (
           <p className="dialog__error" role="alert">

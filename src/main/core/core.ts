@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
@@ -24,6 +25,7 @@ import type {
   NewEnvironment,
   NewS3Source,
   NewSource,
+  NewSshFilesSource,
   LargeFile,
   OpenLogOptions,
   OpenOptions,
@@ -32,6 +34,7 @@ import type {
   SourceInfo,
   SourcePath,
   SourceTypeId,
+  SshFilesSourceInfo,
   TextEncoding,
   FileLogOptions,
   TreeNode
@@ -60,6 +63,7 @@ import { kubeConfigFor, listKubeContexts } from './kubeconfig'
 import { listNamespaces } from './kubernetes-api'
 import { createKubernetesFileSource, listWorkloads } from './kubernetes-file-source'
 import { createKubernetesLogSource } from './kubernetes-log-source'
+import { createHostKeyStore } from './host-keys'
 import { languageFor } from './languages'
 import { chunksOf, openLargeFile, readLastLinesBytes, lastLinesOf, type OpenLargeFile } from './large-file'
 import { createLargeFileCache } from './large-file-cache'
@@ -71,6 +75,8 @@ import { createRegistryStore, emptyRegistry, type SavedSource } from './registry
 import { createS3FileSource, readCaBundle, type S3Target } from './s3-file-source'
 import { createSecretStore, type SecretStore } from './secret-store'
 import { createSettingsStore } from './settings-store'
+import { connectSsh } from './ssh-connection'
+import { createSshFileSource } from './ssh-file-source'
 
 const asCoreError = (error: unknown) =>
   error instanceof CoreError ? error : new CoreError('UNKNOWN', error instanceof Error ? error.message : String(error))
@@ -104,6 +110,7 @@ function withDefaults(saved: SavedSource): SavedSource {
         caBundlePath: source.caBundlePath ?? '',
         proxyUrl: source.proxyUrl ?? ''
       }
+    case 'sshFiles':
     case 'kubernetesFiles':
     case 'kubernetesLogs':
       return source
@@ -116,14 +123,21 @@ const unlabelled = <S extends SavedSource>({ environmentId: _, ...source }: S) =
 /** Where a Source points and how it gets there: its settings, less its id, name, label and remembered view choices. */
 type Target =
   | Pick<LocalSourceInfo, 'type' | 'rootPath' | 'showHidden'>
+  | Pick<SshFilesSourceInfo, 'type' | 'host' | 'user' | 'port' | 'path' | 'keyFile'>
   | Omit<S3SourceInfo, 'id' | 'name' | 'environmentId' | 'lastNLines' | 'secretKeySet'>
   | Pick<KubernetesFilesSourceInfo, 'type' | 'context' | 'namespace' | 'workloadKind' | 'workloadName' | 'path'>
   | Pick<KubernetesLogsSourceInfo, 'type' | 'context' | 'namespace'>
 
 type S3Settings = Extract<Target, { type: 's3' }>
 
-/** The name an S3 Source's secret key is stored under. */
-const secretKeyName = 'secretKey'
+/**
+ * The name a Source's one secret is stored under, when its settings have a use for one: an S3 Source's secret key
+ * when it signs in with keys, an SSH Files Source's key file passphrase.
+ */
+function secretNameOf(settings: { type: SourceTypeId; auth?: string }) {
+  if (settings.type === 's3') return (settings.auth ?? 'keys') === 'keys' ? 'secretKey' : undefined
+  return settings.type === 'sshFiles' ? 'passphrase' : undefined
+}
 
 const isBlank = (value: string | undefined) => !value?.trim()
 
@@ -142,14 +156,30 @@ function normaliseUrl(input: string, scheme: 'http' | 'https', code: 'INVALID_HO
 /** A Kubernetes namespace name: a DNS label, lowercase letters, digits and '-', at most 63 characters. */
 const isNamespace = (name: string) => name.length <= 63 && /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(name)
 
-/** A folder's absolute path in a container, without repeated or trailing '/'; failing if it isn't absolute or climbs with '..'. */
-function normaliseContainerPath(input: string) {
+/**
+ * A folder's absolute path in a container or on a server, without repeated or trailing '/'; failing with `code` if it
+ * isn't absolute or climbs with '..'.
+ */
+function normaliseAbsolutePath(input: string, code: 'INVALID_CONTAINER_PATH' | 'INVALID_PATH') {
   const path = input.trim()
   const segments = path.split('/').filter(Boolean)
   if (!path.startsWith('/') || segments.some((s) => s === '..' || s === '.')) {
-    throw new CoreError('INVALID_CONTAINER_PATH', `Not an absolute path: ${input}`)
+    throw new CoreError(code, `Not an absolute path: ${input}`)
   }
   return `/${segments.join('/')}`
+}
+
+/** An SSH Files Source's settings, checked and trimmed. */
+function sshTargetOf(input: NewSshFilesSource): Extract<Target, { type: 'sshFiles' }> {
+  const host = input.host?.trim() ?? ''
+  if (!host) throw new CoreError('HOST_REQUIRED', 'An SSH Files Source needs a host')
+  const user = input.user?.trim() ?? ''
+  if (!user) throw new CoreError('USER_REQUIRED', 'An SSH Files Source needs a user to sign in as')
+  const port = input.port ?? 22
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new CoreError('INVALID_PORT', `Not a port from 1 to 65535: ${String(port)}`)
+  const keyFile = input.keyFile?.trim() ?? ''
+  if (!keyFile) throw new CoreError('KEY_FILE_REQUIRED', 'An SSH Files Source needs a key file to sign in with')
+  return { type: 'sshFiles', host, user, port, path: normaliseAbsolutePath(input.path ?? '', 'INVALID_PATH'), keyFile }
 }
 
 /** A kubeconfig context's name, checked and trimmed. */
@@ -182,8 +212,9 @@ function targetOf(input: NewSource): Target {
     const workloadKind = workloadKindOf(input.workloadKind)
     const workloadName = input.workloadName?.trim() ?? ''
     if (!workloadName) throw new CoreError('WORKLOAD_REQUIRED', 'A Kubernetes Files Source needs a Workload')
-    return { type: 'kubernetesFiles', ...cluster, workloadKind, workloadName, path: normaliseContainerPath(input.path ?? '') }
+    return { type: 'kubernetesFiles', ...cluster, workloadKind, workloadName, path: normaliseAbsolutePath(input.path ?? '', 'INVALID_CONTAINER_PATH') }
   }
+  if (input.type === 'sshFiles') return sshTargetOf(input)
   const s3: NewS3Source = input
   // Blank for AWS itself; a store is most likely https, a proxy http.
   const host = normaliseUrl(s3.host ?? '', 'https', 'INVALID_HOST')
@@ -280,6 +311,7 @@ export function createCore(options: CoreOptions = {}): Core {
   const environmentStore = options.dataDir ? createEnvironmentStore(options.dataDir) : null
   const settingsStore = options.dataDir ? createSettingsStore(options.dataDir) : null
   const secrets = options.secrets ?? createSecretStore({ cipher: inMemory })
+  const hostKeys = createHostKeyStore(options.dataDir ? { dataDir: options.dataDir } : {})
   // Sources are kept in each group's order; groups interleave freely and are sorted by groupOrder when listed.
   const { sources, groupOrder } = emptyRegistry()
   const environments = defaultEnvironments()
@@ -359,9 +391,10 @@ export function createCore(options: CoreOptions = {}): Core {
   const handOut = async (saved: SavedSource): Promise<SourceInfo> => {
     const source =
       saved.environmentId === undefined || environments.some((e) => e.id === saved.environmentId) ? { ...saved } : unlabelled(saved)
-    if (source.type !== 's3') return source
     // Only whether there is a secret: the secret itself stays in the core.
-    return { ...source, secretKeySet: (await secrets.get(source.id, secretKeyName)) !== undefined }
+    if (source.type === 's3') return { ...source, secretKeySet: (await secrets.get(source.id, 'secretKey')) !== undefined }
+    if (source.type === 'sshFiles') return { ...source, passphraseSet: (await secrets.get(source.id, 'passphrase')) !== undefined }
+    return source
   }
 
   const backendFor = (sourceId: string) => {
@@ -541,9 +574,16 @@ export function createCore(options: CoreOptions = {}): Core {
     }
   }
 
-  /** Forgets a Source's connection, stopping its Follows and caching. */
+  /** Lets go of what a backend holds open, like an SSH connection. */
+  const closeBackend = (backend: Backend) => {
+    if (backend.kind === 'files') backend.fileSource.close?.()
+  }
+
+  /** Forgets a Source's connection, stopping its Follows and caching, and closing what it held open. */
   const dropConnection = (sourceId: string) => {
     stopActivity(sourceId)
+    const connection = connections.get(sourceId)
+    if (connection?.state === 'connected') closeBackend(connection.backend)
     connections.delete(sourceId)
   }
 
@@ -663,6 +703,32 @@ export function createCore(options: CoreOptions = {}): Core {
     return fileSource
   }
 
+  /**
+   * Connects to an SSH Files Source's server, its host key checked, signs in with its key file (decrypted with
+   * `passphrase`), and opens its folder, once it's clear the folder is there.
+   */
+  const reachSsh = async ({ host, port, user, path, keyFile }: Extract<Target, { type: 'sshFiles' }>, passphrase?: string) => {
+    const privateKey = await readFile(keyFile).catch((error: Error) => {
+      throw new CoreError('KEY_FILE_UNREADABLE', `Couldn't read the key file ${keyFile}: ${error.message}`)
+    })
+    const connection = await connectSsh(
+      { host, port, user, privateKey, ...(passphrase !== undefined && { passphrase }) },
+      { checkHostKey: (key) => hostKeys.check(host, port, key), preferredHostKeyTypes: await hostKeys.knownTypes(host, port) }
+    )
+    const fileSource = createSshFileSource(connection, path)
+    try {
+      const root = await fileSource.stat('').catch((error: unknown) => {
+        if (error instanceof CoreError && error.code === 'NOT_FOUND') throw new CoreError('ROOT_NOT_FOUND', `${path} doesn't exist on ${host}`)
+        throw error
+      })
+      if (root.kind !== 'folder') throw new CoreError('ROOT_NOT_A_FOLDER', `${path} on ${host} is not a folder`)
+    } catch (error) {
+      fileSource.close()
+      throw error
+    }
+    return fileSource
+  }
+
   /** Opens a Kubernetes Files Source's Workload, once it's clear the context, namespace and Workload are there. */
   const reachKubernetesFiles = async ({ context, type: _, ...target }: Extract<Target, { type: 'kubernetesFiles' }>) => {
     const fileSource = createKubernetesFileSource(kubeConfigFor(context), target)
@@ -679,29 +745,41 @@ export function createCore(options: CoreOptions = {}): Core {
 
   /**
    * Opens a Source's File or Log Source and lists its root: what connecting, or testing a connection, has to get through.
-   * An S3 Source signing in with keys needs its `secretKey`; it proves it can sign in by listing.
+   * An S3 Source signing in with keys needs its `secret` key, as an SSH Files Source with an encrypted key file needs its
+   * passphrase; an S3 Source proves it can sign in by listing.
    */
-  const open = async (target: Target, secretKey?: string) => {
+  const open = async (target: Target, secret?: string) => {
     let backend: Backend
     if (target.type === 'local') backend = { kind: 'files', fileSource: await reachLocal(target) }
-    else if (target.type === 's3') backend = { kind: 'files', fileSource: createS3FileSource(await s3TargetOf(target, secretKey)) }
+    else if (target.type === 'sshFiles') backend = { kind: 'files', fileSource: await reachSsh(target, secret) }
+    else if (target.type === 's3') backend = { kind: 'files', fileSource: createS3FileSource(await s3TargetOf(target, secret)) }
     else if (target.type === 'kubernetesFiles') backend = { kind: 'files', fileSource: await reachKubernetesFiles(target) }
     else backend = { kind: 'logs', logSource: await reachKubernetes(target) }
-    return { backend, nodes: await listBackend(backend, '') }
-  }
-
-  /** The secret key typed in `input`, or else the one stored for `sourceId`; undefined if there's neither. */
-  const secretKeyFor = async (input: NewSource, sourceId?: string) => {
-    if (input.type !== 's3' || (input.auth ?? 'keys') !== 'keys') return undefined
-    if (!isBlank(input.secretAccessKey)) return input.secretAccessKey
-    return sourceId === undefined ? undefined : secrets.get(sourceId, secretKeyName)
+    try {
+      return { backend, nodes: await listBackend(backend, '') }
+    } catch (error) {
+      closeBackend(backend)
+      throw error
+    }
   }
 
   /**
-   * Checks new or edited settings and returns them normalised, without an id, along with a secret key
-   * typed in them. `editing` is the id of the Source they replace, whose stored secret key can stay.
+   * The secret typed in `input`, if its settings have a use for one, or else the one stored for `sourceId`; undefined
+   * if there's neither.
    */
-  const validate = async (input: NewSource, editing?: string): Promise<{ saved: Omit<SavedSource, 'id'>; secretKey?: string }> => {
+  const secretFor = async (input: NewSource, sourceId?: string) => {
+    const name = secretNameOf(input)
+    if (name === undefined) return undefined
+    const typed = input.type === 's3' ? input.secretAccessKey : input.type === 'sshFiles' ? input.passphrase : undefined
+    if (!isBlank(typed)) return typed
+    return sourceId === undefined ? undefined : secrets.get(sourceId, name)
+  }
+
+  /**
+   * Checks new or edited settings and returns them normalised, without an id, along with a secret typed in
+   * them. `editing` is the id of the Source they replace, whose stored secret can stay.
+   */
+  const validate = async (input: NewSource, editing?: string): Promise<{ saved: Omit<SavedSource, 'id'>; secret?: string }> => {
     const name = input.name.trim()
     if (!name) throw new CoreError('NAME_REQUIRED', 'A Source needs a name')
     const { environmentId } = input
@@ -714,12 +792,12 @@ export function createCore(options: CoreOptions = {}): Core {
     }
     // Nor is a cluster: it may be away, or its context not in the kubeconfig yet.
     if (target.type === 'kubernetesLogs' || target.type === 'kubernetesFiles') return { saved: { ...target, name, ...label } }
-    // An S3 Source isn't reached until it's connected: it may be saved while its store is away.
-    const typed = await secretKeyFor(input)
-    if (target.auth === 'keys' && typed === undefined && (await secretKeyFor(input, editing)) === undefined) {
+    // An S3 or SSH Files Source isn't reached until it's connected: it may be saved while its server is away.
+    const typed = await secretFor(input)
+    if (target.type === 's3' && target.auth === 'keys' && typed === undefined && (await secretFor(input, editing)) === undefined) {
       throw new CoreError('SECRET_KEY_REQUIRED', 'An S3 Source needs a secret key')
     }
-    return { saved: { ...target, name, ...label }, ...(typed !== undefined && { secretKey: typed }) }
+    return { saved: { ...target, name, ...label }, ...(typed !== undefined && { secret: typed }) }
   }
 
   /** Every setting but the name, label and remembered view choices, in a form that compares equal whatever order the keys were saved in. */
@@ -751,9 +829,10 @@ export function createCore(options: CoreOptions = {}): Core {
 
     async addSource(input) {
       await loaded
-      const { saved, secretKey } = await validate(input)
+      const { saved, secret } = await validate(input)
       const source = { id: randomUUID(), ...saved } as SavedSource
-      if (secretKey !== undefined) await secrets.set(source.id, secretKeyName, secretKey)
+      const secretName = secretNameOf(source)
+      if (secret !== undefined && secretName !== undefined) await secrets.set(source.id, secretName, secret)
       try {
         await commit(() => sources.push(source))
       } catch (error) {
@@ -766,25 +845,30 @@ export function createCore(options: CoreOptions = {}): Core {
     async editSource(sourceId, input) {
       await loaded
       sourceFor(sourceId) // an unknown Source is reported before any invalid settings
-      const { saved, secretKey } = await validate(input, sourceId)
+      const { saved, secret } = await validate(input, sourceId)
       const before = sourceFor(sourceId)
       // What the user picked in its log views isn't among the settings edited, so it stays.
       const remembered = before.lastNLines !== undefined && { lastNLines: before.lastNLines }
       const source = { id: sourceId, ...saved, ...remembered } as SavedSource
-      const previousKey = secretKey === undefined ? undefined : await secrets.get(sourceId, secretKeyName)
-      if (secretKey !== undefined) await secrets.set(sourceId, secretKeyName, secretKey)
+      const secretName = secretNameOf(source)
+      const written = secret !== undefined ? secretName : undefined
+      const previous = written === undefined ? undefined : await secrets.get(sourceId, written)
+      if (written !== undefined) await secrets.set(sourceId, written, secret!)
       try {
         await commit(() => (sources[sources.indexOf(before)] = source))
       } catch (error) {
-        // The secret key is a Source's only secret, so forgetting its secrets forgets just the one written here.
-        if (previousKey !== undefined) await secrets.set(sourceId, secretKeyName, previousKey)
-        else if (secretKey !== undefined) await secrets.remove(sourceId)
+        // A Source has one secret at most, so forgetting its secrets forgets just the one written here.
+        if (written !== undefined && previous !== undefined) await secrets.set(sourceId, written, previous)
+        else if (written !== undefined) await secrets.remove(sourceId)
         throw error
       }
-      // A Source that no longer signs in with a secret key has no use for the one it had.
-      if (source.type !== 's3' || source.auth !== 'keys') await secrets.remove(sourceId)
+      // A Source with no use for the secret it had (say, signing in another way now) forgets it; one just typed stays.
+      if (secretName !== secretNameOf(before)) {
+        await secrets.remove(sourceId)
+        if (written !== undefined) await secrets.set(sourceId, written, secret!)
+      }
       // A new name keeps the connection; anything else, a new secret included, needs connecting afresh.
-      if (!sameTarget(before, source) || secretKey !== undefined) dropConnection(sourceId)
+      if (!sameTarget(before, source) || written !== undefined) dropConnection(sourceId)
       return handOut(source)
     },
 
@@ -883,7 +967,7 @@ export function createCore(options: CoreOptions = {}): Core {
       const source = sourceFor(sourceId)
       const attempt: Connection = { state: 'connecting' }
       // Connecting again replaces the connection the Source's Follows and caching were using.
-      stopActivity(sourceId)
+      dropConnection(sourceId)
       connections.set(sourceId, attempt)
       const settle = (outcome: Connection) => {
         if (connections.get(sourceId) !== attempt) {
@@ -893,19 +977,27 @@ export function createCore(options: CoreOptions = {}): Core {
       }
       let opened: Awaited<ReturnType<typeof open>>
       try {
-        opened = await open(source, source.type === 's3' ? await secrets.get(sourceId, secretKeyName) : undefined)
+        const secretName = secretNameOf(source)
+        opened = await open(source, secretName === undefined ? undefined : await secrets.get(sourceId, secretName))
       } catch (error) {
         const failure = asCoreError(error)
-        settle({ state: 'error', code: failure.code, message: failure.message })
+        settle({ state: 'error', code: failure.code, message: failure.message, ...(failure.hostKey && { hostKey: failure.hostKey }) })
         throw failure
       }
-      settle({ state: 'connected', backend: opened.backend })
+      try {
+        settle({ state: 'connected', backend: opened.backend })
+      } catch (error) {
+        // Disconnected while connecting: nothing will use what was opened.
+        closeBackend(opened.backend)
+        throw error
+      }
       return opened.nodes
     },
 
     async testConnection(input, sourceId) {
       await loaded
-      await open(targetOf(input), await secretKeyFor(input, sourceId))
+      const { backend } = await open(targetOf(input), await secretFor(input, sourceId))
+      closeBackend(backend)
     },
 
     async disconnect(sourceId) {
@@ -913,6 +1005,8 @@ export function createCore(options: CoreOptions = {}): Core {
       sourceFor(sourceId)
       dropConnection(sourceId)
     },
+
+    trustHostKey: (hostKey) => hostKeys.trust(hostKey),
 
     async expand(sourceId, path, cursor) {
       await loaded

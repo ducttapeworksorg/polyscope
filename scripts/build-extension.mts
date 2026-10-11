@@ -24,9 +24,9 @@ const nodeBundle = (entry: string, outDir: string, fileName: string): InlineConf
     outDir,
     target: 'node20',
     rollupOptions: {
-      // Besides `vscode`, the optional native add-ons of `ws` (used by @kubernetes/client-node), as in the app build:
-      // `ws` requires them inside try/catch and falls back when they're absent; bundling turns that into a throw.
-      external: ['vscode', 'bufferutil', 'utf-8-validate'],
+      // Besides `vscode`, the optional native add-ons of `ws` (used by @kubernetes/client-node) and of `ssh2`, as in the
+      // app build: both require them inside try/catch and fall back when they're absent; bundling turns that into a throw.
+      external: ['vscode', 'bufferutil', 'utf-8-validate', 'cpu-features', /sshcrypto\.node$/],
       // One file, the lazily imported parts (the AWS SDK's credential providers) too: they're a few hundred KB beside
       // the bundle's megabytes, and vsce warns of an unbundled extension past 100 .js files, which the webviews' Monaco
       // language chunks come close to on their own.

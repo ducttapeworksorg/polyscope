@@ -54,7 +54,7 @@ flowchart TB
   end
   Core["Core — src/main/core<br/>Sources, Follows, Large Files, settings, secrets"]
   Shared["Shared contract — src/shared<br/>CoreApi, types, settings rules"]
-  Backends[("Local disk · S3 · Kubernetes API")]
+  Backends[("Local disk · SSH servers · S3 · Kubernetes API")]
 
   App --> Preload --> Main --> Core
   Ext --> PostMsg --> ExtHost --> Core
@@ -92,6 +92,7 @@ A VS Code extension has the same split: the **extension host** is a Node.js proc
 | Build | [electron-vite](https://electron-vite.org/) (Vite) for the app; Vite directly (`scripts/build-extension.mts`) for the extension | `@shared/*` path alias in every bundle |
 | UI | React 19, plain CSS (`src/renderer/src/styles/app.css`) | No state library, no router, no CSS framework |
 | Editor | [Monaco](https://microsoft.github.io/monaco-editor/), the editor in VS Code, read-only | Its language workers are set up in `monaco.ts` |
+| SSH | `ssh2` | SFTP over one connection per Source; host keys checked against `known_hosts` (ADR 0006) |
 | S3 | `@aws-sdk/client-s3` | Keys, or AWS profiles including SSO |
 | Kubernetes | `@kubernetes/client-node` | Uses the user's kubeconfig, as `kubectl` does; exec over WebSocket for pod files |
 | Updates | `electron-updater` + GitHub Releases | Installed where possible, offered as a download elsewhere (ADR 0003) |
@@ -185,6 +186,7 @@ flowchart TB
 
   subgraph Impl["Source Type implementations"]
     Local["local-file-source<br/>node:fs"]
+    SSH["ssh-file-source<br/>SFTP over ssh-connection"]
     S3["s3-file-source<br/>AWS SDK"]
     KF["kubernetes-file-source<br/>→ shell-file-source over pod exec"]
     KL["kubernetes-log-source<br/>Kubernetes API"]
@@ -196,7 +198,7 @@ flowchart TB
   Engines --> LS
   Facade --> FS
   Facade --> LS
-  FS --> Local & S3 & KF
+  FS --> Local & SSH & S3 & KF
   LS --> KL
 ```
 
@@ -225,13 +227,14 @@ Each interface has a **contract test suite** (`file-source-contract.ts`, `log-so
 | Source Type | Implementation | How it reaches its backend |
 | --- | --- | --- |
 | Local Filesystem | `local-file-source.ts` | `node:fs`; on Windows, `cmd.exe dir /a:h` to find hidden files |
+| SSH Files | `ssh-file-source.ts` + `ssh-connection.ts` + `host-keys.ts` | SFTP through `ssh2`, over one connection per Source opened on connect and closed on disconnect (`FileSource.close`). `ssh-connection.ts` signs in and checks the host key, for other Source Types that reach a host over SSH to reuse; `host-keys.ts` reads `~/.ssh/known_hosts` (never writing it) and keeps the keys the user trusts in Polyscope in `trusted-host-keys.json` |
 | S3-compatible Storage | `s3-file-source.ts` | `@aws-sdk/client-s3` (`ListObjectsV2`, `HeadObject`, ranged `GetObject`); custom CA bundles and proxies |
 | Kubernetes Files | `kubernetes-file-source.ts` → `shell-file-source.ts` + `kubernetes-exec.ts` | Finds the Workload's pods through the Kubernetes API, then runs small POSIX `sh` scripts (`stat`, `dd`…) in the container over the exec API, as `kubectl exec` does |
 | Kubernetes Logs | `kubernetes-log-source.ts` | Kubernetes API: lists Workloads, pods and containers; reads and streams container logs |
 
 Supporting modules: `kubeconfig.ts` (loads `KUBECONFIG` or `~/.kube/config`), `kubernetes-api.ts` (shared API helpers and error mapping), `pod-status.ts` (Pod Status and Ready Count), `rbac.ts`, `aws-profiles.ts`, `proxy-env.ts`, `network-errors.ts`.
 
-`shell-file-source.ts` is a `FileSource` built on any "run this `sh` script" function, and so isn't tied to Kubernetes. A future backend you reach by running commands (SSH, say) could reuse it.
+`shell-file-source.ts` is a `FileSource` built on any "run this `sh` script" function, and so isn't tied to Kubernetes. SSH Files doesn't use it: SFTP maps straight onto `FileSource` (ADR 0006).
 
 #### Engines
 
@@ -243,7 +246,7 @@ These do the heavy lifting on top of the contracts, so every backend gets them f
 
 #### Persistence and secrets
 
-`registry-store`, `environment-store`, `settings-store` and `secret-store` each own one JSON file in `dataDir`, written through `json-file.ts`. The secret store encrypts each value with a `cipher` the host provides (Electron's `safeStorage` on the desktop) or swaps in an entirely different store (VS Code's `SecretStorage` in the extension). Secrets never leave the core: `SourceInfo` only says whether one is set (`secretKeySet`).
+`registry-store`, `environment-store`, `settings-store` and `secret-store` each own one JSON file in `dataDir`, written through `json-file.ts`. The secret store encrypts each value with a `cipher` the host provides (Electron's `safeStorage` on the desktop) or swaps in an entirely different store (VS Code's `SecretStorage` in the extension). Secrets never leave the core: `SourceInfo` only says whether one is set (`secretKeySet`, `passphraseSet`).
 
 ### 3. Hosts (`src/main` and `src/extension`)
 
@@ -308,7 +311,7 @@ It has two implementations:
 | Host side | `src/main/ipc.ts` | `src/extension/bridge/host.ts` (`serveBridge`) |
 | Extras | — | `ExtensionBridge` adds `open`, `retitle`, `ownViewer`, `openExtensionSettings` |
 
-Both host sides call the core through the same function, **`callCore`** (`src/main/core-call.ts`). It checks the method name against `coreMethods`, calls it, and returns a `CoreResult`: `{ ok: true, value }` or `{ ok: false, code, message }`. Errors travel as values because a thrown `Error` loses its `code` crossing IPC. The extension's host side also remembers the Follows and Large Files each webview started, and lets them go when that webview closes.
+Both host sides call the core through the same function, **`callCore`** (`src/main/core-call.ts`). It checks the method name against `coreMethods`, calls it, and returns a `CoreResult`: `{ ok: true, value }` or `{ ok: false, code, message }`, plus the `hostKey` a HOST_KEY_UNKNOWN failure offers to trust. Errors travel as values because a thrown `Error` loses its `code` crossing IPC. The extension's host side also remembers the Follows and Large Files each webview started, and lets them go when that webview closes.
 
 On the UI side, **`core-client.ts`** wraps `invokeCore` into a typed `core` object implementing `CoreApi & CoreEvents`, turning a failed `CoreResult` back into a thrown `CoreCallError` with its code. **UI code imports `core` from `core-client.ts` and never calls `window.polyscope.invokeCore` itself.**
 
@@ -450,7 +453,7 @@ The three `tsconfig.*.json` projects enforce most of this: `tsconfig.web.json` (
 | Sources and group order | Core (`registry-store`) | `sources.json` in the data folder | Yes |
 | Environments | Core (`environment-store`) | `environments.json` | Yes |
 | Settings | Core (`settings-store`) | `settings.json` | Yes |
-| Secrets (S3 secret keys) | Core (`secret-store`) | `secrets.json`, encrypted with `safeStorage`; VS Code `SecretStorage` in the extension | Yes |
+| Secrets (S3 secret keys, SSH key passphrases) | Core (`secret-store`) | `secrets.json`, encrypted with `safeStorage`; VS Code `SecretStorage` in the extension | Yes |
 | Large File cache | Core (`large-file-cache`) | `large-file-cache/` in the data folder, LRU-capped by `cacheSizeCap` | Yes (reused if the file hasn't changed) |
 | App log | Host (`app-log.ts`) | `logs/` in the data folder | Yes, rotated |
 | Connections, Follows, open Large Files | Core, in memory | — | No: every Source starts Disconnected |

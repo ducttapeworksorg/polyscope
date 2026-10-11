@@ -10,9 +10,9 @@ export default defineConfig({
     resolve: { alias: shared },
     build: {
       rollupOptions: {
-        // Optional native add-ons of `ws` (used by @kubernetes/client-node). `ws` requires them
-        // inside try/catch and falls back when they're absent; bundling turns that into a throw.
-        external: ['bufferutil', 'utf-8-validate']
+        // Optional native add-ons of `ws` (used by @kubernetes/client-node) and of `ssh2`. Both require them
+        // inside try/catch and fall back when they're absent; bundling turns that into a throw.
+        external: ['bufferutil', 'utf-8-validate', 'cpu-features', /sshcrypto\.node$/]
       }
     }
   },
