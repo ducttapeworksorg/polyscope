@@ -137,12 +137,19 @@ test.beforeAll(async () => {
     env: { ...process.env, KUBECONFIG: cluster.kubeconfig }
   })
   window = await app.firstWindow()
-  // The same size on every machine, whatever the screen.
-  await app.evaluate(({ BrowserWindow }) => {
+  // The same size on every machine, on the sharpest screen it fits, whatever screen it opens on.
+  await app.evaluate(({ BrowserWindow, screen }) => {
     const [main] = BrowserWindow.getAllWindows()
+    const fits = screen.getAllDisplays().filter(({ workArea }) => workArea.width >= 1440 && workArea.height >= 880)
+    const { workArea } = fits.sort((a, b) => b.scaleFactor - a.scaleFactor)[0] ?? screen.getPrimaryDisplay()
     main!.unmaximize()
+    // Moved onto the screen first, so the size is taken in that screen's scale.
+    main!.setPosition(workArea.x, workArea.y)
     main!.setContentSize(1440, 880)
-    main!.center()
+    const [width, height] = main!.getSize() as [number, number]
+    main!.setPosition(workArea.x + Math.round((workArea.width - width) / 2), workArea.y + Math.max(0, Math.round((workArea.height - height) / 2)))
+    // Again, as crossing to a screen of another scale can leave it a few pixels off.
+    main!.setContentSize(1440, 880)
   })
   await expect(window.locator('.monaco-workbench')).toBeVisible({ timeout: 60_000 })
 })
