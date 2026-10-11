@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ConnectionState, Environment, SourceInfo, TreeNode } from '@shared/core-api'
+import type { ConnectionState, Environment, SourceInfo, SourceTypeId, TreeNode } from '@shared/core-api'
 import type { Settings } from '@shared/settings'
 import { core } from '../core-client'
 import { useSettings, type SettingsModel } from './use-settings'
@@ -21,6 +21,7 @@ export interface SourcesModel extends SettingsModel {
   reloadSources(): Promise<void>
   reloadEnvironments(): Promise<void>
   toggleTreeDetails(): Promise<void>
+  toggleSourceGroup(type: SourceTypeId): Promise<void>
   toggleMinimap(): Promise<void>
   toggleTheme(): Promise<void>
   settingsOpen: boolean
@@ -91,6 +92,14 @@ export function useSources({ onSourcesReloaded }: Options = {}): SourcesModel {
     if (settings) await core.updateSettings({ showTreeDetails: !settings.showTreeDetails }).catch(() => undefined)
   }
 
+  // Like the tree details, and saved so a collapsed group stays collapsed in the next launch.
+  const toggleSourceGroup = async (type: SourceTypeId) => {
+    if (!settings) return
+    const collapsed = settings.collapsedSourceGroups
+    const next = collapsed.includes(type) ? collapsed.filter((t) => t !== type) : [...collapsed, type]
+    await core.updateSettings({ collapsedSourceGroups: next }).catch(() => undefined)
+  }
+
   // Like the tree details: the new value arrives through onSettingsChanged.
   const toggleMinimap = async () => {
     if (settings) await core.updateSettings({ showMinimap: !settings.showMinimap }).catch(() => undefined)
@@ -118,6 +127,7 @@ export function useSources({ onSourcesReloaded }: Options = {}): SourcesModel {
     reloadEnvironments,
     settingsSaved,
     toggleTreeDetails,
+    toggleSourceGroup,
     toggleMinimap,
     toggleTheme,
     settingsOpen,

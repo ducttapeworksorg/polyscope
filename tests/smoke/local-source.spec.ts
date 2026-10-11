@@ -90,6 +90,36 @@ test('show file sizes and modified times, and hide them for good from the sideba
   await expect(relaunched.getByRole('button', { name: 'Show sizes and modified times' })).toHaveAttribute('aria-pressed', 'false')
 })
 
+test('collapse a Source group, keeping its count and what was expanded in it, and find it collapsed after a relaunch', async () => {
+  const window = await app.firstWindow()
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await addSource(window, 'Other', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  const file = window.getByRole('treeitem', { name: /^app\.log/ })
+  await expect(file).toBeVisible()
+
+  const group = window.getByRole('button', { name: 'Local Filesystem, 2 Sources' })
+  await expect(group).toHaveAttribute('aria-expanded', 'true')
+  await group.click()
+  await expect(group).toHaveAttribute('aria-expanded', 'false')
+  await expect(group).toContainText('2')
+  await expect(window.getByRole('treeitem', { name: 'Fixture' })).toBeHidden()
+
+  await group.click()
+  await expect(file).toBeVisible()
+  await group.click()
+
+  await app.close()
+  app = await launch()
+  const relaunched = await app.firstWindow()
+  const collapsed = relaunched.getByRole('button', { name: 'Local Filesystem, 2 Sources' })
+  await expect(collapsed).toHaveAttribute('aria-expanded', 'false')
+  await expect(relaunched.getByRole('treeitem', { name: 'Fixture' })).toBeHidden()
+  await collapsed.click()
+  await expect(relaunched.getByRole('treeitem', { name: 'Fixture' })).toBeVisible()
+})
+
 test('preview and pinned tabs, reload, closing, and the status bar', async () => {
   const window = await app.firstWindow()
   const logs = join(dir, 'root', 'logs')

@@ -34,6 +34,14 @@
   --log-debug: #8391a8;
   --log-date: #7fb8a4;
   --search-match: rgb(232 193 112 / 0.3);
+  /*
+   * Source Types, as the sidebar's group headers tint them: muted, and only ever a thin edge, an icon and a wash,
+   * so they don't read as an Environment's solid pill.
+   */
+  --type-local: #7fb8a4;
+  --type-s3: #d4b483;
+  --type-kubernetes-files: #8ab4f8;
+  --type-kubernetes-logs: #b4a3e8;
 
   --font-ui: 'Atkinson Hyperlegible Next Variable', system-ui, sans-serif;
   --font-mono: 'Red Hat Mono Variable', ui-monospace, monospace;
@@ -80,6 +88,10 @@
   --log-debug: #6b7688;
   --log-date: #2f7d63;
   --search-match: rgb(232 170 40 / 0.35);
+  --type-local: #2f7d63;
+  --type-s3: #8a6a2e;
+  --type-kubernetes-files: #1a5fb4;
+  --type-kubernetes-logs: #6a52b8;
 
   color-scheme: light;
 }
@@ -930,28 +942,115 @@ body.is-resizing {
 
 /* ---------- Source groups ---------- */
 
-.source-group + .source-group {
-  margin-top: 10px;
+.source-group--local {
+  --group-hue: var(--type-local);
 }
 
+.source-group--s3 {
+  --group-hue: var(--type-s3);
+}
+
+.source-group--kubernetesFiles {
+  --group-hue: var(--type-kubernetes-files);
+}
+
+.source-group--kubernetesLogs {
+  --group-hue: var(--type-kubernetes-logs);
+}
+
+.source-group + .source-group {
+  margin-top: 6px;
+}
+
+/* A band across the sidebar, tinted by its Source Type, so each group plainly starts where its header is. */
 .source-group__header {
+  margin: 0;
+  border-block: 1px solid var(--slate-700);
+  background: color-mix(in srgb, var(--group-hue) 9%, var(--slate-800));
+  box-shadow: inset 2px 0 0 var(--group-hue);
+  cursor: grab;
+}
+
+.source-group__toggle {
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 24px;
-  margin: 0;
-  padding: 0 14px;
-  color: var(--text-faint);
+  width: 100%;
+  height: 26px;
+  padding: 0 10px 0 6px;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
   font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  cursor: grab;
+  text-align: left;
+  cursor: inherit;
 }
 
-.source-group__header svg {
+.source-group__toggle:hover {
+  color: var(--text);
+}
+
+.source-group__toggle:focus-visible {
+  outline: 1px solid var(--glint);
+  outline-offset: -1px;
+}
+
+.source-group__twisty {
+  display: inline-grid;
+  place-items: center;
+  width: var(--indent);
+  flex: none;
+}
+
+.source-group__twisty svg {
+  width: 12px;
+  height: 12px;
+  transition: transform 120ms ease-out;
+}
+
+.source-group__twisty.is-open svg {
+  transform: rotate(90deg);
+}
+
+.source-group__icon {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  color: var(--group-hue);
+}
+
+.source-group__icon svg {
   width: 13px;
   height: 13px;
+}
+
+.source-group__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Shown when collapsed too, so a collapsed group still tells how many Sources it holds. */
+.source-group__count {
+  flex: none;
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--group-hue) 16%, transparent);
+  color: var(--group-hue);
+  font-size: var(--text-xs);
+  line-height: 16px;
+  letter-spacing: 0;
+}
+
+/* A faint edge down the group's Sources, continuing the header's. */
+.source-group__body {
+  padding-block: 3px 2px;
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--group-hue) 35%, transparent);
 }
 
 /* Drop markers: a glint line on the edge where the dragged Source or group will land. */

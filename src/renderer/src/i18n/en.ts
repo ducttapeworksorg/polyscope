@@ -13,6 +13,8 @@ export const en = {
   'sidebar.settingsTooltip': 'Settings ({shortcut})',
   'sidebar.showDetails': 'Show sizes and modified times',
   'sidebar.resize': 'Resize Sources',
+  'sidebar.group.one': '{type}, 1 Source',
+  'sidebar.group.many': '{type}, {count} Sources',
 
   'sourceType.local': 'Local Filesystem',
   'sourceType.local.hint': 'A folder on this computer or UNC share (Windows only)',
@@ -222,6 +224,7 @@ export const en = {
   'settings.problem.notPositiveWholeNumber': 'Enter a whole number greater than zero.',
   'settings.problem.notATheme': 'Choose a theme.',
   'settings.problem.notTrueOrFalse': 'Turn this on or off.',
+  'settings.problem.notSourceTypes': 'Choose from the Source Types.',
   'settings.problem.belowLargeFileThreshold': 'Must be at least the Large File threshold.',
   'settings.problem.belowOpenAnywayLimit': 'Must be at least the “open anyway” limit.',
 
