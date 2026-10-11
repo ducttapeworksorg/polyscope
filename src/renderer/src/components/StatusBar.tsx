@@ -59,7 +59,7 @@ export function StatusBar({ activeTab, environment, onPickEncoding, onPickLangua
     )
   }
   const { source, file, openAs } = activeTab
-  const { Icon } = uiFor(source.type)
+  const { Icon, fullPath } = uiFor(source.type)
   const language = file.view === 'editor' ? (activeTab.language ?? file.language) : null
   const shownPicker = picker?.tabKey === activeTab.key ? picker : null
 
@@ -91,7 +91,8 @@ export function StatusBar({ activeTab, environment, onPickEncoding, onPickLangua
         <Icon />
         {source.name}
       </span>
-      <span className="statusbar__item statusbar__item--path">{file.path}</span>
+      {/* Where the file really is, like user@host:/var/log/app.log for an SSH Files Source. */}
+      <span className="statusbar__item statusbar__item--path">{fullPath(source, file.path)}</span>
       {isLog(file) ? (
         <>
           <span className="statusbar__item statusbar__item--end">{file.view === 'log' && (logLineCount === undefined ? lineCount(file.content) : lineCountLabel(logLineCount))}</span>

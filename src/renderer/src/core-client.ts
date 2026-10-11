@@ -1,10 +1,12 @@
-import type { CoreApi, CoreErrorCode, CoreEvents, CoreMethod } from '@shared/core-api'
+import type { CoreApi, CoreErrorCode, CoreEvents, CoreMethod, HostKey } from '@shared/core-api'
 import { t } from './i18n'
 
 export class CoreCallError extends Error {
   constructor(
     readonly code: CoreErrorCode,
-    message: string
+    message: string,
+    /** The host key a HOST_KEY_UNKNOWN failure offers to trust. */
+    readonly hostKey?: HostKey
   ) {
     super(message)
   }
@@ -13,7 +15,7 @@ export class CoreCallError extends Error {
 function call<M extends CoreMethod>(method: M) {
   return async (...args: Parameters<CoreApi[M]>): Promise<Awaited<ReturnType<CoreApi[M]>>> => {
     const result = await window.polyscope.invokeCore(method, args)
-    if (!result.ok) throw new CoreCallError(result.code, result.message)
+    if (!result.ok) throw new CoreCallError(result.code, result.message, result.hostKey)
     return result.value as Awaited<ReturnType<CoreApi[M]>>
   }
 }
@@ -35,6 +37,7 @@ export const core: CoreApi & CoreEvents = {
   connect: call('connect'),
   testConnection: call('testConnection'),
   disconnect: call('disconnect'),
+  trustHostKey: call('trustHostKey'),
   expand: call('expand'),
   openFile: call('openFile'),
   largeFileStatus: call('largeFileStatus'),

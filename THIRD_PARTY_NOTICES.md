@@ -6,6 +6,7 @@ Polyscope is licensed under Apache-2.0 (see `LICENSE`). It bundles the following
 | --- | --- | --- |
 | [Monaco Editor](https://github.com/microsoft/monaco-editor) | File viewer | MIT |
 | [AWS SDK for JavaScript v3](https://github.com/aws/aws-sdk-js-v3) | Talking to S3-compatible storage | Apache-2.0 |
+| [ssh2](https://github.com/mscdex/ssh2) (© Brian White), with [asn1](https://github.com/joyent/node-asn1), [bcrypt-pbkdf](https://github.com/joyent/node-bcrypt-pbkdf) and [TweetNaCl.js](https://github.com/dchest/tweetnacl-js) | Talking to servers over SSH and SFTP | MIT; asn1 MIT; bcrypt-pbkdf BSD-3-Clause; TweetNaCl.js Unlicense |
 | [Kubernetes JavaScript client](https://github.com/kubernetes-client/javascript) | Talking to Kubernetes clusters | Apache-2.0 |
 | [electron-updater](https://github.com/electron-userland/electron-builder) | Installing updates from GitHub Releases | MIT |
 | [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) (© Material Extensions) | File and folder icons in the tree | MIT |

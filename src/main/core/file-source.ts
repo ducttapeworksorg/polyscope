@@ -59,4 +59,9 @@ export interface FileSource {
    * pod): the folder then shows that child's children in its place. Left out by Source Types that fold nothing.
    */
   foldedChild?(path: SourcePath): Promise<FileEntry | undefined>
+  /**
+   * Lets go of what the File Source holds open (an SSH Files Source's connection) once it's no longer used. Left out
+   * by Source Types that hold nothing open.
+   */
+  close?(): void
 }

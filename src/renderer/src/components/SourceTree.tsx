@@ -16,6 +16,7 @@ import type {
   EntryNode,
   Environment,
   FoldedNode,
+  HostKey,
   LogNode,
   PodNode,
   PodStatus,
@@ -32,7 +33,7 @@ import { uiFor } from '../source-types'
 import { followsFiles } from '../workspace'
 import type { MenuItem } from './ContextMenu'
 import { EnvironmentBadge } from './EnvironmentBadge'
-import { ChevronIcon, ReloadIcon, WarningIcon } from './icons'
+import { ChevronIcon, KeyIcon, ReloadIcon, WarningIcon } from './icons'
 import { KubernetesIcon } from './KubernetesIcon'
 import { MaterialIcon } from './MaterialIcon'
 
@@ -43,6 +44,11 @@ interface Props {
   environment?: Environment
   /** Connects the Source, resolving to its root's children or null if it couldn't connect. */
   onConnect(): Promise<TreeNode[] | null>
+  /**
+   * Asks whether to trust an SSH server's host key, which connecting found unknown, and trusts it if so: resolves to
+   * whether it's trusted now. Without it, a Source in Error offers no trust step.
+   */
+  onTrustHostKey?(hostKey: HostKey): Promise<boolean>
   /** Buttons at the end of the Source's own row; the tree puts its own, like Refresh, ahead of them. */
   sourceActions: SourceAction[]
   onContextMenu(event: MouseEvent<HTMLElement>, label: string, items: MenuItem[]): void
@@ -162,7 +168,7 @@ function useNow(ticking: boolean) {
 
 export function SourceTree(props: Props) {
   const { source, connection, onConnect, sourceActions, onContextMenu, selectedKey, onSelect, onOpenFile, onOpenLog, onFollowFile } = props
-  const { sourceRowProps, treeProps, showDetails, theme, environment } = props
+  const { sourceRowProps, treeProps, showDetails, theme, environment, onTrustHostKey } = props
   const now = useNow(showDetails)
   const id = useId()
   const [expanded, setExpanded] = useState<ReadonlySet<SourcePath>>(new Set())
@@ -627,8 +633,15 @@ export function SourceTree(props: Props) {
     return note(`${path}#more`, depth, content, 'tree-note--error')
   }
 
+  // A server whose host key isn't known yet connects once it's trusted, as clicking the Source would.
+  const hostKey = connection.state === 'error' ? connection.hostKey : undefined
+  const trustHostKey = async (key: HostKey) => {
+    if (await onTrustHostKey?.(key)) await toggleSource()
+  }
+
   const actions: SourceAction[] = [
     ...(connected ? [{ label: t('sourceActions.refresh'), icon: <ReloadIcon />, onSelect: () => refreshNode('') }] : []),
+    ...(hostKey && onTrustHostKey ? [{ label: t('sourceActions.trustHostKey'), icon: <KeyIcon />, onSelect: () => void trustHostKey(hostKey) }] : []),
     ...sourceActions
   ]
   // The buttons are the row's own controls: using one neither toggles, selects nor drags the row.

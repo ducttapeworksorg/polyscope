@@ -9,10 +9,11 @@ import {
   type S3SourceInfo,
   type SourceInfo,
   type SourcePath,
-  type SourceTypeId
+  type SourceTypeId,
+  type SshFilesSourceInfo
 } from '@shared/core-api'
 import { ComboBox } from './components/ComboBox'
-import { BucketIcon, HardDriveIcon, KubernetesFilesIcon, KubernetesLogsIcon } from './components/icons'
+import { BucketIcon, HardDriveIcon, KubernetesFilesIcon, KubernetesLogsIcon, TerminalIcon } from './components/icons'
 import { core, describeError } from './core-client'
 import { t, type MessageKey } from './i18n'
 
@@ -92,6 +93,97 @@ function LocalFields({ value, onChange }: FieldsProps<Extract<NewSource, { type:
       </label>
     </>
   )
+}
+
+type SshSettings = Extract<NewSource, { type: 'sshFiles' }>
+
+/** The name an SSH Files Source is given from its host and path, like `web-1:/var/log`. */
+const sshName = ({ host, path }: Pick<SshSettings, 'host' | 'path'>) => [host.trim(), path.trim()].filter(Boolean).join(':')
+
+function SshFields({ value, onChange, editing }: FieldsProps<SshSettings>) {
+  // A new Source is named after its host and path.
+  const set = (changes: Partial<SshSettings>) => {
+    const next = { ...value, ...changes }
+    onChange({ ...next, name: nameFollowing(value.name, sshName(value), sshName(next)) })
+  }
+  const text = (key: 'host' | 'user' | 'path', label: MessageKey, hint?: MessageKey) => (
+    <label className="field">
+      <span className="field__label">{t(label)}</span>
+      <input className="field__input field__input--path" value={value[key]} onChange={(e) => set({ [key]: e.target.value })} spellCheck={false} />
+      {hint && <span className="field__hint">{t(hint)}</span>}
+    </label>
+  )
+  const stored = editing?.type === 'sshFiles' ? editing.passphraseSet : false
+  const [weakSecrets, setWeakSecrets] = useState(false)
+
+  useEffect(() => {
+    void window.polyscope.secretStorageIsWeak().then(setWeakSecrets)
+  }, [])
+
+  const browseKeyFile = async () => {
+    // Key files have no extension of their own to filter by.
+    const picked = await window.polyscope.pickFile([{ name: t('sshSource.keyFile.allFiles'), extensions: ['*'] }])
+    if (picked) onChange({ ...value, keyFile: picked })
+  }
+
+  return (
+    <>
+      <div className="field-pair">
+        {text('host', 'sshSource.host')}
+        <label className="field">
+          <span className="field__label">{t('sshSource.port')}</span>
+          {/* Blank is port 22; anything that isn't a port is the core's to refuse. */}
+          <input
+            className="field__input field__input--path"
+            inputMode="numeric"
+            placeholder="22"
+            value={value.port === undefined ? '' : String(value.port)}
+            onChange={(e) => onChange({ ...value, ...(e.target.value.trim() ? { port: Number(e.target.value) } : { port: undefined }) })}
+            spellCheck={false}
+          />
+        </label>
+      </div>
+      {text('user', 'sshSource.user')}
+      {text('path', 'sshSource.path', 'sshSource.path.hint')}
+      <div className="field">
+        <label className="field__label" htmlFor="ssh-key-file">
+          {t('sshSource.keyFile')}
+        </label>
+        <div className="field__row">
+          <input
+            id="ssh-key-file"
+            className="field__input field__input--path"
+            value={value.keyFile}
+            onChange={(e) => onChange({ ...value, keyFile: e.target.value })}
+            spellCheck={false}
+          />
+          <button type="button" className="button button--quiet" onClick={browseKeyFile}>
+            {t('sshSource.browse')}
+          </button>
+        </div>
+        <span className="field__hint">{t('sshSource.keyFile.hint')}</span>
+      </div>
+      <label className="field">
+        <span className="field__label">{t('sshSource.passphrase')}</span>
+        {/* Typed in, sent to the core once, and never shown again: the core only says whether one is stored. */}
+        <input
+          type="password"
+          className="field__input field__input--path"
+          value={value.passphrase ?? ''}
+          onChange={(e) => onChange({ ...value, passphrase: e.target.value })}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <span className="field__hint">{t(stored ? 'sshSource.passphrase.stored' : 'sshSource.passphrase.hint')}</span>
+        {weakSecrets && <span className="field__problem">{t('sshSource.passphrase.weak')}</span>}
+      </label>
+    </>
+  )
+}
+
+/** Where a Source path is on its server, as scp would put it: `user@host:/path`. */
+function remotePath({ user, host, path: folder }: SshFilesSourceInfo, path: SourcePath) {
+  return `${user}@${host}:${path ? `${folder === '/' ? '' : folder}/${path}` : folder}`
 }
 
 type S3Settings = Extract<NewSource, { type: 's3' }>
@@ -485,6 +577,25 @@ export const sourceTypeUi: SourceTypeUis = {
     fullPath: (source, path) => pathOnDisk(source.rootPath, path),
     Fields: LocalFields
   },
+  sshFiles: {
+    label: 'sourceType.sshFiles',
+    hint: 'sourceType.sshFiles.hint',
+    Icon: TerminalIcon,
+    blank: () => ({ type: 'sshFiles', name: '', host: '', user: '', path: '', keyFile: '', passphrase: '' }),
+    // Everything but the passphrase, which the renderer never has: left blank, the stored one stays.
+    settingsOf: ({ name, host, port, user, path, keyFile }) => ({
+      type: 'sshFiles',
+      name,
+      host,
+      ...(port !== 22 && { port }),
+      user,
+      path,
+      keyFile,
+      passphrase: ''
+    }),
+    fullPath: remotePath,
+    Fields: SshFields
+  },
   s3: {
     label: 'sourceType.s3',
     hint: 'sourceType.s3.hint',
@@ -544,7 +655,7 @@ export const sourceTypeUi: SourceTypeUis = {
  */
 export function targetOf(source: SourceInfo) {
   const { id: _, name: __, environmentId: ___, lastNLines: _____, ...settings } = source
-  const { secretKeySet: ____, ...target } = settings as typeof settings & { secretKeySet?: boolean }
+  const { secretKeySet: ____, passphraseSet: ______, ...target } = settings as typeof settings & { secretKeySet?: boolean; passphraseSet?: boolean }
   return JSON.stringify(Object.entries(target).sort())
 }
 

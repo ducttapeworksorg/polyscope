@@ -3,10 +3,10 @@
 
 import type { Settings } from './settings'
 
-export type SourceTypeId = 'local' | 's3' | 'kubernetesFiles' | 'kubernetesLogs'
+export type SourceTypeId = 'local' | 'sshFiles' | 's3' | 'kubernetesFiles' | 'kubernetesLogs'
 
 /** Every Source Type, in the default order of its sidebar group. */
-export const sourceTypeIds: readonly SourceTypeId[] = ['local', 's3', 'kubernetesFiles', 'kubernetesLogs']
+export const sourceTypeIds: readonly SourceTypeId[] = ['local', 'sshFiles', 's3', 'kubernetesFiles', 'kubernetesLogs']
 
 export interface NewLocalSource {
   type: 'local'
@@ -47,6 +47,28 @@ export interface NewS3Source {
   caBundlePath?: string
   /** A proxy for this Source alone, e.g. `http://proxy.corp:3128`; when blank or left out, HTTPS_PROXY / NO_PROXY decide. */
   proxyUrl?: string
+  /** The Environment the Source is labelled with; unlabelled when left out. */
+  environmentId?: string
+}
+
+export interface NewSshFilesSource {
+  type: 'sshFiles'
+  name: string
+  /** The server's host name or address. */
+  host: string
+  /** The user to sign in as. */
+  user: string
+  /** 22 when left out. */
+  port?: number
+  /** The absolute path of the folder browsed on the server, e.g. `/var/log/app`. */
+  path: string
+  /** The private key file that signs in, on this computer. */
+  keyFile: string
+  /**
+   * The key file's passphrase, if it's encrypted: goes into the OS keychain and never comes back out of the core.
+   * Blank or left out when editing keeps the stored one.
+   */
+  passphrase?: string
   /** The Environment the Source is labelled with; unlabelled when left out. */
   environmentId?: string
 }
@@ -94,7 +116,7 @@ export interface NewKubernetesFilesSource {
 export type S3Auth = 'keys' | 'profile'
 
 /** The user-editable settings of a Source; its Source Type decides which fields exist. */
-export type NewSource = NewLocalSource | NewS3Source | NewKubernetesFilesSource | NewKubernetesLogsSource
+export type NewSource = NewLocalSource | NewSshFilesSource | NewS3Source | NewKubernetesFilesSource | NewKubernetesLogsSource
 
 /** How many of a log's last lines a log view fetches and keeps: a number of lines, or all of them. */
 export type LastNLines = number | 'all'
@@ -140,6 +162,18 @@ export interface S3SourceInfo extends SourceIdentity {
   proxyUrl: string
 }
 
+export interface SshFilesSourceInfo extends SourceIdentity {
+  type: 'sshFiles'
+  host: string
+  user: string
+  port: number
+  /** Normalised: absolute, without a trailing '/' (but `/` itself for the root). */
+  path: string
+  keyFile: string
+  /** Whether a passphrase is stored for the key file; the passphrase itself never leaves the core. */
+  passphraseSet: boolean
+}
+
 export interface KubernetesLogsSourceInfo extends SourceIdentity {
   type: 'kubernetesLogs'
   context: string
@@ -156,7 +190,7 @@ export interface KubernetesFilesSourceInfo extends SourceIdentity {
   path: string
 }
 
-export type SourceInfo = LocalSourceInfo | S3SourceInfo | KubernetesFilesSourceInfo | KubernetesLogsSourceInfo
+export type SourceInfo = LocalSourceInfo | SshFilesSourceInfo | S3SourceInfo | KubernetesFilesSourceInfo | KubernetesLogsSourceInfo
 
 /** A context in the user's kubeconfig, as offered when adding a Kubernetes Source. */
 export interface KubeContext {
@@ -343,12 +377,23 @@ export interface ContainerNode {
 
 export type TreeNode = EntryNode | LogNode | ErrorNode | MoreNode | FoldedNode
 
+/** An SSH server's host key, as offered to the user to trust: never the key itself, which stays in the core. */
+export interface HostKey {
+  host: string
+  port: number
+  /** As OpenSSH names it, e.g. `ssh-ed25519`. */
+  keyType: string
+  /** As OpenSSH shows it: `SHA256:` and the key's SHA-256 hash in unpadded base64. */
+  fingerprint: string
+}
+
 /** Whether the app is talking to a Source right now. Never persisted: every launch starts Disconnected. */
 export type ConnectionState =
   | { state: 'disconnected' }
   | { state: 'connecting' }
   | { state: 'connected' }
-  | { state: 'error'; code: CoreErrorCode; message: string }
+  /** `hostKey` is set when the failure is HOST_KEY_UNKNOWN: the key the user may trust (see trustHostKey). */
+  | { state: 'error'; code: CoreErrorCode; message: string; hostKey?: HostKey }
 
 /** The text encodings a file can be decoded with, detected or asked for. */
 export type TextEncoding = 'utf-8' | 'utf-16le' | 'utf-16be' | 'latin1'
@@ -659,6 +704,27 @@ export type CoreErrorCode =
   | 'OVER_OPEN_ANYWAY_LIMIT'
   /** A search pattern that isn't a regular expression, or is empty. */
   | 'INVALID_PATTERN'
+  /** An SSH Files Source without a host. */
+  | 'HOST_REQUIRED'
+  | 'USER_REQUIRED'
+  /** A port that isn't a whole number from 1 to 65535. */
+  | 'INVALID_PORT'
+  /** A folder path that isn't absolute, or climbs with '..'. */
+  | 'INVALID_PATH'
+  | 'KEY_FILE_REQUIRED'
+  /** A key file that's missing, unreadable, or not a private key. */
+  | 'KEY_FILE_UNREADABLE'
+  /** An encrypted key file with no passphrase stored for it. */
+  | 'PASSPHRASE_REQUIRED'
+  | 'PASSPHRASE_WRONG'
+  /** An SSH server whose host key isn't known yet; the failure carries the key for the user to trust. */
+  | 'HOST_KEY_UNKNOWN'
+  /** An SSH server whose host key isn't the one known for it: maybe an impostor, so it's never connected to. */
+  | 'HOST_KEY_CHANGED'
+  /** An SSH server that refused to let the user sign in. */
+  | 'SIGN_IN_REFUSED'
+  /** An SSH server with its SFTP subsystem turned off. */
+  | 'SFTP_UNAVAILABLE'
   | 'UNKNOWN'
 
 export interface CoreApi {
@@ -691,6 +757,12 @@ export interface CoreApi {
   testConnection(input: NewSource, sourceId?: string): Promise<void>
   /** Drops the connection and stops all activity against the Source. */
   disconnect(sourceId: string): Promise<void>
+  /**
+   * Trusts an SSH server's host key, one a HOST_KEY_UNKNOWN failure just offered, keeping it in Polyscope's own
+   * trusted host keys (never the user's `~/.ssh/known_hosts`). A key not offered since the app started is
+   * HOST_KEY_UNKNOWN again: connecting once more offers it.
+   */
+  trustHostKey(hostKey: HostKey): Promise<void>
   /**
    * The children of a node in a Connected Source, a page at a time: a long listing ends in a more node,
    * whose `cursor` lists the next page. If they can't be listed, a single error node instead.
@@ -800,6 +872,7 @@ export const coreMethods: readonly CoreMethod[] = [
   'connect',
   'testConnection',
   'disconnect',
+  'trustHostKey',
   'expand',
   'openFile',
   'largeFileStatus',
@@ -824,4 +897,4 @@ export const coreMethods: readonly CoreMethod[] = [
 ]
 
 /** How a core call travels back over IPC: errors are values so their code survives. */
-export type CoreResult<T> = { ok: true; value: T } | { ok: false; code: CoreErrorCode; message: string }
+export type CoreResult<T> = { ok: true; value: T } | { ok: false; code: CoreErrorCode; message: string; hostKey?: HostKey }

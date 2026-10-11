@@ -1,5 +1,5 @@
 import { useState, type DragEvent, type HTMLAttributes, type KeyboardEvent, type MouseEvent, type Ref } from 'react'
-import type { ConnectionState, ContainerNode, EntryNode, Environment, SourceInfo, SourceTypeId, TreeNode } from '@shared/core-api'
+import type { ConnectionState, ContainerNode, EntryNode, Environment, HostKey, SourceInfo, SourceTypeId, TreeNode } from '@shared/core-api'
 import type { Theme } from '@shared/settings'
 import { core, describeError } from '../core-client'
 import { environmentOf } from '../environments'
@@ -49,7 +49,12 @@ interface Group {
   sources: SourceInfo[]
 }
 
-type Dialog = { kind: 'add' } | { kind: 'edit'; source: SourceInfo } | { kind: 'delete'; source: SourceInfo }
+type Dialog =
+  | { kind: 'add' }
+  | { kind: 'edit'; source: SourceInfo }
+  | { kind: 'delete'; source: SourceInfo }
+  /** Asking whether to trust a host key; `answer` says whether it's trusted now. */
+  | { kind: 'trust'; hostKey: HostKey; answer(trusted: boolean): void }
 type Dragging = { kind: 'source'; id: string; type: SourceTypeId } | { kind: 'group'; type: SourceTypeId }
 /** Where a drop would land: before or after the Source (by id) or group (by type) under the pointer. */
 type DropAt = { key: string; after: boolean }
@@ -145,6 +150,8 @@ export function Sidebar(props: Props) {
     { label: t('sourceActions.duplicate'), icon: <DuplicateIcon />, onSelect: () => void run(() => core.duplicateSource(source.id)) },
     { label: t('sourceActions.delete'), icon: <TrashIcon />, onSelect: () => setDialog({ kind: 'delete', source }), danger: true }
   ]
+
+  const askToTrust = (hostKey: HostKey) => new Promise<boolean>((answer) => setDialog({ kind: 'trust', hostKey, answer }))
 
   const sourceRowProps = (source: SourceInfo): HTMLAttributes<HTMLDivElement> => ({
     draggable: true,
@@ -309,6 +316,7 @@ export function Sidebar(props: Props) {
                     connection={connections.get(source.id) ?? disconnected}
                     environment={environmentOf(environments, source)}
                     onConnect={() => onConnect(source)}
+                    onTrustHostKey={askToTrust}
                     sourceActions={sourceActions(source)}
                     onContextMenu={openMenu}
                     selectedKey={selectedKey}
@@ -341,6 +349,29 @@ export function Sidebar(props: Props) {
           onSaved={() => {
             setDialog(null)
             onSourcesChanged()
+          }}
+        />
+      )}
+
+      {dialog?.kind === 'trust' && (
+        <ConfirmDialog
+          title={t('trustHostKey.title', { host: dialog.hostKey.host })}
+          body={t('trustHostKey.body', { keyType: dialog.hostKey.keyType, fingerprint: dialog.hostKey.fingerprint })}
+          confirmLabel={t('trustHostKey.confirm')}
+          onClose={() => {
+            setDialog(null)
+            dialog.answer(false)
+          }}
+          onConfirm={() => {
+            setDialog(null)
+            setError(null)
+            core.trustHostKey(dialog.hostKey).then(
+              () => dialog.answer(true),
+              (e: unknown) => {
+                setError(describeError(e))
+                dialog.answer(false)
+              }
+            )
           }}
         />
       )}

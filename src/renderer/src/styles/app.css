@@ -39,6 +39,7 @@
    * so they don't read as an Environment's solid pill.
    */
   --type-local: #7fb8a4;
+  --type-ssh-files: #e39ac0;
   --type-s3: #d4b483;
   --type-kubernetes-files: #8ab4f8;
   --type-kubernetes-logs: #b4a3e8;
@@ -89,6 +90,7 @@
   --log-date: #2f7d63;
   --search-match: rgb(232 170 40 / 0.35);
   --type-local: #2f7d63;
+  --type-ssh-files: #a8457a;
   --type-s3: #8a6a2e;
   --type-kubernetes-files: #1a5fb4;
   --type-kubernetes-logs: #6a52b8;
@@ -435,6 +437,30 @@ body.is-resizing {
 
 .dialog__test-result.is-failed {
   color: var(--danger);
+}
+
+/* A host key offered to trust: its type and fingerprint, to check with the server's administrator. */
+.dialog__host-key {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--slate-700);
+  border-radius: 4px;
+}
+
+.dialog__host-key-facts {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.dialog__host-key-fingerprint {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
 }
 
 .dialog__actions {
@@ -944,6 +970,10 @@ body.is-resizing {
 
 .source-group--local {
   --group-hue: var(--type-local);
+}
+
+.source-group--sshFiles {
+  --group-hue: var(--type-ssh-files);
 }
 
 .source-group--s3 {

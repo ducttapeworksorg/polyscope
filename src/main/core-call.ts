@@ -18,7 +18,7 @@ export async function callCore(core: CoreApi, log: Pick<AppLog, 'warn' | 'error'
   } catch (error) {
     if (error instanceof CoreError) {
       log.warn(`${method} failed (${error.code})`, error.message)
-      return { ok: false, code: error.code, message: error.message }
+      return { ok: false, code: error.code, message: error.message, ...(error.hostKey && { hostKey: error.hostKey }) }
     }
     log.error(`${method} failed`, error)
     return { ok: false, code: 'UNKNOWN', message: error instanceof Error ? error.message : String(error) }
