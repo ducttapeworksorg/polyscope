@@ -39,6 +39,10 @@ export interface TestSshServer {
   seed(tree: SeedTree, folder?: string): Promise<string>
   /** How many clients are connected to it now. */
   connectionCount(): number
+  /** Makes an SFTP path, e.g. `/seed-0/syslog`, unreadable, as one the user signing in has no permission to read. */
+  deny(path: string): void
+  /** Ends every client's connection, as a server restarting or a network dropping would; resolves once they're gone. */
+  dropConnections(): Promise<void>
   /** Where clients have had it forward channels to, as ProxyJump has a bastion do: `host:port`, in order. */
   forwarded(): string[]
   close(): Promise<void>
@@ -73,8 +77,11 @@ const attrsOf = (s: Stats) => ({
   mtime: Math.floor(s.mtimeMs / 1000)
 })
 
-/** Serves SFTP requests the way OpenSSH's sftp-server does, as far as SSH Files uses them, over `root`. */
-function serveSftp(sftp: SFTPWrapper, root: string) {
+/**
+ * Serves SFTP requests the way OpenSSH's sftp-server does, as far as SSH Files uses them, over `root`. The SFTP paths
+ * `denied` holds can't be opened, as files the user signed in has no permission to read.
+ */
+function serveSftp(sftp: SFTPWrapper, root: string, denied: ReadonlySet<string>) {
   const handles = new Map<number, { file: FileHandle } | { folder: string; entries?: Dirent[] }>()
   let nextHandle = 0
   const handleOf = (buffer: Buffer) => handles.get(buffer.readUInt32BE(0))
@@ -99,9 +106,18 @@ function serveSftp(sftp: SFTPWrapper, root: string) {
   )
   sftp.on('STAT', (reqid, path) => answer(reqid, async () => void sftp.attrs(reqid, attrsOf(await stat(local(path))))))
   sftp.on('LSTAT', (reqid, path) => answer(reqid, async () => void sftp.attrs(reqid, attrsOf(await lstat(local(path))))))
-  sftp.on('OPEN', (reqid, path) => answer(reqid, async () => void sftp.handle(reqid, newHandle({ file: await open(local(path), 'r') }))))
+  const checkAllowed = (path: string) => {
+    if (denied.has(path)) throw Object.assign(new Error('Permission denied'), { code: 'EACCES' })
+  }
+  sftp.on('OPEN', (reqid, path) =>
+    answer(reqid, async () => {
+      checkAllowed(path)
+      sftp.handle(reqid, newHandle({ file: await open(local(path), 'r') }))
+    })
+  )
   sftp.on('OPENDIR', (reqid, path) =>
     answer(reqid, async () => {
+      checkAllowed(path)
       // As sftp-server, a file can't be opened as a folder.
       if (!(await stat(local(path))).isDirectory()) throw Object.assign(new Error('Not a directory'), { code: 'ENOTDIR' })
       sftp.handle(reqid, newHandle({ folder: local(path) }))
@@ -172,6 +188,7 @@ export async function startTestSshServer({
   const allowed = utils.parseKey(clientKeys.public) as ParsedKey
   const connections = new Set<Connection>()
   const forwarded: string[] = []
+  const denied = new Set<string>()
 
   const server = new Server({ hostKeys: [hostKeys.private] }, (client) => {
     connections.add(client)
@@ -199,7 +216,7 @@ export async function startTestSshServer({
       const session = accept()
       session.on('sftp', (acceptSftp, reject) => {
         if (!offersSftp) return reject()
-        serveSftp(acceptSftp(), root)
+        serveSftp(acceptSftp(), root, denied)
       })
     })
   })
@@ -219,6 +236,12 @@ export async function startTestSshServer({
       return `/${folder}`
     },
     connectionCount: () => connections.size,
+    deny: (path) => void denied.add(path),
+    async dropConnections() {
+      const closed = [...connections].map((connection) => new Promise<void>((resolve) => connection.on('close', () => resolve())))
+      for (const connection of connections) connection.end()
+      await Promise.all(closed)
+    },
     forwarded: () => [...forwarded],
     async close() {
       for (const connection of connections) connection.end()

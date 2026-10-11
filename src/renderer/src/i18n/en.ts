@@ -339,6 +339,7 @@ export const en = {
   'logView.mark.ended.exited': 'container finished, Follow stopped',
   'logView.mark.ended.gone': 'container is gone, Follow stopped',
   'logView.mark.ended.disconnected': 'Source disconnected, Follow stopped',
+  'logView.mark.ended.connectionLost': 'connection to the server dropped, Follow stopped',
   'logView.mark.ended.podGone': 'pod is gone, Follow stopped',
   'logView.mark.truncated': 'file truncated, following it from its start',
   'logView.mark.rotated': 'file rotated, following the new one from its start',
@@ -388,7 +389,7 @@ export const en = {
   'error.NOT_FOUND': 'This item no longer exists.',
   'error.NOT_A_FOLDER': 'This is a file, not a folder.',
   'error.NOT_A_FILE': 'This is a folder, not a file.',
-  'error.PERMISSION_DENIED': 'You don’t have permission to read this.',
+  'error.PERMISSION_DENIED': 'You don’t have permission to read this. ({message})',
   'error.UNC_HOST_NOT_ALLOWED':
     'VS Code blocks this share’s server. Add the server to the security.allowedUNCHosts setting, then restart VS Code. ({message})',
   'error.MISSING_PERMISSION': 'Missing permission: {message}',

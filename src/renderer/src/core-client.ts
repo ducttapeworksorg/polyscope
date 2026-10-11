@@ -61,6 +61,7 @@ export const core: CoreApi & CoreEvents = {
   getSettings: call('getSettings'),
   updateSettings: call('updateSettings'),
   onSettingsChanged: (listener) => window.polyscope.onSettingsChanged(listener),
+  onConnectionEvent: (listener) => window.polyscope.onConnectionEvent(listener),
   onFollowEvent: (listener) => window.polyscope.onFollowEvent(listener),
   onLargeFileEvent: (listener) => window.polyscope.onLargeFileEvent(listener),
   onLargeFileSearchEvent: (listener) => window.polyscope.onLargeFileSearchEvent(listener)

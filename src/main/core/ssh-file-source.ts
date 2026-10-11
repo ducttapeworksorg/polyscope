@@ -30,7 +30,11 @@ function toCoreError(error: unknown, path: SourcePath, connection: SshConnection
   const where = `/${path}`
   if (code === STATUS_CODE.NO_SUCH_FILE) return new CoreError('NOT_FOUND', `${where}: ${message}`)
   if (code === STATUS_CODE.PERMISSION_DENIED) {
-    return new CoreError('PERMISSION_DENIED', `${where} isn't readable by the SSH user. Logs under /var/log usually need the user in the adm group.`)
+    // SFTP can't read as anyone else, so it's the user's own permissions that need to change.
+    return new CoreError(
+      'PERMISSION_DENIED',
+      `${where} isn't readable by ${connection.user}, the SSH user, and Polyscope reads files as that user, without sudo. Adding ${connection.user} to the adm group lets it read most logs under /var/log.`
+    )
   }
   // No answer, as the connection dropped while the request was under way.
   if (connection.closed) return new CoreError('UNREACHABLE', `${where}: the connection closed: ${message}`)
@@ -45,7 +49,7 @@ const call = <T>(run: (callback: (error: SftpError | undefined | null, value: T)
  * A File Source over SFTP, rooted at `rootPath` (absolute) on the server; one per connection, which closing it
  * closes. Listings follow symlinks as a Local Filesystem Source's do.
  */
-export function createSshFileSource(connection: SshConnection, rootPath: string): FileSource & { close(): void } {
+export function createSshFileSource(connection: SshConnection, rootPath: string): FileSource & Required<Pick<FileSource, 'close' | 'onDropped'>> {
   const root = posix.normalize(rootPath)
 
   const absolute = (path: SourcePath) => {
@@ -189,6 +193,8 @@ export function createSshFileSource(connection: SshConnection, rootPath: string)
         }
       }),
 
-    close: () => connection.close()
+    close: () => connection.close(),
+
+    onDropped: (listener) => connection.onDrop(listener)
   }
 }

@@ -59,7 +59,7 @@ interface Props {
   onOpenFile(source: SourceInfo, node: EntryNode, options?: { pinned: boolean }): void
   /** Opens a container's Log Stream in the preview tab, or in a tab of its own when pinned. */
   onOpenLog(source: SourceInfo, node: ContainerNode, options?: { pinned: boolean }): void
-  /** Follows a file of a Local or Kubernetes Files Source in a log view; without it, files offer no Follow. */
+  /** Follows a file of a Local, Kubernetes Files or SSH Files Source in a log view; without it, files offer no Follow. */
   onFollowFile?(source: SourceInfo, node: EntryNode): void
   /** Extra attributes for the Source's own row, e.g. for dragging it. */
   sourceRowProps?: HTMLAttributes<HTMLDivElement>

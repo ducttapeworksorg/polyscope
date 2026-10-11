@@ -64,4 +64,9 @@ export interface FileSource {
    * by Source Types that hold nothing open.
    */
   close?(): void
+  /**
+   * Calls `listener` once what the File Source holds open drops by itself (an SSH Files Source's connection), after
+   * which the File Source can't be used: straight away if it already has. Left out by Source Types that hold nothing open.
+   */
+  onDropped?(listener: () => void): void
 }

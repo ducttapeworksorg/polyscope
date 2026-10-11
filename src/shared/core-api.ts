@@ -610,8 +610,8 @@ export interface FollowedLog extends LogSnapshot {
   followId: string
 }
 
-/** Why a Follow ended by itself: its container finished for good, its pod or container went away, or its Source was disconnected. */
-export type FollowEndReason = 'exited' | 'gone' | 'disconnected'
+/** Why a Follow ended by itself: its container finished for good, its pod or container went away, its Source was disconnected, or the connection it went over dropped. */
+export type FollowEndReason = 'exited' | 'gone' | 'disconnected' | 'connectionLost'
 
 /** What a Follow reports as its Log Stream goes on, in order. */
 export type FollowUpdate =
@@ -631,6 +631,9 @@ export type FollowUpdate =
   | { kind: 'ended'; reason: FollowEndReason }
 
 export type FollowEvent = FollowUpdate & { followId: string }
+
+/** A Source's connection state, changed by itself; see onConnectionEvent. */
+export type ConnectionEvent = ConnectionState & { sourceId: string }
 
 /** The last lines of a file, shown in a log view. */
 export interface FileLog {
@@ -654,7 +657,7 @@ export interface FileLog {
 export type LogOf = LogSnapshot['of'] | FileLog['of']
 
 /** The Source Types whose files grow, so can be Followed: S3 objects don't. */
-export const followableSourceTypes: readonly SourceTypeId[] = ['local', 'kubernetesFiles']
+export const followableSourceTypes: readonly SourceTypeId[] = ['local', 'kubernetesFiles', 'sshFiles']
 
 /** How many of a file's last lines to show; see OpenLogOptions. */
 export type FileLogOptions = Pick<OpenLogOptions, 'lastNLines' | 'allowLarge'>
@@ -852,8 +855,9 @@ export interface CoreApi {
    * Opens a file's last lines like openFileLog, holding back a last line not yet ended, and Follows the file
    * from there: its new lines arrive as FollowEvents with the returned `followId`, with a mark when the
    * file is cut short (`truncated`) or replaced by another (`rotated`), each then followed from its start.
-   * The Follow ends when the file's pod is gone, or its Source is disconnected. Only Local and Kubernetes
-   * Files Sources' files grow: an S3 object can't be followed, NOT_FOLLOWABLE.
+   * The Follow ends when the file's pod is gone, its Source is disconnected, or the connection it goes over
+   * drops (`connectionLost`). Only Local, Kubernetes Files and SSH Files Sources' files grow: an S3 object
+   * can't be followed, NOT_FOLLOWABLE.
    */
   followFile(sourceId: string, path: SourcePath, options?: FileLogOptions): Promise<FollowedFile>
   /** Holds a Follow's updates back until it's resumed, keeping at most its "Last N lines" of them. Does nothing to a Follow that has ended. */
@@ -886,6 +890,11 @@ export interface CoreApi {
 export interface CoreEvents {
   /** Calls `listener` with the new settings after each change is saved; returns a function that unsubscribes. */
   onSettingsChanged(listener: (settings: Settings) => void): () => void
+  /**
+   * Calls `listener` when a Source's connection changes with nothing having asked it to, as connect and disconnect do: a
+   * Source whose connection dropped going to Error, when connecting it again fails. Returns a function that unsubscribes.
+   */
+  onConnectionEvent(listener: (event: ConnectionEvent) => void): () => void
   /** Calls `listener` with every Follow's updates; returns a function that unsubscribes. */
   onFollowEvent(listener: (event: FollowEvent) => void): () => void
   /** Calls `listener` whenever a Large File's status changes; returns a function that unsubscribes. */

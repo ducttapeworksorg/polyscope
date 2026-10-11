@@ -55,8 +55,15 @@ describe('reading a file’s last lines', () => {
     readLastLines(fakeFileSource(text).fileSource, path, { size: Buffer.byteLength(text), lastNLines, maxBytes })
 
   it('gives the last N whole lines, and where the unfinished last one starts', async () => {
-    await expect(read('one\ntwo\nthree\nfour\n', 2)).resolves.toEqual({ lines: ['three', 'four'], partial: '', end: 19 })
-    await expect(read('one\ntwo\nthree\nhalf a li', 2)).resolves.toEqual({ lines: ['two', 'three'], partial: 'half a li', end: 14 })
+    await expect(read('one\ntwo\nthree\nfour\n', 2)).resolves.toMatchObject({ lines: ['three', 'four'], partial: '', end: 19 })
+    await expect(read('one\ntwo\nthree\nhalf a li', 2)).resolves.toMatchObject({ lines: ['two', 'three'], partial: 'half a li', end: 14 })
+  })
+
+  it('gives the bytes just before where following goes on from, up to 64 of them', async () => {
+    const before = async (...args: Parameters<typeof read>) => Buffer.from((await read(...args)).before).toString()
+
+    expect(await before('one\ntwo\nhalf a li', 1)).toBe('one\ntwo\n')
+    expect(await before(`${'x'.repeat(100)}\nlast\n`, 1)).toBe(`${'x'.repeat(58)}\nlast\n`)
   })
 
   it('gives every line when asked for all, or for more than there are', async () => {
@@ -65,7 +72,7 @@ describe('reading a file’s last lines', () => {
   })
 
   it('gives nothing for an empty file', async () => {
-    await expect(read('', 10)).resolves.toEqual({ lines: [], partial: '', end: 0 })
+    await expect(read('', 10)).resolves.toMatchObject({ lines: [], partial: '', end: 0 })
   })
 
   it('drops the carriage return of Windows line ends', async () => {

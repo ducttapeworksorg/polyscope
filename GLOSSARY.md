@@ -15,7 +15,7 @@ One configured, user-named instance of a **Source Type**, holding its settings (
 _Avoid_: connection, mount, profile
 
 **Disconnected / Connected / Error**:
-The state of a **Source**. Every **Source** starts **Disconnected** when the app launches; no tabs or views are restored from a previous session, except the editor tabs an **Extension Copy**'s editor restores, which connect their **Source**. Expanding a **Disconnected** **Source** connects it; failing to connect puts it in **Error**. Disconnecting stops all **Follows** but leaves its tabs open.
+The state of a **Source**. Every **Source** starts **Disconnected** when the app launches; no tabs or views are restored from a previous session, except the editor tabs an **Extension Copy**'s editor restores, which connect their **Source**. Expanding a **Disconnected** **Source** connects it; failing to connect puts it in **Error**. Disconnecting stops all **Follows** but leaves its tabs open. A **Connected** **Source** whose connection drops by itself (an SSH Files **Source**'s) stays **Connected**: its **Follows** end saying so, and the next browse or read connects it again, putting it in **Error** if that fails.
 
 **Environment**:
 An optional, user-defined label (name + colour) attached to a **Source** to show what kind of system it points at (defaults: prod, staging, qa, dev). Shown on the **Source**, its tabs, and the status bar.
