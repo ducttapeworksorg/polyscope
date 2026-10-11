@@ -2,22 +2,25 @@
 // reach a host over SSH can share it. It checks the server's host key before signing in, and reports failures as CoreErrors.
 
 import { createHash } from 'node:crypto'
-import ssh2, { type ParsedKey, type SFTPWrapper } from 'ssh2'
+import ssh2, { type AnyAuthMethod, type BaseAgent, type ParsedKey, type SFTPWrapper } from 'ssh2'
 import type { HostKey } from '@shared/core-api'
 import { CoreError } from './core-error'
 import { networkCodes } from './network-errors'
 
 const { Client, utils } = ssh2
 
-export interface SshTarget {
-  host: string
-  port: number
-  user: string
-  /** The private key that signs in, as read from its file. */
-  privateKey: string | Buffer
-  /** The key's passphrase, if it's encrypted; ignored if it isn't. */
-  passphrase?: string
-}
+/** How a connection signs in: with a private key, a key in an SSH agent (see ssh-agent.ts), or a password. */
+export type SshSignIn =
+  | {
+      /** The private key that signs in, as read from its file. */
+      privateKey: string | Buffer
+      /** The key's passphrase, if it's encrypted; ignored if it isn't. */
+      passphrase?: string
+    }
+  | { agent: BaseAgent }
+  | { password: string }
+
+export type SshTarget = { host: string; port: number; user: string } & SshSignIn
 
 /** A host key as the server presented it: its type and fingerprint, and the key itself in SSH's wire format. */
 export interface PresentedHostKey {
@@ -62,7 +65,7 @@ const algorithmsFor: Record<string, string[]> = {
  * The private key, decrypted with its passphrase if it's encrypted, failing with what's wrong with it. Decrypting is
  * slow (bcrypt, deliberately), so it's done once, here, and ssh2 is handed the key ready to use.
  */
-function privateKeyOf({ privateKey, passphrase }: SshTarget): ParsedKey {
+function privateKeyOf({ privateKey, passphrase }: { privateKey: string | Buffer; passphrase?: string }): ParsedKey {
   let parsed = utils.parseKey(privateKey)
   if (parsed instanceof Error) {
     if (!/passphrase/i.test(parsed.message)) throw new CoreError('KEY_FILE_UNREADABLE', `Not a private key Polyscope can read: ${parsed.message}`)
@@ -78,7 +81,15 @@ function privateKeyOf({ privateKey, passphrase }: SshTarget): ParsedKey {
 
 /** Connects to an SSH server, checks its host key and signs in. */
 export async function connectSsh(target: SshTarget, options: SshConnectOptions): Promise<SshConnection> {
-  const key = privateKeyOf(target)
+  const username = target.user
+  // Only the one way of signing in is tried: the user picked it.
+  const signIn: AnyAuthMethod =
+    'agent' in target
+      ? { type: 'agent', username, agent: target.agent }
+      : 'password' in target
+        ? { type: 'password', username, password: target.password }
+        : { type: 'publickey', username, key: privateKeyOf(target) }
+  const refused = { agent: 'refused every key in the SSH agent', password: 'refused the password', publickey: 'refused the key' }[signIn.type]
   const address = `${target.user}@${target.host}:${target.port}`
   const client = new Client()
   let closed = false
@@ -120,7 +131,7 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions):
       settled = true
       if (refusal) return reject(refusal)
       if (error.level === 'client-authentication') {
-        return reject(new CoreError('SIGN_IN_REFUSED', `${address} refused the key: ${error.message}`))
+        return reject(new CoreError('SIGN_IN_REFUSED', `${address} ${refused}: ${error.message}`))
       }
       if (error.level === 'client-timeout') return reject(new CoreError('UNREACHABLE', `${address}: timed out connecting`))
       if (networkCodes.has(error.code ?? '') || error.level === 'client-socket' || error.level === 'client-dns') {
@@ -160,7 +171,7 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions):
         host: target.host,
         port: target.port,
         username: target.user,
-        authHandler: [{ type: 'publickey', username: target.user, key }],
+        authHandler: [signIn],
         readyTimeout: options.timeout ?? 20_000,
         keepaliveInterval: 15_000,
         hostVerifier,

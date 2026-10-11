@@ -13,7 +13,7 @@ import { jsonFileWriter, readJsonFile } from './json-file'
 /** A Source as saved: what the core API hands out, less what it works out on the way (like whether a secret is set). */
 export type SavedSource =
   | LocalSourceInfo
-  | Omit<SshFilesSourceInfo, 'passphraseSet'>
+  | Omit<SshFilesSourceInfo, 'passphraseSet' | 'passwordSet'>
   | Omit<S3SourceInfo, 'secretKeySet'>
   | KubernetesFilesSourceInfo
   | KubernetesLogsSourceInfo

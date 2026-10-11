@@ -62,13 +62,17 @@ export interface NewSshFilesSource {
   port?: number
   /** The absolute path of the folder browsed on the server, e.g. `/var/log/app`. */
   path: string
-  /** The private key file that signs in, on this computer. */
-  keyFile: string
+  /** How to sign in: `keyFile` when left out. */
+  auth?: SshAuth
+  /** The private key file that signs in with `keyFile`, on this computer; ignored otherwise. */
+  keyFile?: string
   /**
    * The key file's passphrase, if it's encrypted: goes into the OS keychain and never comes back out of the core.
    * Blank or left out when editing keeps the stored one.
    */
   passphrase?: string
+  /** The password that signs in with `password`, kept like a passphrase; blank or left out when editing keeps it. */
+  password?: string
   /** The Environment the Source is labelled with; unlabelled when left out. */
   environmentId?: string
 }
@@ -114,6 +118,12 @@ export interface NewKubernetesFilesSource {
 
 /** How an S3 Source signs in: typed access and secret keys, or an AWS profile (or the default credential chain). */
 export type S3Auth = 'keys' | 'profile'
+
+/**
+ * How an SSH Files Source signs in: with a key in the user's SSH agent (Pageant or OpenSSH's on Windows,
+ * SSH_AUTH_SOCK's elsewhere), a private key file, or a password.
+ */
+export type SshAuth = 'agent' | 'keyFile' | 'password'
 
 /** The user-editable settings of a Source; its Source Type decides which fields exist. */
 export type NewSource = NewLocalSource | NewSshFilesSource | NewS3Source | NewKubernetesFilesSource | NewKubernetesLogsSource
@@ -169,9 +179,13 @@ export interface SshFilesSourceInfo extends SourceIdentity {
   port: number
   /** Normalised: absolute, without a trailing '/' (but `/` itself for the root). */
   path: string
+  auth: SshAuth
+  /** Blank unless it signs in with a key file. */
   keyFile: string
   /** Whether a passphrase is stored for the key file; the passphrase itself never leaves the core. */
   passphraseSet: boolean
+  /** Whether a password is stored, signing in with one; the password itself never leaves the core. */
+  passwordSet: boolean
 }
 
 export interface KubernetesLogsSourceInfo extends SourceIdentity {
@@ -712,6 +726,10 @@ export type CoreErrorCode =
   /** A folder path that isn't absolute, or climbs with '..'. */
   | 'INVALID_PATH'
   | 'KEY_FILE_REQUIRED'
+  /** An SSH Files Source signing in with a password, with none given or stored. */
+  | 'PASSWORD_REQUIRED'
+  /** Signing in through the SSH agent with no agent running, or none at SSH_AUTH_SOCK. */
+  | 'AGENT_NOT_FOUND'
   /** A key file that's missing, unreadable, or not a private key. */
   | 'KEY_FILE_UNREADABLE'
   /** An encrypted key file with no passphrase stored for it. */

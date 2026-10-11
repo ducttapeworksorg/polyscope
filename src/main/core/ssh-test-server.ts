@@ -2,16 +2,16 @@
 // no setup. Its host key is generated when it starts, so none is ever committed. CI also runs the tests against a
 // real OpenSSH sshd (see sshdTarget).
 
-import { timingSafeEqual } from 'node:crypto'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { type Dirent, type Stats } from 'node:fs'
 import { lstat, mkdir, mkdtemp, open, readdir, realpath, rm, stat, writeFile, type FileHandle } from 'node:fs/promises'
-import type { AddressInfo } from 'node:net'
+import { createServer, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
-import ssh2, { type Connection, type ParsedKey, type SFTPWrapper } from 'ssh2'
+import ssh2, { type AuthenticationType, type Connection, type ParsedKey, type SFTPWrapper } from 'ssh2'
 import type { SeedTree } from './file-source-contract'
 
-const { Server, utils } = ssh2
+const { AgentProtocol, Server, utils } = ssh2
 const { STATUS_CODE } = utils.sftp
 
 export interface TestServerOptions {
@@ -21,6 +21,8 @@ export interface TestServerOptions {
   port?: number
   /** The key pair that signs in, from generateKey; a new unencrypted one unless given. */
   clientKey?: { private: string; public: string }
+  /** A password that signs in too; none unless given. */
+  password?: string
 }
 
 export interface TestSshServer {
@@ -158,7 +160,8 @@ function acceptsKey(allowed: ParsedKey, offered: { algo: string; data: Buffer },
 export async function startTestSshServer({
   sftp: offersSftp = true,
   port: listenOn = 0,
-  clientKey: clientKeys = generateKey()
+  clientKey: clientKeys = generateKey(),
+  password
 }: TestServerOptions = {}): Promise<TestSshServer> {
   const root = await mkdtemp(join(tmpdir(), 'polyscope-ssh-'))
   // The one user who may sign in.
@@ -172,9 +175,12 @@ export async function startTestSshServer({
     client.on('close', () => connections.delete(client))
     client.on('error', () => undefined)
     client.on('authentication', (ctx) => {
-      if (ctx.method !== 'publickey' || ctx.username !== user) return ctx.reject(['publickey'])
+      const methods: AuthenticationType[] = password === undefined ? ['publickey'] : ['publickey', 'password']
+      if (ctx.username !== user) return ctx.reject(methods)
+      if (ctx.method === 'password' && password !== undefined) return ctx.password === password ? ctx.accept() : ctx.reject(methods)
+      if (ctx.method !== 'publickey') return ctx.reject(methods)
       const signed = ctx.signature ? { blob: ctx.blob!, signature: ctx.signature, ...(ctx.hashAlgo && { hashAlgo: ctx.hashAlgo }) } : undefined
-      if (!acceptsKey(allowed, ctx.key, signed)) return ctx.reject(['publickey'])
+      if (!acceptsKey(allowed, ctx.key, signed)) return ctx.reject(methods)
       ctx.accept()
     })
     client.on('session', (accept) => {
@@ -205,6 +211,42 @@ export async function startTestSshServer({
       for (const connection of connections) connection.end()
       await new Promise<void>((resolve) => server.close(() => resolve()))
       await rm(root, { recursive: true, force: true })
+    }
+  }
+}
+
+export interface TestSshAgent {
+  /** Where it listens, as SSH_AUTH_SOCK names it: a named pipe on Windows, a socket in a temp folder elsewhere. */
+  path: string
+  close(): Promise<void>
+}
+
+/** Starts an SSH agent in the test process, holding the private keys given, as ssh-agent or Pageant would. */
+export async function startTestSshAgent(...privateKeys: string[]): Promise<TestSshAgent> {
+  const keys = privateKeys.map((key) => utils.parseKey(key) as ParsedKey)
+  const name = `polyscope-agent-${randomBytes(6).toString('hex')}`
+  const folder = process.platform === 'win32' ? null : await mkdtemp(join(tmpdir(), 'polyscope-agent-'))
+  const path = folder ? join(folder, 'agent.sock') : `\\\\.\\pipe\\${name}`
+  const server = createServer((socket) => {
+    const protocol = new AgentProtocol(false)
+    socket.on('error', () => undefined)
+    protocol.on('error', () => socket.destroy())
+    socket.pipe(protocol).pipe(socket)
+    protocol.on('identities', (request) => protocol.getIdentitiesReply(request, keys))
+    protocol.on('sign', (request, publicKey, data, options) => {
+      const blob = publicKey.getPublicSSH()
+      const key = keys.find((k) => k.getPublicSSH().equals(blob))
+      const signature = key?.sign(data, options.hash as never)
+      if (!(signature instanceof Buffer)) return protocol.failureReply(request)
+      protocol.signReply(request, signature)
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(path, resolve))
+  return {
+    path,
+    async close() {
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+      if (folder) await rm(folder, { recursive: true, force: true })
     }
   }
 }

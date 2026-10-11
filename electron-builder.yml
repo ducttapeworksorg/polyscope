@@ -32,6 +32,10 @@ win:
       arch: [x64]
     - target: zip
       arch: [x64]
+  # ssh2's helper for signing in through Pageant (src/main/index.ts).
+  extraResources:
+    - from: node_modules/ssh2/util/pagent.exe
+      to: pagent.exe
   # Both portable downloads' names; the installer sets its own.
   artifactName: ${productName}-${version}-${arch}-portable.${ext}
 

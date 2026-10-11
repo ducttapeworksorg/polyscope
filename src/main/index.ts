@@ -105,7 +105,11 @@ void app.whenReady().then(async () => {
     encrypt: (plain: string) => safeStorage.encryptString(plain),
     decrypt: (encrypted: Buffer) => safeStorage.decryptString(encrypted)
   }
-  const core = createCore({ dataDir, secrets: createSecretStore({ dataDir, cipher }) })
+  // ssh2's helper for talking to Pageant: shipped beside the app's resources, as it can't be run from inside its asar.
+  const pageantHelper = app.isPackaged
+    ? join(process.resourcesPath, 'pagent.exe')
+    : join(app.getAppPath(), 'node_modules', 'ssh2', 'util', 'pagent.exe')
+  const core = createCore({ dataDir, secrets: createSecretStore({ dataDir, cipher }), ...(process.platform === 'win32' && { pageantHelper }) })
   const weakSecrets = secretStorageIsWeak()
   if (weakSecrets) log.warn('No Secret Service or KWallet found: secrets are only obfuscated at rest')
   registerCoreIpc(core, log)
