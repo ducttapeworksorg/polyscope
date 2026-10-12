@@ -1,13 +1,13 @@
 import type { FollowUpdate, LastNLines, SourcePath } from '@shared/core-api'
 import { CoreError } from './core-error'
-import type { LogConnection, LogSource } from './log-source'
+import { currentRunOf, type LogConnection, type LogSource } from './log-source'
 
 export interface FollowOptions {
   /** The timestamp of the last line already shown, which following carries on after; from the start of the current run when left out. */
   after?: string
   /** How many of the lines already shown have that timestamp; 1 when left out. */
   afterCount?: number
-  /** How many times the container had restarted when those lines were read. */
+  /** How many times the Log Stream had restarted when those lines were read; 0 from a Source Type without restarts. */
   restarts: number
   /** Whether lines keep their timestamps. */
   timestamps: boolean
@@ -25,7 +25,7 @@ export interface Follow {
 
 /** How long a Follow waits, in milliseconds. */
 export const followTiming = {
-  /** Between looks at a container that isn't running, to catch it restarting. */
+  /** Between looks at a Log Stream whose thing isn't running, to catch it restarting. */
   pollInterval: 2_000,
   /** Before trying a failed stream again the first time; each failure in a row doubles it… */
   firstRetry: 1_000,
@@ -79,9 +79,10 @@ export function holdBack(cap: LastNLines, send: (update: FollowUpdate) => void) 
 }
 
 /**
- * Follows a container's log in a Log Source, sending what comes as updates. When the stream ends it
- * looks at the container: a new run is marked and followed from its start; a run still going is
- * followed on from the last line; a container finished for good, or gone, ends the Follow.
+ * Follows a Log Stream in a Log Source, sending what comes as updates. When the stream ends, a Log Source with
+ * restarts is asked for its current run: a new run is marked and followed from its start; a run still going is
+ * followed on from the last line; one finished for good, or gone, ends the Follow. Without restarts, the Follow
+ * ends with the stream.
  */
 export function startFollow(logSource: LogSource, path: SourcePath, options: FollowOptions): Follow {
   const { timestamps } = options
@@ -152,13 +153,15 @@ export function startFollow(logSource: LogSource, path: SourcePath, options: Fol
   // Failures in a row; each doubles the wait before trying again.
   let failures = 0
 
+  const currentRun = currentRunOf(logSource)
+
   const run = async () => {
     // The first stream goes on from the snapshot, whatever state the container is in.
     let follow = true
     while (!stopped) {
       try {
-        if (!follow) {
-          const instance = await logSource.containerInstance(path)
+        if (!follow && currentRun) {
+          const instance = await currentRun(path)
           if (stopped) return
           if (instance.restarts > restarts) {
             flush()
@@ -190,6 +193,7 @@ export function startFollow(logSource: LogSource, path: SourcePath, options: Fol
         failures = 0
         await connection.ended
         if (stopped) return
+        if (!currentRun) return end('exited')
         await sleep(followTiming.pollInterval)
       } catch (error) {
         if (stopped) return

@@ -1,4 +1,4 @@
-import type { LogNode, SourcePath } from '@shared/core-api'
+import type { LogCapabilities, LogNode, SourcePath } from '@shared/core-api'
 
 /** How much of a log to read. */
 export interface LogReadOptions {
@@ -8,11 +8,11 @@ export interface LogReadOptions {
   limitBytes?: number
   /** Starts each line with when it was logged: an RFC 3339 timestamp in UTC, then a space. */
   timestamps?: boolean
-  /** Reads the container's Previous Log, the log of its run before the current one, rather than its current one. */
+  /** Reads the Log Stream's Previous Log, the log of its run before the current one, rather than its current one. */
   previous?: boolean
 }
 
-/** Where following a log starts: from the start of the container's current run unless told. Lines always come with their timestamps, as with `timestamps` when reading. */
+/** Where following a log starts: from the start of the Log Stream's current run unless told. Lines always come with their timestamps, as with `timestamps` when reading. */
 export interface LogFollowOptions {
   /** Only lines logged since this RFC 3339 time; the backend may go back to the start of its second. */
   sinceTime?: string
@@ -26,53 +26,59 @@ export interface LogConnection {
   stop(): void
 }
 
-/** The current run of a container. */
-export interface ContainerInstance {
-  /** How many times the container has restarted; each new run counts one more. */
+/** The current run of what logs to a Log Stream: a container, say. */
+export interface LogStreamRun {
+  /** How many times it has restarted; each new run counts one more. */
   restarts: number
   state: 'waiting' | 'running' | 'terminated'
-  /** Terminated, and never going to run again: its pod completed, failed or is going away, or it isn't restarted. */
+  /** Terminated, and never going to run again: say a container whose pod completed, failed or is going away, or that isn't restarted. */
   finished: boolean
 }
 
-/** What a log's path points at. */
+/** What a log's path points at: only what every Log Source Type can tell. */
 export interface LogStreamInfo {
-  pod: string
-  container: string
-  /** How many times the container has restarted; once it has, it has a Previous Log. */
-  restarts: number
+  /** The Log Stream's name, as its node's. */
+  name: string
+  /** Whether it has a Previous Log to switch to, having restarted; only from a Source Type with Previous Logs. */
+  hasPreviousLog?: boolean
+  /** Set by a Kubernetes Logs Source: the container's pod and name, and how many times it has restarted. */
+  kubernetes?: { pod: string; container: string; restarts: number }
 }
 
 /**
- * The contract every Log Source Type implements, checked by the shared suite in log-source-contract.ts.
+ * The contract every Log Source Type implements, checked by the shared suite in log-source-contract.ts, which checks
+ * what it offers beyond that only as far as its `capabilities` say.
  * Paths are Source-relative ('/'-separated, '' for the root); implementations throw CoreError on failure.
- * A log's path is a container's; its Previous Log is read through the same path.
+ * A Previous Log is read through its Log Stream's path.
  */
 export interface LogSource {
+  readonly capabilities: LogCapabilities
   /**
-   * The nodes under a node: groups under the root, then down through Workloads and pods to containers,
-   * which have none. A pod lists its containers in its own order; everything else comes in no particular order.
-   * A pod with exactly one container carries it folded in as its `container`, and still lists it as its child.
-   * Previous Logs aren't listed: they're read through their containers' paths.
-   * Fails with NOT_FOUND for a path that isn't in the tree, NOT_A_FOLDER for a log's.
+   * The nodes under a node: under the root, then down through groups to Log Streams, which have none unless they
+   * say they have (`hasChildren`). A node folding in its only child still lists it as its child.
+   * Previous Logs aren't listed: they're read through their Log Streams' paths.
+   * Fails with NOT_FOUND for a path that isn't in the tree, NOT_A_FOLDER for a Log Stream's that has no children.
    */
   listChildren(path: SourcePath): Promise<LogNode[]>
   /** What a log's path points at. Fails with NOT_FOUND for a path that isn't in the tree, NOT_A_LOG_STREAM for one that isn't a log's. */
   logStreamAt(path: SourcePath): Promise<LogStreamInfo>
   /**
-   * A container's log as text, lines ending in '\n'. Fails like logStreamAt, with LOG_UNAVAILABLE when there's no log to
+   * A Log Stream's log as text, lines ending in '\n'. Fails like logStreamAt, with LOG_UNAVAILABLE when there's no log to
    * give yet (for a Previous Log, no run before the current one), or with PREVIOUS_LOG_GONE for a Previous Log whose
-   * run is no longer kept.
+   * run is no longer kept. Asked for a Previous Log only when the Source Type has them.
    */
   readLog(path: SourcePath, options?: LogReadOptions): Promise<string>
   /**
-   * Starts following a container's current log, resolving once the backend is sending; `onText` gets
+   * Starts following a Log Stream's current log, resolving once the backend is sending; `onText` gets
    * what arrives, in pieces that needn't end at a line break. Fails like readLog.
    */
   followLog(path: SourcePath, options: LogFollowOptions, onText: (text: string) => void): Promise<LogConnection>
   /**
-   * A container's current run, looked at often while a Follow waits for a restart, so it may trust the
-   * path to be a container's. Fails with NOT_FOUND once the container or its pod is gone.
+   * A Log Stream's current run, looked at often while a Follow waits for a restart, so it may trust the path to be a
+   * Log Stream's. Fails with NOT_FOUND once it's gone. Only, and always, from a Source Type with restarts.
    */
-  containerInstance(path: SourcePath): Promise<ContainerInstance>
+  currentRun?(path: SourcePath): Promise<LogStreamRun>
 }
+
+/** A Log Source's way to look at a Log Stream's current run; undefined unless its Source Type has restarts. */
+export const currentRunOf = (logSource: LogSource) => (logSource.capabilities.restarts ? logSource.currentRun?.bind(logSource) : undefined)

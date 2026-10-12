@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ContainerNode, EntryNode, LastNLines, OpenLogOptions, OpenOptions, SourceInfo } from '@shared/core-api'
+import type { EntryNode, LastNLines, LogStreamNode, OpenLogOptions, OpenOptions, SourceInfo } from '@shared/core-api'
 import { core, CoreCallError, describeError } from '../core-client'
 import { createFollowFeed } from '../follow-feed'
 import { targetOf } from '../source-types'
@@ -153,8 +153,8 @@ export function useTabs({ onSourcesChanged }: Options) {
   const openFile = (source: SourceInfo, node: Pick<EntryNode, 'path' | 'name'>, options?: { pinned: boolean }) =>
     openInTab(source, node, options, () => core.openFile(source.id, node.path))
 
-  /** Opens a container's log Following it, as it's live. */
-  const openLog = (source: SourceInfo, node: Pick<ContainerNode, 'path' | 'name'>, options?: { pinned: boolean }) =>
+  /** Opens a Log Stream Following it, as it's live. */
+  const openLog = (source: SourceInfo, node: Pick<LogStreamNode, 'path' | 'name'>, options?: { pinned: boolean }) =>
     openInTab(source, node, options, () => readLog(source.id, { of: 'logStream', path: node.path, name: node.name, previous: false }, {}, true))
 
   /**

@@ -1,5 +1,5 @@
 import { useState, type DragEvent, type HTMLAttributes, type KeyboardEvent, type MouseEvent, type Ref } from 'react'
-import type { ConnectionState, ContainerNode, EntryNode, Environment, HostKey, SourceInfo, SourceTypeId, TreeNode } from '@shared/core-api'
+import type { ConnectionState, EntryNode, Environment, HostKey, LogStreamNode, SourceInfo, SourceTypeId, TreeNode } from '@shared/core-api'
 import type { Theme } from '@shared/settings'
 import { core, describeError } from '../core-client'
 import { environmentOf } from '../environments'
@@ -28,8 +28,8 @@ interface Props {
   onSourcesChanged(): void
   /** Opens a file in the preview tab, or in a tab of its own when pinned. */
   onOpenFile(source: SourceInfo, node: EntryNode, options?: { pinned: boolean }): void
-  /** Opens a container's Log Stream in the preview tab, or in a tab of its own when pinned. */
-  onOpenLog(source: SourceInfo, node: ContainerNode, options?: { pinned: boolean }): void
+  /** Opens a Log Stream in the preview tab, or in a tab of its own when pinned. */
+  onOpenLog(source: SourceInfo, node: LogStreamNode, options?: { pinned: boolean }): void
   /** Follows a file of a Local, Kubernetes Files or SSH Files Source in a log view; without it, files offer no Follow. */
   onFollowFile?(source: SourceInfo, node: EntryNode): void
   onOpenSettings(): void

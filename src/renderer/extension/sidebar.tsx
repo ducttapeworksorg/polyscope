@@ -4,7 +4,7 @@ import '../src/styles/app.css'
 import './webview.css'
 import { StrictMode, useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { ContainerNode, EntryNode, SourceInfo } from '@shared/core-api'
+import type { EntryNode, LogStreamNode, SourceInfo } from '@shared/core-api'
 import type { OpenRequest } from '../../extension/bridge/protocol'
 import { SourcesPane } from '../src/components/SourcesPane'
 import { useSources } from '../src/components/use-sources'
@@ -13,7 +13,7 @@ import { bridge } from './bridge'
 /** Asks the extension host to open what was picked in the tree; it decides where. */
 const opener =
   (kind: OpenRequest['kind']) =>
-  (source: SourceInfo, node: EntryNode | ContainerNode, options?: { pinned: boolean }) => {
+  (source: SourceInfo, node: EntryNode | LogStreamNode, options?: { pinned: boolean }) => {
     const pinned = options?.pinned ?? false
     void bridge.open({ kind, sourceId: source.id, path: node.path, name: node.name, pinned })
   }

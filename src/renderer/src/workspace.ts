@@ -56,11 +56,18 @@ export const isLog = (content: TabContent): content is LogSnapshot | FileLog | L
   content.view === 'log' || content.view === 'logTooLarge' || content.view === 'logFailed'
 
 /**
- * Whether a log tab can switch between its container's current log and its Previous Log: once the container has
- * restarted, and always back from the Previous Log.
+ * Whether a log tab offers to switch to its Log Stream's Previous Log at all: unless its Source Type has none, as
+ * its log said when last read. A file has none.
  */
-export const canShowPrevious = ({ file, restarted }: Pick<OpenTab, 'file' | 'restarted'>) =>
-  isLog(file) && file.of === 'logStream' && (file.previous || restarted === true)
+export const offersPrevious = ({ file, offersPreviousLog }: Pick<OpenTab, 'file' | 'offersPreviousLog'>) =>
+  isLog(file) && file.of === 'logStream' && offersPreviousLog !== false
+
+/**
+ * Whether a log tab can switch between its Log Stream's current log and its Previous Log, if it offers to: once the
+ * Log Stream has restarted, and always back from the Previous Log.
+ */
+export const canShowPrevious = (tab: Pick<OpenTab, 'file' | 'restarted' | 'offersPreviousLog'>) =>
+  offersPrevious(tab) && isLog(tab.file) && (tab.file.previous || tab.restarted === true)
 
 /** Whether a Source's files can be Followed: those of Local, Kubernetes Files and SSH Files Sources grow; S3 objects don't. */
 export const followsFiles = (source: SourceInfo) => followableSourceTypes.includes(source.type)
@@ -94,6 +101,8 @@ export interface OpenTab {
   podGone?: string
   /** Whether a log tab's container has restarted, as last read or since seen by its Follow, so has a Previous Log. */
   restarted?: boolean
+  /** Whether a log tab's Log Stream's Source Type has Previous Logs, as last read; left out until a read has said. */
+  offersPreviousLog?: boolean
 }
 
 /** A Follow under way in a log tab: new lines are added as they come, unless it's paused. */
@@ -113,9 +122,9 @@ export const emptyWorkspace: Workspace = { tabs: [], activeKey: null }
 /** The Follow a log was read with, if any, running: its tab shows it and stops it when done with it. */
 const followOf = (file: TabContent): FollowState | undefined => ('followId' in file ? { followId: file.followId, paused: false } : undefined)
 
-/** Whether a container's log, as read, says it has restarted; nothing for what doesn't say. */
-const restartedOf = (file: TabContent): Pick<OpenTab, 'restarted'> =>
-  file.view === 'log' && file.of === 'logStream' ? { restarted: file.restarted } : {}
+/** Whether a Log Stream, as read, says it has restarted and whether it has Previous Logs at all; nothing for what doesn't say. */
+const restartedOf = (file: TabContent): Pick<OpenTab, 'restarted' | 'offersPreviousLog'> =>
+  file.view === 'log' && file.of === 'logStream' ? { restarted: file.restarted, offersPreviousLog: file.offersPreviousLog } : {}
 
 /**
  * Shows a file: activating its tab if it's open already, otherwise putting it in place of the

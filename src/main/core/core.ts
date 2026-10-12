@@ -23,6 +23,7 @@ import type {
   LargeFileSearchEvent,
   LastNLines,
   LocalSourceInfo,
+  LogCapabilities,
   LogNode,
   LogSnapshot,
   NewEnvironment,
@@ -74,7 +75,7 @@ import { createLargeFileCache } from './large-file-cache'
 import { searchLargeFile, type LargeFileSearch } from './large-file-search'
 import { createLocalFileSource } from './local-file-source'
 import { startFollow, type Follow } from './log-follow'
-import type { LogReadOptions, LogSource } from './log-source'
+import { currentRunOf, type LogReadOptions, type LogSource } from './log-source'
 import { createRegistryStore, emptyRegistry, type SavedSource } from './registry-store'
 import { createS3FileSource, readCaBundle, type S3Target } from './s3-file-source'
 import { createSecretStore, type SecretStore } from './secret-store'
@@ -286,6 +287,15 @@ async function s3TargetOf(settings: S3Settings, secretKey?: string): Promise<S3T
   return { host, bucket, prefix, region, pathStyle, credentials, verifyTls, proxyUrl, ...(caBundle && { caBundle }) }
 }
 
+/** A Log Source's node, and those folded into it, without the status or restarts its Source Type doesn't offer. */
+function offered(node: LogNode, capabilities: LogCapabilities): LogNode {
+  const shown = { ...node }
+  if (!capabilities.status) delete shown.status
+  if (shown.kind === 'logStream' && !capabilities.restarts) delete shown.restarts
+  if (shown.kind === 'group' && shown.folded) shown.folded = offered(shown.folded, capabilities)
+  return shown
+}
+
 /** What a Connected Source reads from: files, or Log Streams. */
 type Backend = { kind: 'files'; fileSource: FileSource } | { kind: 'logs'; logSource: LogSource }
 
@@ -298,6 +308,8 @@ export interface CoreOptions {
   cacheDir?: string
   /** ssh2's pagent.exe, for signing in through Pageant on Windows; only Windows' OpenSSH agent is tried without it. */
   pageantHelper?: string
+  /** Opens a Kubernetes Logs Source's Log Source in place of the cluster's, as tests do to stand in a fake one. */
+  openLogSource?: (target: Pick<KubernetesLogsSourceInfo, 'context' | 'namespace'>) => Promise<LogSource>
 }
 
 /**
@@ -487,7 +499,10 @@ export function createCore(options: CoreOptions = {}): Core {
     const asked = options.lastNLines === undefined ? undefined : checkLastNLines(options.lastNLines)
     const timestamps = options.timestamps === true
     const previous = options.previous === true
-    const { pod, container, restarts } = await logSource.logStreamAt(path)
+    const offersPreviousLog = logSource.capabilities.previousLog
+    // A Source Type without Previous Logs is never asked for one.
+    if (previous && !offersPreviousLog) throw new CoreError('LOG_UNAVAILABLE', `Its Log Streams have no Previous Log: ${path}`)
+    const { name, hasPreviousLog } = await logSource.logStreamAt(path)
     await settingsLoaded
     const lastNLines = asked ?? sourceFor(sourceId).lastNLines ?? settings.defaultLastNLines
     const read = { timestamps: timestamps || forFollowing, previous }
@@ -495,10 +510,10 @@ export function createCore(options: CoreOptions = {}): Core {
       view: 'log',
       of: 'logStream',
       path,
-      name: container,
-      pod,
+      name,
+      offersPreviousLog,
       previous,
-      restarted: restarts > 0,
+      restarted: offersPreviousLog && hasPreviousLog === true,
       lastNLines,
       timestamps,
       content: lines.join('\n')
@@ -795,12 +810,14 @@ export function createCore(options: CoreOptions = {}): Core {
     return page.cursor === undefined ? nodes : [...nodes, { kind: 'more', path: shownAt, cursor: page.cursor }]
   }
 
-  /** A Log Source node's children: groups in the order of their kind, containers in their pod's, the rest by name. */
+  /**
+   * A Log Source node's children, showing only what its Source Type offers: Log Streams alone in the Source's order
+   * (a pod's containers), Kubernetes' groups of Workloads in the order of their kind, the rest by name.
+   */
   const listLogNodes = async (logSource: LogSource, path: SourcePath): Promise<TreeNode[]> => {
-    const nodes = await logSource.listChildren(path)
-    // A pod's containers.
-    if (nodes.every((node) => node.kind === 'container')) return nodes
-    const rank = (node: LogNode) => (node.kind === 'group' ? workloadKinds.indexOf(node.workloadKind) : 0)
+    const nodes = (await logSource.listChildren(path)).map((node) => offered(node, logSource.capabilities))
+    if (nodes.every((node) => node.kind === 'logStream')) return nodes
+    const rank = (node: LogNode) => (node.kubernetes?.kind === 'workloads' ? workloadKinds.indexOf(node.kubernetes.workloadKind) : 0)
     return nodes.toSorted((a, b) => rank(a) - rank(b) || byName.compare(a.name, b.name))
   }
 
@@ -884,6 +901,7 @@ export function createCore(options: CoreOptions = {}): Core {
 
   /** Opens a Kubernetes Logs Source's namespace, once it's clear the context and namespace are there. */
   const reachKubernetes = async ({ context, namespace }: Extract<Target, { type: 'kubernetesLogs' }>) => {
+    if (options.openLogSource) return options.openLogSource({ context, namespace })
     const logSource = createKubernetesLogSource(kubeConfigFor(context), namespace)
     await logSource.checkNamespace()
     return logSource
@@ -1280,12 +1298,14 @@ export function createCore(options: CoreOptions = {}): Core {
       await loaded
       const logSource = await logSourceFor(sourceId, path)
       if (options.previous) throw new CoreError('NOT_FOLLOWABLE', `A Previous Log has ended: ${path}`)
-      // The snapshot has to be of the run the Follow starts from: one read while the container restarted is read again.
-      let restarts = (await logSource.containerInstance(path)).restarts
+      // The snapshot has to be of the run the Follow starts from: one read while the Log Stream restarted is read again.
+      const currentRun = currentRunOf(logSource)
+      const restartsNow = async () => (currentRun ? (await currentRun(path)).restarts : 0)
+      let restarts = await restartsNow()
       let read: Awaited<ReturnType<typeof readSnapshot>>
       for (let tries = 1; ; tries++) {
         read = await readSnapshot(logSource, sourceId, path, options, true)
-        const after = (await logSource.containerInstance(path)).restarts
+        const after = await restartsNow()
         if (after === restarts || tries === 3) break
         restarts = after
       }
@@ -1302,7 +1322,7 @@ export function createCore(options: CoreOptions = {}): Core {
           emit
         })
       )
-      return { ...snapshot, restarted: snapshot.restarted || restarts > 0, followId }
+      return { ...snapshot, restarted: snapshot.restarted || (snapshot.offersPreviousLog && restarts > 0), followId }
     },
 
     async openFileLog(sourceId, path, options = {}) {

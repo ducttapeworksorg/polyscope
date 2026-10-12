@@ -1,7 +1,7 @@
 import { request as httpRequest, type IncomingMessage, type RequestOptions } from 'node:http'
 import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
 import { ApiException, type KubeConfig, type V1Job, type V1ObjectMeta, type V1Pod } from '@kubernetes/client-node'
-import type { ContainerNode, ContainerRole, LogNode, PodNode, SourcePath, WorkloadKind, WorkloadNode } from '@shared/core-api'
+import type { ContainerRole, LogGroupNode, LogNode, LogStreamNode, SourcePath, WorkloadKind } from '@shared/core-api'
 import { CoreError } from './core-error'
 import {
   apisFor,
@@ -16,7 +16,7 @@ import {
   type PodOwnerKind
 } from './kubernetes-api'
 import type { LogConnection, LogFollowOptions, LogReadOptions, LogSource, LogStreamInfo } from './log-source'
-import { containerInstanceOf, isSidecar, podStatusOf, readyCountOf, restartsOf } from './pod-status'
+import { currentRunOf, isSidecar, podStatusOf, readyCountOf, restartsOf } from './pod-status'
 
 /** Each group's path segment, which is also its name. */
 const groups = {
@@ -63,9 +63,10 @@ async function bodyOf(response: IncomingMessage): Promise<string> {
 const join = (parent: SourcePath, name: string) => (parent ? `${parent}/${name}` : name)
 
 /**
- * The Workloads, pods and containers of one namespace, as a Log Source. Paths start with a group
- * (`deployments`, `cronjobs`…), then name each object on the way down, e.g. `cronjobs/nightly/<job>/<pod>/<container>`.
+ * The Workloads, pods and containers of one namespace, as a Log Source whose Log Streams are containers. Paths start
+ * with a group (`deployments`, `cronjobs`…), then name each object on the way down, e.g. `cronjobs/nightly/<job>/<pod>/<container>`.
  * A CronJob with one Job, a Workload with one pod and a pod with one container carry it folded in, paths keeping every level.
+ * It has every capability: containers restart and keep a Previous Log, and pods have a Pod Status.
  */
 export function createKubernetesLogSource(config: KubeConfig, namespace: string): LogSource & { checkNamespace(): Promise<void> } {
   const apis = apisFor(config)
@@ -135,10 +136,10 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
   }
 
   /** A pod's containers, init and sidecar containers first as they start first. */
-  const containerNodes = (parent: SourcePath, pod: V1Pod): ContainerNode[] => {
-    const node = (name: string, role?: ContainerRole): ContainerNode => {
+  const containerNodes = (parent: SourcePath, pod: V1Pod): LogStreamNode[] => {
+    const node = (name: string, role?: ContainerRole): LogStreamNode => {
       const restarts = restartsOf(pod, name)
-      return { kind: 'container', name, path: join(parent, name), ...(role && { role }), ...(restarts && { restarts }) }
+      return { kind: 'logStream', name, path: join(parent, name), ...(restarts && { restarts }), kubernetes: { kind: 'container', ...(role && { role }) } }
     }
     return [
       ...(pod.spec?.initContainers ?? []).map((c) => node(c.name, isSidecar(c) ? 'sidecar' : 'init')),
@@ -147,15 +148,15 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
   }
 
   /** A pod's node, its only container folded in if it has just the one. */
-  const podNode = (parent: SourcePath, pod: V1Pod): PodNode => {
+  const podNode = (parent: SourcePath, pod: V1Pod): LogGroupNode => {
     const name = pod.metadata?.name ?? ''
     const path = join(parent, name)
     const containers = containerNodes(path, pod)
-    const folded = containers.length === 1 && { container: containers[0]! }
-    return { kind: 'pod', name, path, status: podStatusOf(pod), containerCount: containers.length, ...folded }
+    const folded = containers.length === 1 && { folded: containers[0]! }
+    return { kind: 'group', name, path, status: podStatusOf(pod), ...folded, kubernetes: { kind: 'pod', containerCount: containers.length } }
   }
 
-  const podNodes = (parent: SourcePath, pods: V1Pod[]): PodNode[] => pods.filter((pod) => pod.metadata?.name).map((pod) => podNode(parent, pod))
+  const podNodes = (parent: SourcePath, pods: V1Pod[]): LogGroupNode[] => pods.filter((pod) => pod.metadata?.name).map((pod) => podNode(parent, pod))
 
   /**
    * A Workload's node, with its Ready Count if its kind has one; its only pod folded in if `pods` are its pods and
@@ -167,7 +168,7 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     kind: Exclude<WorkloadKind, 'Pod'>,
     workload: { metadata?: V1ObjectMeta },
     { pods, jobs }: { pods?: V1Pod[]; jobs?: { job: V1Job; pods?: V1Pod[] }[] } = {}
-  ): WorkloadNode => {
+  ): LogGroupNode => {
     const name = workload.metadata?.name ?? ''
     const path = join(parent, name)
     const readyCount = readyCountOf(kind, workload)
@@ -176,14 +177,14 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     const children = kind === 'CronJob' ? jobs : pods
     const folded =
       children?.length === 0 ? { empty: true as const }
-      : onlyJob && otherJobs.length === 0 ? { job: workloadNode(path, 'Job', onlyJob.job, { pods: onlyJob.pods }) }
-      : onlyPod && otherPods.length === 0 ? { pod: podNode(path, onlyPod) }
+      : onlyJob && otherJobs.length === 0 ? { folded: workloadNode(path, 'Job', onlyJob.job, { pods: onlyJob.pods }) }
+      : onlyPod && otherPods.length === 0 ? { folded: podNode(path, onlyPod) }
       : undefined
-    return { kind: 'workload', workloadKind: kind, name, path, ...(readyCount && { readyCount }), ...folded }
+    return { kind: 'group', name, path, ...folded, kubernetes: { kind: 'workload', workloadKind: kind, ...(readyCount && { readyCount }) } }
   }
 
   /** A group's Workloads, each carrying its only pod, or a CronJob its only Job, folded in. */
-  const workloadNodes = async (group: Exclude<Group, 'pods'>): Promise<WorkloadNode[]> => {
+  const workloadNodes = async (group: Exclude<Group, 'pods'>): Promise<LogGroupNode[]> => {
     const kind = kindOfGroup[group] as Exclude<WorkloadKind, 'Pod'>
     const [items, podsOf, jobs] = await Promise.all([
       members(group),
@@ -201,7 +202,7 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
   }
 
   /** A CronJob's Jobs, each carrying its only pod folded in. */
-  const jobNodes = async (parent: SourcePath, cronJob: string): Promise<WorkloadNode[]> => {
+  const jobNodes = async (parent: SourcePath, cronJob: string): Promise<LogGroupNode[]> => {
     const [jobs, podsOf] = await Promise.all([jobsOf(cronJob), podFinder('Job')])
     return jobs.filter((job) => job.metadata?.name).map((job) => workloadNode(parent, 'Job', job, { pods: podsOf?.(job.metadata?.uid) }))
   }
@@ -218,7 +219,9 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     const [group, first, second, third] = segments
     if (segments.length === 0) {
       const listed = await Promise.all(Object.values(groups).map(async (g) => [g, names(await members(g)).length > 0] as const))
-      return listed.filter(([, any]) => any).map(([g]) => ({ kind: 'group', workloadKind: kindOfGroup[g], name: g, path: g }))
+      return listed
+        .filter(([, any]) => any)
+        .map(([g]) => ({ kind: 'group', name: g, path: g, unfoldable: true, kubernetes: { kind: 'workloads', workloadKind: kindOfGroup[g] } }))
     }
     if (!isGroup(group) || segments.some((segment) => !segment)) throw notFound(path)
     if (first === undefined) {
@@ -246,7 +249,7 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
       return containerNodes(path, podNamed(await podsOf('jobs', second!), third!, path))
     }
     // Deeper than any container: the path is a log's, or nothing's.
-    throw (await nodeAt(path))?.kind === 'container' ? new CoreError('NOT_A_FOLDER', `A log has no children: ${path}`) : notFound(path)
+    throw (await nodeAt(path))?.kind === 'logStream' ? new CoreError('NOT_A_FOLDER', `A log has no children: ${path}`) : notFound(path)
   }
 
   /** The children of a node, none if there's no such node or it has none. */
@@ -263,12 +266,13 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     return (await childrenOf(parent)).find((node) => node.path === path)
   }
 
-  const logStreamAt = async (path: SourcePath): Promise<LogStreamInfo> => {
+  const logStreamAt = async (path: SourcePath): Promise<LogStreamInfo & Required<Pick<LogStreamInfo, 'kubernetes'>>> => {
     if (!path || isGroup(path)) throw notALog(path)
     const node = await nodeAt(path)
     if (!node) throw notFound(path)
-    if (node.kind !== 'container') throw notALog(path)
-    return { pod: path.split('/').at(-2)!, container: node.name, restarts: node.restarts ?? 0 }
+    if (node.kind !== 'logStream') throw notALog(path)
+    const restarts = node.restarts ?? 0
+    return { name: node.name, hasPreviousLog: restarts > 0, kubernetes: { pod: path.split('/').at(-2)!, container: node.name, restarts } }
   }
 
   /** Opens a connection following a container's log; resolves once the API server answers with the log. */
@@ -315,11 +319,12 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
   }
 
   return {
+    capabilities: { previousLog: true, restarts: true, status: true },
     listChildren,
     logStreamAt,
 
     async readLog(path, { previous = false, ...options }: LogReadOptions = {}) {
-      const { pod, container } = await logStreamAt(path)
+      const { pod, container } = (await logStreamAt(path)).kubernetes
       let text: string
       try {
         text = await core.readNamespacedPodLog({ name: pod, namespace, container, previous, ...options })
@@ -332,17 +337,17 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     },
 
     async followLog(path, options, onText) {
-      const { pod, container } = await logStreamAt(path)
+      const { pod, container } = (await logStreamAt(path)).kubernetes
       return openLogConnection(pod, container, options, onText)
     },
 
     /** Reads just the pod, trusting the path, as it's looked at every few seconds while a container restarts. */
-    async containerInstance(path) {
+    async currentRun(path) {
       const [pod, container] = path.split('/').slice(-2)
       const found = await call(() => core.readNamespacedPod({ name: pod!, namespace }))
-      const instance = containerInstanceOf(found, container!)
-      if (!instance) throw notFound(path)
-      return instance
+      const run = currentRunOf(found, container!)
+      if (!run) throw notFound(path)
+      return run
     },
 
     checkNamespace: () => checkNamespace(core, namespace)

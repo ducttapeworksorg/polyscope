@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FollowUpdate } from '@shared/core-api'
 import { CoreError } from './core-error'
 import { followTiming, startFollow, type FollowOptions } from './log-follow'
-import type { ContainerInstance, LogFollowOptions, LogSource } from './log-source'
+import type { LogFollowOptions, LogSource, LogStreamRun } from './log-source'
 
 const path = 'pods/web/app'
 
@@ -15,9 +15,9 @@ interface FakeStream {
   stopped: boolean
 }
 
-/** A Log Source with one container, whose runs and streams the test drives. */
-function fakeLogSource() {
-  const instance: ContainerInstance = { restarts: 0, state: 'running', finished: false }
+/** A Log Source with one container, whose runs (when its Source Type has `restarts`) and streams the test drives. */
+function fakeLogSource({ restarts = true } = {}) {
+  const instance: LogStreamRun = { restarts: 0, state: 'running', finished: false }
   const streams: FakeStream[] = []
   let gone = false
   /** Failures to answer the next attempts to follow with, one each. */
@@ -26,6 +26,7 @@ function fakeLogSource() {
   const lookFailures: CoreError[] = []
 
   const logSource: LogSource = {
+    capabilities: { previousLog: restarts, restarts, status: false },
     listChildren: () => Promise.reject(new Error('not used')),
     logStreamAt: () => Promise.reject(new Error('not used')),
     readLog: () => Promise.reject(new Error('not used')),
@@ -52,12 +53,14 @@ function fakeLogSource() {
         }
       }
     },
-    async containerInstance() {
-      const failure = lookFailures.shift()
-      if (failure) throw failure
-      if (gone) throw new CoreError('NOT_FOUND', 'gone')
-      return { ...instance }
-    }
+    ...(restarts && {
+      async currentRun() {
+        const failure = lookFailures.shift()
+        if (failure) throw failure
+        if (gone) throw new CoreError('NOT_FOUND', 'gone')
+        return { ...instance }
+      }
+    })
   }
 
   return {
@@ -253,6 +256,37 @@ describe('a container that restarts', () => {
     source.stream.send(logged(6, 'whole line'))
     await settle()
     expect(lines()).toEqual(['whole line'])
+  })
+})
+
+describe('a Log Stream whose Source Type has no restarts', () => {
+  beforeEach(() => {
+    source = fakeLogSource({ restarts: false })
+  })
+
+  it('ends when its stream does, giving out a last line that has no line break', async () => {
+    await follow()
+    source.stream.send(logged(6, 'last').slice(0, -1))
+    source.stream.end()
+    await settle()
+
+    expect(lines()).toEqual(['last', '<ended>'])
+    expect(updates.at(-1)).toEqual({ kind: 'ended', reason: 'exited' })
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(source.streams).toHaveLength(1)
+  })
+
+  it('tries again after its stream fails, from the last line, with no mark', async () => {
+    await follow()
+    source.stream.send(logged(6, 'one'))
+    source.stream.fail(new CoreError('UNREACHABLE', 'connection reset'))
+    await vi.advanceTimersByTimeAsync(followTiming.firstRetry)
+
+    expect(source.streams).toHaveLength(2)
+    expect(source.stream.options).toEqual({ sinceTime: at(6) })
+    source.stream.send(logged(6, 'one', 'two'))
+    await settle()
+    expect(lines()).toEqual(['one', '<failed>', '<recovered>', 'two'])
   })
 })
 

@@ -9,8 +9,8 @@ import type {
   V1Pod,
   V1StatefulSet
 } from '@kubernetes/client-node'
-import type { PodHealth, PodStatus, ReadyCount, WorkloadKind } from '@shared/core-api'
-import type { ContainerInstance } from './log-source'
+import type { NodeHealth, PodStatus, ReadyCount, WorkloadKind } from '@shared/core-api'
+import type { LogStreamRun } from './log-source'
 
 /** Why a container ended, as kubectl puts it: its reason, or else the signal or exit code it ended with. */
 const endReason = ({ reason, signal, exitCode }: V1ContainerStateTerminated) =>
@@ -27,7 +27,7 @@ const starting = new Set(['Pending', 'ContainerCreating', 'PodInitializing'])
 const healthy = new Set(['Running', 'Succeeded', 'Completed'])
 const inactive = new Set(['Terminating', 'Unknown'])
 
-const healthOf = (reason: string): PodHealth =>
+const healthOf = (reason: string): NodeHealth =>
   inactive.has(reason) ? 'inactive'
   : healthy.has(reason) ? 'healthy'
   : starting.has(reason) || /^Init:\d+\/\d+$/.test(reason) ? 'pending'
@@ -85,7 +85,7 @@ export function restartsOf(pod: V1Pod, container: string): number | undefined {
 }
 
 /** A container's current run, as a Follow needs it; undefined if the pod has no such container. */
-export function containerInstanceOf(pod: V1Pod, container: string): ContainerInstance | undefined {
+export function currentRunOf(pod: V1Pod, container: string): LogStreamRun | undefined {
   const init = pod.spec?.initContainers?.find((c) => c.name === container)
   const spec = init ?? pod.spec?.containers.find((c) => c.name === container)
   if (!spec) return undefined

@@ -373,9 +373,14 @@ const firstRunKubernetes: [string, () => Promise<void>][] = [
         await core.connect(source.id)
 
         const web = (await core.expand(source.id, 'deployments')).find((node) => nameOf(node) === 'web')
-        assert.ok(web?.kind === 'workload')
-        const { pod: folded, ...workload } = web
-        assert.deepEqual(workload, { kind: 'workload', workloadKind: 'Deployment', name: 'web', path: 'deployments/web', readyCount: { ready: 1, desired: 1 } })
+        assert.ok(web?.kind === 'group')
+        const { folded, ...workload } = web
+        assert.deepEqual(workload, {
+          kind: 'group',
+          name: 'web',
+          path: 'deployments/web',
+          kubernetes: { kind: 'workload', workloadKind: 'Deployment', readyCount: { ready: 1, desired: 1 } }
+        })
         // Its only pod, folded into its row, and still its child.
         assert.deepEqual(folded?.status, { reason: 'Running', health: 'healthy', restarts: 0 })
         assert.deepEqual(await core.expand(source.id, 'deployments/web'), [folded])

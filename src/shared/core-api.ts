@@ -310,57 +310,87 @@ export interface FoldedNode {
   kubernetes?: KubernetesEntry
 }
 
+/** What a Log Source Type offers beyond what every one has; the log view and the sidebar show only what it offers. */
+export interface LogCapabilities {
+  /** Its Log Streams have a Previous Log, the log of the run before their current one, to switch to once they've restarted. */
+  previousLog: boolean
+  /** Its Log Streams restart: their nodes tell how many times, and a Follow carries on across restarts, marking each. */
+  restarts: boolean
+  /** Its nodes tell how they're doing (a Kubernetes pod's Pod Status). */
+  status: boolean
+}
+
+/**
+ * A node in a Log Source's tree: a group, or a Log Stream, the log output of one thing that logs. A Log Stream may
+ * have children of its own too. What the groups are depends on the Source Type (see `kubernetes`). A group with
+ * exactly one child may carry it folded in (see `folded`).
+ */
+export type LogNode = LogGroupNode | LogStreamNode
+
+interface LogNodeBase {
+  name: string
+  path: SourcePath
+  /** How it's doing, from a Source Type with per-node status. */
+  status?: NodeStatus
+  /** Set when it had no children when listed: its row has nothing to expand. Left out when that isn't known. */
+  empty?: true
+}
+
+/** A group of nodes in a Log Source's tree. */
+export interface LogGroupNode extends LogNodeBase {
+  kind: 'group'
+  /**
+   * Its only child, folded into it: its row stands in for the child's, opening the child's Log Stream or listing
+   * the child's children. The child is still its child, under its path.
+   */
+  folded?: LogNode
+  /** Set on a group that never folds its only child into it, however many it has (Kubernetes' groups of Workloads). */
+  unfoldable?: true
+  /** What the group is, in a Kubernetes Logs Source. */
+  kubernetes?: KubernetesLogGroup
+}
+
+/** A Log Stream in a Log Source's tree: what opens in a log view. */
+export interface LogStreamNode extends LogNodeBase {
+  kind: 'logStream'
+  /** Set when it has children too, listed as a group's are. Its row still stands for its own log, folding nothing in. */
+  hasChildren?: true
+  /** How many times it has restarted, from a Source Type with restarts; left out until it has. */
+  restarts?: number
+  /** What the Log Stream is, in a Kubernetes Logs Source. */
+  kubernetes?: KubernetesLogStream
+}
+
 /** The kinds of Workload a Kubernetes Logs Source groups its tree by; a Pod stands for a pod no Workload owns. */
 export type WorkloadKind = 'Deployment' | 'StatefulSet' | 'DaemonSet' | 'CronJob' | 'Job' | 'Pod'
 
 export const workloadKinds: readonly WorkloadKind[] = ['Deployment', 'StatefulSet', 'DaemonSet', 'CronJob', 'Job', 'Pod']
 
 /**
- * A node in a Log Source's tree. Its root holds one group per kind of Workload that has any; groups hold
- * Workloads (or, for Pods, the pods themselves), a CronJob holds its Jobs, and the rest hold their pods,
- * which hold their containers: the Log Streams. A level below a group with exactly one child carries it folded
- * in: a CronJob its only Job (see its `job`), a Workload its only pod (its `pod`), a pod its only container (its `container`).
+ * What a group is in a Kubernetes Logs Source. Its root holds one group per kind of Workload that has any; those hold
+ * Workloads (or, for Pods, the pods themselves), a CronJob holds its Jobs, and the rest hold their pods, which hold
+ * their containers: the Log Streams. A CronJob may fold in its only Job, a Workload its only pod, a pod its only container.
  */
-export type LogNode = { kind: 'group'; workloadKind: WorkloadKind; name: string; path: SourcePath } | WorkloadNode | PodNode | ContainerNode
+export type KubernetesLogGroup =
+  | { kind: 'workloads'; workloadKind: WorkloadKind }
+  | {
+      /** A Workload, or a CronJob's Job. */
+      kind: 'workload'
+      workloadKind: Exclude<WorkloadKind, 'Pod'>
+      /** Deployments, StatefulSets and DaemonSets only: Jobs and CronJobs run to completion, so have none. */
+      readyCount?: ReadyCount
+    }
+  | {
+      kind: 'pod'
+      /** How many containers the pod has, init and sidecar containers included. */
+      containerCount: number
+    }
 
-/** A Workload in a Log Source's tree, or a CronJob's Job. */
-export interface WorkloadNode {
-  kind: 'workload'
-  workloadKind: Exclude<WorkloadKind, 'Pod'>
-  name: string
-  path: SourcePath
-  /** Deployments, StatefulSets and DaemonSets only: Jobs and CronJobs run to completion, so have none. */
-  readyCount?: ReadyCount
-  /**
-   * A CronJob's only Job, when it has exactly one, folded into it: the CronJob's row stands in for the Job's.
-   * The Job is still the CronJob's child, under its path.
-   */
-  job?: WorkloadNode
-  /**
-   * The Workload's only pod, when it has exactly one, folded into it (never a CronJob's: its pods are its Jobs').
-   * The Workload's row stands in for the pod's; the pod is still its child, under its path.
-   */
-  pod?: PodNode
-  /**
-   * Set when the Workload had no pods when listed (a CronJob, no Jobs): its row has nothing to expand. Left out when
-   * that isn't known, say if the user may not list pods.
-   */
-  empty?: true
-}
-
-/** A pod in a Log Source's tree. */
-export interface PodNode {
-  kind: 'pod'
-  name: string
-  path: SourcePath
-  status: PodStatus
-  /** How many containers the pod has, init and sidecar containers included. */
-  containerCount: number
-  /**
-   * The pod's only container, when it has exactly one, folded into it: the pod's row opens that container's
-   * Log Stream rather than listing it. The container is still the pod's child, under its path.
-   */
-  container?: ContainerNode
+/** What a Log Stream is in a Kubernetes Logs Source: a container. */
+export interface KubernetesLogStream {
+  kind: 'container'
+  /** Set for an init container, or a sidecar (an init container that keeps running); left out for the pod's main containers. */
+  role?: ContainerRole
 }
 
 export type ContainerRole = 'init' | 'sidecar'
@@ -371,32 +401,24 @@ export interface ReadyCount {
   desired: number
 }
 
-/** How a pod is doing: as it should, on its way up, in trouble, or neither (going away, or its node out of touch). */
-export type PodHealth = 'healthy' | 'pending' | 'failing' | 'inactive'
+/** How a node is doing: as it should, on its way up, in trouble, or neither (going away, or out of touch). */
+export type NodeHealth = 'healthy' | 'pending' | 'failing' | 'inactive'
 
-/** A pod's health as the tree shows it; see Pod Status in GLOSSARY.md. */
-export interface PodStatus {
-  /** Its phase, or what's wrong with it, the way kubectl puts it: Running, Pending, CrashLoopBackOff, OOMKilled, Terminating… */
+/** A node's health as the tree shows it: a pod's Pod Status (see GLOSSARY.md). */
+export interface NodeStatus {
+  /** What it's doing, or what's wrong with it, e.g. a pod's phase the way kubectl puts it: Running, Pending, CrashLoopBackOff, OOMKilled, Terminating… */
   reason: string
-  health: PodHealth
-  /** Restarts of all its containers together. */
+  health: NodeHealth
+  /** Restarts of all it runs together, e.g. all a pod's containers. */
   restarts: number
-  /** Milliseconds since the epoch at which a container of the pod last went down and restarted; left out if none has. */
+  /** Milliseconds since the epoch at which what it runs last went down and restarted; left out if nothing has. */
   lastRestart?: number
-  /** Why that container's previous run ended, e.g. OOMKilled or Error; left out if none has restarted. */
+  /** Why that run ended, e.g. OOMKilled or Error; left out if nothing has restarted. */
   lastTerminationReason?: string
 }
 
-/** A container in a Log Source's tree: what opens as a Log Stream. */
-export interface ContainerNode {
-  kind: 'container'
-  name: string
-  path: SourcePath
-  /** Set for an init container, or a sidecar (an init container that keeps running); left out for the pod's main containers. */
-  role?: ContainerRole
-  /** How many times the container has restarted; left out until it has. Its log view then offers its Previous Log. */
-  restarts?: number
-}
+/** A pod's health; see Pod Status in GLOSSARY.md. */
+export type PodStatus = NodeStatus
 
 export type TreeNode = EntryNode | LogNode | ErrorNode | MoreNode | FoldedNode
 
@@ -571,20 +593,20 @@ export const largeFileSearchLimit = 10_000
 /** An opened file, in whichever view suits its content (or was asked for). */
 export type OpenedFile = TextFile | BinaryFile | HexFile | LargeFile
 
-/** The last lines of a container's log, as a snapshot. */
+/** The last lines of a Log Stream, as a snapshot. */
 export interface LogSnapshot {
   view: 'log'
-  /** What the lines are of: a container's Log Stream. */
+  /** What the lines are of: a Log Stream. */
   of: 'logStream'
-  /** The container's path in its Source's tree. */
+  /** The Log Stream's path in its Source's tree. */
   path: SourcePath
-  /** The container's name. */
+  /** The Log Stream's name: a container's, say. */
   name: string
-  /** The pod the container is in. */
-  pod: string
-  /** Whether this is the container's Previous Log: the log of its run before the current one. */
+  /** Whether its Source Type has Previous Logs, so its log view offers to switch to one. */
+  offersPreviousLog: boolean
+  /** Whether this is the Log Stream's Previous Log: the log of its run before the current one. */
   previous: boolean
-  /** Whether the container had restarted when read, so has a Previous Log to switch to. */
+  /** Whether it had a Previous Log to switch to when read: it had restarted. Never, from a Source Type without Previous Logs. */
   restarted: boolean
   /** The lines asked for; the snapshot holds at most that many. */
   lastNLines: LastNLines
@@ -601,7 +623,7 @@ export interface OpenLogOptions {
   allowLarge?: boolean
   /** Starts each line with when it was logged; off unless asked for. */
   timestamps?: boolean
-  /** Reads the container's Previous Log rather than its current one. */
+  /** Reads the Log Stream's Previous Log rather than its current one, from a Source Type with Previous Logs. */
   previous?: boolean
 }
 
@@ -610,14 +632,14 @@ export interface FollowedLog extends LogSnapshot {
   followId: string
 }
 
-/** Why a Follow ended by itself: its container finished for good, its pod or container went away, its Source was disconnected, or the connection it went over dropped. */
+/** Why a Follow ended by itself: its Log Stream finished for good (a container, say), or went away, its Source was disconnected, or the connection it went over dropped. */
 export type FollowEndReason = 'exited' | 'gone' | 'disconnected' | 'connectionLost'
 
 /** What a Follow reports as its Log Stream goes on, in order. */
 export type FollowUpdate =
   /** New lines, formatted like the snapshot's (with timestamps if it had them). */
   | { kind: 'lines'; lines: string[] }
-  /** The container restarted; the lines after this are its new run's. */
+  /** The Log Stream restarted (from a Source Type with restarts); the lines after this are its new run's. */
   | { kind: 'restarted' }
   /** A followed file was cut short; the lines after this are from its start. */
   | { kind: 'truncated' }
@@ -834,14 +856,16 @@ export interface CoreApi {
   /** Stops caching a Large File, and any searches of it, and lets it go; the cache keeps what was cached. Nothing happens to one already closed. */
   closeLargeFile(largeFileId: string): Promise<void>
   /**
-   * Fetches the last lines of a container's log in a Log Source. Asking for all of a log larger than the
-   * Large File threshold fails with LOG_TOO_LARGE, unless `allowLarge` says to go ahead.
+   * Fetches the last lines of a Log Stream in a Log Source. Asking for all of a log larger than the
+   * Large File threshold fails with LOG_TOO_LARGE, unless `allowLarge` says to go ahead. Asking for the Previous Log
+   * of a Log Stream whose Source Type has none fails with LOG_UNAVAILABLE.
    */
   openLog(sourceId: string, path: SourcePath, options?: OpenLogOptions): Promise<LogSnapshot>
   /**
-   * Opens a container's log like openLog, and Follows it from its last line: what comes next arrives as
+   * Opens a Log Stream like openLog, and Follows it from its last line: what comes next arrives as
    * FollowEvents with the returned `followId`, until the Follow is stopped or ends by itself (disconnecting
-   * its Source ends it). While the container restarts, the Follow goes on with its new run. A Previous Log
+   * its Source ends it). From a Source Type with restarts, the Follow goes on with each new run; from one
+   * without, it ends when the Log Stream does. A Previous Log
    * has ended, so can't be followed: asking for one fails with NOT_FOLLOWABLE.
    */
   followLog(sourceId: string, path: SourcePath, options?: OpenLogOptions): Promise<FollowedLog>
