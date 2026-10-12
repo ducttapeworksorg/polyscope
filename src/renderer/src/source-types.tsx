@@ -127,15 +127,6 @@ function SshFields({ value, onChange, editing }: FieldsProps<SshSettings>) {
   const sshHosts = useListing(() => core.listSshHosts(), [])
   const configured = sshHosts.items?.find((h) => h.alias === value.host.trim())
   const hostId = useId()
-  const auth = value.auth ?? 'keyFile'
-  // Only a secret stored for the way it signs in counts.
-  const signsInSame = editing?.type === 'sshFiles' && editing.auth === auth
-  const stored = signsInSame && (auth === 'password' ? editing.passwordSet : editing.passphraseSet)
-  const [weakSecrets, setWeakSecrets] = useState(false)
-
-  useEffect(() => {
-    void window.polyscope.secretStorageIsWeak().then(setWeakSecrets)
-  }, [])
 
   return (
     <>
@@ -168,6 +159,28 @@ function SshFields({ value, onChange, editing }: FieldsProps<SshSettings>) {
       </div>
       {text('user', 'sshSource.user', 'sshSource.user.hint', configured?.user)}
       {text('path', 'sshSource.path', 'sshSource.path.hint')}
+      <SshSignInFields value={value} onChange={onChange} editing={editing} />
+    </>
+  )
+}
+
+/** How a Source signs in over SSH, as an SSH Files Source does, or a Docker Logs Source to an `ssh://` context's host. */
+type SshSignInSettings = Extract<NewSource, { type: 'sshFiles' | 'dockerLogs' }>
+
+/** The way a Source signs in over SSH: through the agent, with a key file and its passphrase, or with a password. */
+function SshSignInFields<S extends SshSignInSettings>({ value, onChange, editing }: FieldsProps<S>) {
+  const auth = value.auth ?? (value.type === 'sshFiles' ? 'keyFile' : 'agent')
+  // Only a secret stored for the way it signs in counts.
+  const signsInSame = (editing?.type === 'sshFiles' || editing?.type === 'dockerLogs') && editing.auth === auth
+  const stored = signsInSame && (auth === 'password' ? editing.passwordSet : editing.passphraseSet)
+  const [weakSecrets, setWeakSecrets] = useState(false)
+
+  useEffect(() => {
+    void window.polyscope.secretStorageIsWeak().then(setWeakSecrets)
+  }, [])
+
+  return (
+    <>
       <div className="field">
         <span className="field__label" id="ssh-auth-label">
           {t('sshSource.auth')}
@@ -204,14 +217,14 @@ function SshFields({ value, onChange, editing }: FieldsProps<SshSettings>) {
 }
 
 /** The key file that signs in, and its passphrase if it's encrypted. */
-function KeyFileFields({
+function KeyFileFields<S extends SshSignInSettings>({
   value,
   onChange,
   stored,
   weakSecrets
 }: {
-  value: SshSettings
-  onChange(value: SshSettings): void
+  value: S
+  onChange(value: S): void
   stored: boolean
   weakSecrets: boolean
 }) {
@@ -635,7 +648,7 @@ type DockerLogsSettings = Extract<NewSource, { type: 'dockerLogs' }>
 /** The name a Docker Logs Source is given from its context: Docker, for the default one. */
 const dockerName = (context: string) => (context === defaultDockerContext ? t('dockerSource.defaultName') : context)
 
-function DockerLogsFields({ value, onChange }: FieldsProps<DockerLogsSettings>) {
+function DockerLogsFields({ value, onChange, editing }: FieldsProps<DockerLogsSettings>) {
   const context = value.context || defaultDockerContext
   const contexts = useListing(() => core.listDockerContexts(), [])
   const listed = contexts.items ?? []
@@ -646,6 +659,8 @@ function DockerLogsFields({ value, onChange }: FieldsProps<DockerLogsSettings>) 
   )
   const chosen = listed.find((c) => c.name === context)
   const current = listed.find((c) => c.current)
+  // Signing in only matters to an engine reached over SSH: the context's, or for the default, the current one's.
+  const overSsh = (context === defaultDockerContext ? current : chosen)?.host.startsWith('ssh://') ?? false
   // A new Source is named after its context.
   useEffect(() => {
     if (!value.name.trim()) onChange({ ...value, name: dockerName(context) })
@@ -663,20 +678,23 @@ function DockerLogsFields({ value, onChange }: FieldsProps<DockerLogsSettings>) 
         : contexts.items && t('dockerSource.context.missing'))
 
   return (
-    <div className="field">
-      <label className="field__label" htmlFor="docker-context">
-        {t('dockerSource.context')}
-      </label>
-      <select id="docker-context" className="field__input field__select" value={context} onChange={(e) => pick(e.target.value)}>
-        <option value={defaultDockerContext}>{t('dockerSource.context.default')}</option>
-        {choices.map((name) => (
-          <option key={name} value={name}>
-            {name}
-          </option>
-        ))}
-      </select>
-      <span className="field__hint">{hint}</span>
-    </div>
+    <>
+      <div className="field">
+        <label className="field__label" htmlFor="docker-context">
+          {t('dockerSource.context')}
+        </label>
+        <select id="docker-context" className="field__input field__select" value={context} onChange={(e) => pick(e.target.value)}>
+          <option value={defaultDockerContext}>{t('dockerSource.context.default')}</option>
+          {choices.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <span className="field__hint">{hint}</span>
+      </div>
+      {overSsh && <SshSignInFields value={value} onChange={onChange} editing={editing} />}
+    </>
   )
 }
 
@@ -790,8 +808,10 @@ export const sourceTypeUi: SourceTypeUis = {
     label: 'sourceType.dockerLogs',
     hint: 'sourceType.dockerLogs.hint',
     Icon: DockerLogsIcon,
-    blank: () => ({ type: 'dockerLogs', name: '', context: defaultDockerContext }),
-    settingsOf: ({ name, context }) => ({ type: 'dockerLogs', name, context }),
+    // As for SSH Files, the agent first, for an ssh:// context.
+    blank: () => ({ type: 'dockerLogs', name: '', context: defaultDockerContext, auth: 'agent', keyFile: '', passphrase: '', password: '' }),
+    // Everything but the passphrase or password, which the renderer never has: left blank, the stored one stays.
+    settingsOf: ({ name, context, auth, keyFile }) => ({ type: 'dockerLogs', name, context, auth, keyFile, passphrase: '', password: '' }),
     fullPath: enginePath,
     Fields: DockerLogsFields
   }

@@ -25,7 +25,8 @@ test.beforeEach(async () => {
         currentContext: 'podman',
         contexts: [
           { name: 'podman', host: engine.host },
-          { name: 'build-box', host: 'tcp://build.internal:2376' }
+          { name: 'build-box', host: 'tcp://build.internal:2376' },
+          { name: 'vm', host: 'ssh://ops@vm.internal' }
         ]
       })
     }
@@ -73,11 +74,25 @@ test('a Docker Logs Source offers the Docker CLI’s contexts, and is named afte
   const dialog = await openAddDockerSource(window)
   const context = dialog.getByLabel('Context', { exact: true })
 
-  await expect(context.locator('option')).toHaveText(['default', 'build-box', 'podman'])
+  await expect(context.locator('option')).toHaveText(['default', 'build-box', 'podman', 'vm'])
   await expect(dialog.getByText('the current context, podman')).toBeVisible()
 
   await context.selectOption('build-box')
 
   await expect(dialog.getByLabel('Name', { exact: true })).toHaveValue('build-box')
   await expect(dialog.getByText('Its engine: tcp://build.internal:2376')).toBeVisible()
+})
+
+test('a Docker Logs Source asks how to sign in only for an ssh:// context', async () => {
+  const window = await app.firstWindow()
+  const dialog = await openAddDockerSource(window)
+  const signIn = dialog.getByRole('radiogroup', { name: 'Sign in with' })
+
+  await expect(signIn).toBeHidden()
+
+  await dialog.getByLabel('Context', { exact: true }).selectOption('vm')
+
+  await expect(signIn.getByRole('radio', { name: 'SSH agent' })).toBeChecked()
+  await signIn.locator('label.segmented__option', { hasText: 'Key file' }).click()
+  await expect(dialog.getByRole('textbox', { name: 'Key file', exact: true })).toBeVisible()
 })

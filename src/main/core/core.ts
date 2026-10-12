@@ -52,6 +52,7 @@ import { listAwsProfiles } from './aws-profiles'
 import { CoreError } from './core-error'
 import { dockerEndpointOf, listDockerContexts } from './docker-contexts'
 import { connectDockerEngine } from './docker-log-source'
+import { dialerOver } from './docker-ssh'
 import { createEnvironmentStore, defaultEnvironments, isColor } from './environment-store'
 import {
   binarySniffLength,
@@ -123,9 +124,11 @@ function withDefaults(saved: SavedSource): SavedSource {
     case 'sshFiles':
       // Before agent and password sign-in, every SSH Files Source signed in with a key file.
       return { ...source, auth: source.auth ?? 'keyFile', keyFile: source.keyFile ?? '' }
+    case 'dockerLogs':
+      // Before ssh:// contexts, a Docker Logs Source had no way of signing in.
+      return { ...source, auth: source.auth ?? 'agent', keyFile: source.keyFile ?? '' }
     case 'kubernetesFiles':
     case 'kubernetesLogs':
-    case 'dockerLogs':
       return source
   }
 }
@@ -140,18 +143,18 @@ type Target =
   | Omit<S3SourceInfo, 'id' | 'name' | 'environmentId' | 'lastNLines' | 'secretKeySet'>
   | Pick<KubernetesFilesSourceInfo, 'type' | 'context' | 'namespace' | 'workloadKind' | 'workloadName' | 'path'>
   | Pick<KubernetesLogsSourceInfo, 'type' | 'context' | 'namespace'>
-  | Pick<DockerLogsSourceInfo, 'type' | 'context'>
+  | Pick<DockerLogsSourceInfo, 'type' | 'context' | 'auth' | 'keyFile'>
 
 type S3Settings = Extract<Target, { type: 's3' }>
 
 /**
  * The name a Source's one secret is stored under, when its settings have a use for one: an S3 Source's secret key
- * when it signs in with keys, an SSH Files Source's key file passphrase or password.
+ * when it signs in with keys, an SSH Files Source's (or a Docker Logs Source's, for an ssh:// host) key file passphrase or password.
  */
 function secretNameOf(settings: { type: SourceTypeId; auth?: string }) {
   if (settings.type === 's3') return (settings.auth ?? 'keys') === 'keys' ? 'secretKey' : undefined
-  if (settings.type !== 'sshFiles') return undefined
-  const auth = settings.auth ?? 'keyFile'
+  if (settings.type !== 'sshFiles' && settings.type !== 'dockerLogs') return undefined
+  const auth = settings.auth ?? (settings.type === 'sshFiles' ? 'keyFile' : 'agent')
   return auth === 'keyFile' ? 'passphrase' : auth === 'password' ? 'password' : undefined
 }
 
@@ -199,21 +202,25 @@ function sshTargetOf(input: NewSshFilesSource): Extract<Target, { type: 'sshFile
   return { type: 'sshFiles', host, user, ...(port !== undefined && { port }), path: normaliseAbsolutePath(input.path ?? '', 'INVALID_PATH'), auth, keyFile }
 }
 
+/** A server to reach over SSH, as a Source's settings name it, and how to sign in to it; blanks are the SSH config's. */
+type SshServerSettings = Pick<SshFilesSourceInfo, 'host' | 'user' | 'port' | 'auth' | 'keyFile'>
+
 /**
- * The servers an SSH Files Source goes through, as ~/.ssh/config routes its host, bastions first and its own server
- * last; each with a user to sign in as, and a key file where it signs in with one. Its own server's user and key
- * file are those in its settings, or else the config's; a bastion's, the config's, or else its own server's.
+ * The servers a Source reaching `target` over SSH goes through, as ~/.ssh/config routes its host, bastions first and its own
+ * server last; each with a user to sign in as, and a key file where it signs in with one. Its own server's user and key
+ * file are those in its settings, or else the config's; a bastion's, the config's, or else its own server's. `who` is
+ * what needs them, in the failures saying what's missing.
  */
-async function sshRouteOf(target: Extract<Target, { type: 'sshFiles' }>) {
+async function sshRouteOf(target: SshServerSettings, who = 'An SSH Files Source') {
   const route = routeTo(await readSshConfig(), { host: target.host, ...(target.user && { user: target.user }), ...(target.port && { port: target.port }) })
   const server = route.at(-1)!
   const user = server.user
-  if (!user) throw new CoreError('USER_REQUIRED', 'An SSH Files Source needs a user to sign in as, here or as the User in ~/.ssh/config')
+  if (!user) throw new CoreError('USER_REQUIRED', `${who} needs a user to sign in as, here or as the User in ~/.ssh/config`)
   // As ssh does, the first IdentityFile that's there; if none is, the first, for the failure to name.
   const configured = (files: string[]) => files.find((file) => existsSync(file)) ?? files[0]
   const keyFile = target.keyFile || configured(server.identityFiles) || ''
   if (target.auth === 'keyFile' && !keyFile) {
-    throw new CoreError('KEY_FILE_REQUIRED', 'An SSH Files Source needs a key file to sign in with, here or as the IdentityFile in ~/.ssh/config')
+    throw new CoreError('KEY_FILE_REQUIRED', `${who} needs a key file to sign in with, here or as the IdentityFile in ~/.ssh/config`)
   }
   return route.map((endpoint) => ({
     host: endpoint.host,
@@ -248,7 +255,11 @@ function clusterOf(input: { context?: string; namespace?: string }) {
 function targetOf(input: NewSource): Target {
   if (input.type === 'local') return { type: 'local', rootPath: input.rootPath.trim(), showHidden: input.showHidden ?? true }
   if (input.type === 'kubernetesLogs') return { type: 'kubernetesLogs', ...clusterOf(input) }
-  if (input.type === 'dockerLogs') return { type: 'dockerLogs', context: input.context?.trim() || defaultDockerContext }
+  if (input.type === 'dockerLogs') {
+    // The agent unless told: it signs in without Polyscope holding a key or password.
+    const auth = input.auth ?? 'agent'
+    return { type: 'dockerLogs', context: input.context?.trim() || defaultDockerContext, auth, keyFile: auth === 'keyFile' ? (input.keyFile?.trim() ?? '') : '' }
+  }
   if (input.type === 'kubernetesFiles') {
     const cluster = clusterOf(input)
     const workloadKind = workloadKindOf(input.workloadKind)
@@ -460,7 +471,7 @@ export function createCore(options: CoreOptions = {}): Core {
       saved.environmentId === undefined || environments.some((e) => e.id === saved.environmentId) ? { ...saved } : unlabelled(saved)
     // Only whether there is a secret: the secret itself stays in the core.
     if (source.type === 's3') return { ...source, secretKeySet: (await secrets.get(source.id, 'secretKey')) !== undefined }
-    if (source.type === 'sshFiles') {
+    if (source.type === 'sshFiles' || source.type === 'dockerLogs') {
       const stored = async (name: string) => secretNameOf(source) === name && (await secrets.get(source.id, name)) !== undefined
       return { ...source, passphraseSet: await stored('passphrase'), passwordSet: await stored('password') }
     }
@@ -715,10 +726,11 @@ export function createCore(options: CoreOptions = {}): Core {
     }
   }
 
+  /** What a backend holds open, like an SSH connection, if anything: to close, or to hear it drop. */
+  const heldOpen = (backend: Backend) => (backend.kind === 'files' ? backend.fileSource : backend.logSource)
+
   /** Lets go of what a backend holds open, like an SSH connection. */
-  const closeBackend = (backend: Backend) => {
-    if (backend.kind === 'files') backend.fileSource.close?.()
-  }
+  const closeBackend = (backend: Backend) => heldOpen(backend).close?.()
 
   /** Forgets a Source's connection, stopping its Follows and caching, and closing what it held open. */
   const dropConnection = (sourceId: string) => {
@@ -731,13 +743,11 @@ export function createCore(options: CoreOptions = {}): Core {
   /** A Source's connection to `backend`, marked dropped, its Follows and caching stopped, if what it holds open drops. */
   const connectedTo = (sourceId: string, backend: Backend): Connected => {
     const connection: Connected = { state: 'connected', backend }
-    if (backend.kind === 'files') {
-      backend.fileSource.onDropped?.(() => {
-        if (connections.get(sourceId) !== connection) return
-        connection.dropped = true
-        stopActivity(sourceId, { lost: true })
-      })
-    }
+    heldOpen(backend).onDropped?.(() => {
+      if (connections.get(sourceId) !== connection) return
+      connection.dropped = true
+      stopActivity(sourceId, { lost: true })
+    })
     return connection
   }
 
@@ -927,12 +937,11 @@ export function createCore(options: CoreOptions = {}): Core {
   }
 
   /**
-   * Connects to an SSH Files Source's server, its host key checked, signs in (with `secret`, its key file's passphrase
-   * or its password, if it has one), and opens its folder, once it's clear the folder is there.
+   * Connects to a server over SSH, through any bastions ~/.ssh/config routes it through, each one's host key checked,
+   * and signs in (with `secret`, the key file's passphrase or the password, if there is one). `who` is what's connecting.
    */
-  const reachSsh = async (target: Extract<Target, { type: 'sshFiles' }>, secret?: string) => {
-    const { host, path } = target
-    const route = await sshRouteOf(target)
+  const signInOverSsh = async (target: SshServerSettings, secret: string | undefined, who?: string) => {
+    const route = await sshRouteOf(target, who)
     const signIns = await sshSignInsOf(target.auth, route.map((endpoint) => endpoint.keyFile), secret)
     // Every server's host key is checked, bastions' too.
     const hops = await Promise.all(
@@ -942,7 +951,13 @@ export function createCore(options: CoreOptions = {}): Core {
       }))
     )
     const server = hops.pop()!
-    const connection = await connectSsh(server.target, server.options, hops)
+    return connectSsh(server.target, server.options, hops)
+  }
+
+  /** Signs in to an SSH Files Source's server, and opens its folder, once it's clear the folder is there. */
+  const reachSsh = async (target: Extract<Target, { type: 'sshFiles' }>, secret?: string) => {
+    const { host, path } = target
+    const connection = await signInOverSsh(target, secret)
     const fileSource = createSshFileSource(connection, path)
     try {
       const root = await fileSource.stat('').catch((error: unknown) => {
@@ -972,8 +987,25 @@ export function createCore(options: CoreOptions = {}): Core {
     return logSource
   }
 
-  /** Opens a Docker Logs Source's engine, once it has answered: its Log Source, and what the engine says it is. */
-  const reachDocker = async ({ context }: Extract<Target, { type: 'dockerLogs' }>) => connectDockerEngine(await dockerEndpointOf(context))
+  /**
+   * Opens a Docker Logs Source's engine, once it has answered: its Log Source, and what the engine says it is. An
+   * `ssh://` context's is reached over an SSH connection to its host, signed in as an SSH Files Source signs in (with
+   * `secret`, if it has one), which the Log Source holds open.
+   */
+  const reachDocker = async ({ context, auth, keyFile }: Extract<Target, { type: 'dockerLogs' }>, secret?: string) => {
+    const endpoint = await dockerEndpointOf(context)
+    if (!('ssh' in endpoint)) return connectDockerEngine(endpoint)
+    const { host, user = '', port } = endpoint.ssh
+    const connection = await signInOverSsh({ host, user, ...(port && { port }), auth, keyFile }, secret, `The ssh:// Docker context ${context}`)
+    try {
+      const { logSource, version } = await connectDockerEngine(endpoint, dialerOver(connection, host))
+      const held: LogSource = { ...logSource, close: () => connection.close(), onDropped: (listener) => connection.onDrop(listener) }
+      return { logSource: held, version }
+    } catch (error) {
+      connection.close()
+      throw error
+    }
+  }
 
   /**
    * Opens a Source's File or Log Source and lists its root: what connecting, or testing a connection, has to get through.
@@ -988,7 +1020,7 @@ export function createCore(options: CoreOptions = {}): Core {
     else if (target.type === 's3') backend = { kind: 'files', fileSource: createS3FileSource(await s3TargetOf(target, secret)) }
     else if (target.type === 'kubernetesFiles') backend = { kind: 'files', fileSource: await reachKubernetesFiles(target) }
     else if (target.type === 'dockerLogs') {
-      const engine = await reachDocker(target)
+      const engine = await reachDocker(target, secret)
       backend = { kind: 'logs', logSource: engine.logSource }
       serverVersion = engine.version
     } else backend = { kind: 'logs', logSource: await reachKubernetes(target) }
@@ -1008,7 +1040,13 @@ export function createCore(options: CoreOptions = {}): Core {
     const name = secretNameOf(input)
     if (name === undefined) return undefined
     const typed =
-      input.type === 's3' ? input.secretAccessKey : input.type === 'sshFiles' ? (name === 'password' ? input.password : input.passphrase) : undefined
+      input.type === 's3'
+        ? input.secretAccessKey
+        : input.type === 'sshFiles' || input.type === 'dockerLogs'
+          ? name === 'password'
+            ? input.password
+            : input.passphrase
+          : undefined
     if (!isBlank(typed)) return typed
     return sourceId === undefined ? undefined : secrets.get(sourceId, name)
   }
@@ -1029,10 +1067,9 @@ export function createCore(options: CoreOptions = {}): Core {
       return { saved: { ...target, name, ...label } }
     }
     // Nor is a cluster or an engine: it may be away, or its context not in the kubeconfig yet.
-    if (target.type === 'kubernetesLogs' || target.type === 'kubernetesFiles' || target.type === 'dockerLogs') {
-      return { saved: { ...target, name, ...label } }
-    }
-    // An S3 or SSH Files Source isn't reached until it's connected: it may be saved while its server is away.
+    if (target.type === 'kubernetesLogs' || target.type === 'kubernetesFiles') return { saved: { ...target, name, ...label } }
+    // An S3, SSH Files or Docker Logs Source isn't reached until it's connected: it may be saved while its server, or
+    // its engine's ssh:// host, is away.
     const typed = await secretFor(input)
     if (target.type === 's3' && target.auth === 'keys' && typed === undefined && (await secretFor(input, editing)) === undefined) {
       throw new CoreError('SECRET_KEY_REQUIRED', 'An S3 Source needs a secret key')
@@ -1047,6 +1084,23 @@ export function createCore(options: CoreOptions = {}): Core {
       throw new CoreError('PASSWORD_REQUIRED', 'An SSH Files Source signing in with a password needs one')
     }
     return { saved: { ...target, name, ...label }, ...(typed !== undefined && { secret: typed }) }
+  }
+
+  /**
+   * The server a Source reaches over SSH, if it does, where ~/.ssh/config puts it: an alias and the host name it stands
+   * for are one server. An SSH Files Source's, or the host of a Docker Logs Source's `ssh://` context; none for one whose
+   * context the Docker CLI no longer has.
+   */
+  const sshServerOf = async (source: SavedSource, config: Awaited<ReturnType<typeof readSshConfig>>) => {
+    let named: { host: string; port?: number }
+    if (source.type === 'sshFiles') named = source
+    else if (source.type === 'dockerLogs') {
+      const endpoint = await dockerEndpointOf(source.context).catch(() => undefined)
+      if (!endpoint || !('ssh' in endpoint)) return undefined
+      named = endpoint.ssh
+    } else return undefined
+    const resolved = config.resolve(named.host)
+    return { host: resolved.hostName, port: named.port ?? resolved.port ?? 22 }
   }
 
   /** Every setting but the name, label and remembered view choices, in a form that compares equal whatever order the keys were saved in. */
@@ -1144,20 +1198,13 @@ export function createCore(options: CoreOptions = {}): Core {
       await secrets.remove(sourceId)
       // As do the host keys trusted in Polyscope for its server, unless another Source reaches the same server: at worst,
       // a Source that fails to delete has its server's key offered to trust again.
-      if (source.type === 'sshFiles') {
-        // Where ~/.ssh/config puts each Source's server: an alias and the host name it stands for are one server.
-        const config = await readSshConfig()
-        const serverOf = ({ host, port }: { host: string; port?: number }) => {
-          const resolved = config.resolve(host)
-          return { host: resolved.hostName, port: port ?? resolved.port ?? 22 }
-        }
-        const server = serverOf(source)
-        const onSameServer = (s: SavedSource) => {
-          if (s === source || s.type !== 'sshFiles') return false
-          const other = serverOf(s)
-          return other.host.toLowerCase() === server.host.toLowerCase() && other.port === server.port
-        }
-        if (!sources.some(onSameServer)) await hostKeys.forget(server.host, server.port)
+      const config = await readSshConfig()
+      const server = await sshServerOf(source, config)
+      if (server) {
+        const others = await Promise.all(sources.filter((s) => s !== source).map((s) => sshServerOf(s, config)))
+        const onSameServer = (other: { host: string; port: number } | undefined) =>
+          other?.host.toLowerCase() === server.host.toLowerCase() && other.port === server.port
+        if (!others.some(onSameServer)) await hostKeys.forget(server.host, server.port)
       }
       await commit(() => sources.splice(sources.indexOf(sourceFor(sourceId)), 1))
       dropConnection(sourceId)

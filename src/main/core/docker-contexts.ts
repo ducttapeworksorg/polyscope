@@ -79,12 +79,34 @@ export interface DockerTls {
   verify: boolean
 }
 
-/** Where a Docker Engine's API is served: a Unix socket, a named pipe on Windows, or a TCP port, maybe over TLS. */
-export type DockerEndpoint = { socketPath: string } | { host: string; port: number; tls?: DockerTls }
+/**
+ * The host an `ssh://` engine is on, as the URL names it: a host name or address, or a `Host` alias from
+ * ~/.ssh/config, and the user and port if it gives them.
+ */
+export interface DockerSshHost {
+  host: string
+  user?: string
+  port?: number
+}
 
-/** How a Docker endpoint is named in messages: its socket, or its `tcp://` address. */
-export const describeEndpoint = (endpoint: DockerEndpoint) =>
-  'socketPath' in endpoint ? endpoint.socketPath : `tcp://${endpoint.host.includes(':') ? `[${endpoint.host}]` : endpoint.host}:${endpoint.port}`
+/**
+ * Where a Docker Engine's API is served: a Unix socket, a named pipe on Windows, a TCP port, maybe over TLS, or on a
+ * host reached over SSH, where `docker system dial-stdio` reaches it.
+ */
+export type DockerEndpoint = { socketPath: string } | { host: string; port: number; tls?: DockerTls } | { ssh: DockerSshHost }
+
+/** A host as a URL names it: an IPv6 address in brackets. */
+const bracketed = (host: string) => (host.includes(':') ? `[${host}]` : host)
+
+/** How a Docker endpoint is named in messages: its socket, or its `tcp://` or `ssh://` address. */
+export function describeEndpoint(endpoint: DockerEndpoint) {
+  if ('socketPath' in endpoint) return endpoint.socketPath
+  if ('ssh' in endpoint) {
+    const { host, user, port } = endpoint.ssh
+    return `ssh://${user ? `${user}@` : ''}${bracketed(host)}${port ? `:${port}` : ''}`
+  }
+  return `tcp://${bracketed(endpoint.host)}:${endpoint.port}`
+}
 
 /** The TLS material in a folder, as `ca.pem`, `cert.pem` and `key.pem`; those that aren't there are left out. */
 async function tlsFilesIn(dir: string) {
@@ -92,18 +114,27 @@ async function tlsFilesIn(dir: string) {
   return { ...(ca && { ca }), ...(cert && { cert }), ...(key && { key }) }
 }
 
-/** The engine a `unix://`, `npipe://` or `tcp://` host names, as DOCKER_HOST or a context's endpoint gives it. */
+/** A `tcp://` or `ssh://` host as a URL. */
+function urlOf(host: string) {
+  try {
+    return new URL(host)
+  } catch {
+    throw new CoreError('UNSUPPORTED_DOCKER_HOST', host)
+  }
+}
+
+/** The engine a `unix://`, `npipe://`, `tcp://` or `ssh://` host names, as DOCKER_HOST or a context's endpoint gives it. */
 function endpointAt(host: string, tls?: DockerTls): DockerEndpoint {
   if (host.startsWith('unix://')) return { socketPath: host.slice('unix://'.length) }
   // npipe:////./pipe/docker_engine, as the Docker CLI writes it, is the pipe \\.\pipe\docker_engine.
   if (host.startsWith('npipe://')) return { socketPath: host.slice('npipe://'.length).replaceAll('/', '\\').replace(/^\\*/, '\\\\') }
+  if (host.startsWith('ssh://')) {
+    const url = urlOf(host)
+    const user = decodeURIComponent(url.username)
+    return { ssh: { host: url.hostname.replace(/^\[(.*)\]$/, '$1'), ...(user && { user }), ...(url.port && { port: Number(url.port) }) } }
+  }
   if (host.startsWith('tcp://')) {
-    let url: URL
-    try {
-      url = new URL(host)
-    } catch {
-      throw new CoreError('UNSUPPORTED_DOCKER_HOST', host)
-    }
+    const url = urlOf(host)
     // As the CLI does: the engine's TLS port unless one is given, or its plain one without TLS.
     const port = url.port ? Number(url.port) : tls ? 2376 : 2375
     return { host: url.hostname.replace(/^\[(.*)\]$/, '$1'), port, ...(tls && { tls }) }

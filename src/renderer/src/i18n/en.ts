@@ -472,7 +472,8 @@ export const en = {
     'The server’s host key isn’t the one known for it, so Polyscope won’t connect: someone may be impersonating it. Check with the server’s administrator. ({message})',
   'error.SIGN_IN_REFUSED': 'The server refused to let you sign in: {message}',
   'error.SFTP_UNAVAILABLE': 'The server’s SFTP subsystem is turned off, so its files can’t be read. ({message})',
-  'error.UNSUPPORTED_DOCKER_HOST': 'Polyscope can only reach a Docker Engine through a local socket so far, not DOCKER_HOST={message}.',
+  'error.UNSUPPORTED_DOCKER_HOST': 'Polyscope can’t reach a Docker Engine at {message}: only unix://, npipe://, tcp:// and ssh:// hosts.',
+  'error.DOCKER_NOT_FOUND': 'The host has no docker command for Polyscope to reach its engine through. ({message})',
   'error.UNSUPPORTED_SSH_OPTION': 'Your ~/.ssh/config asks for something Polyscope doesn’t support: {message}',
   'error.UNKNOWN': 'Couldn’t complete that: {message}'
 } satisfies Record<string, string> &

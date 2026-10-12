@@ -27,3 +27,13 @@ export const testSyslog = '_standalone/polyscope-syslog'
  * tests/docker/tls.sh sets it up and POLYSCOPE_TEST_DOCKER_TLS_CONTEXT names it; the tests through it are skipped without it.
  */
 export const testTlsContext = process.env['POLYSCOPE_TEST_DOCKER_TLS_CONTEXT'] || undefined
+
+/**
+ * The Docker context reaching the seeded engine over SSH, through an OpenSSH sshd on this machine, as tests/docker/ssh.sh
+ * sets it up and POLYSCOPE_TEST_DOCKER_SSH_CONTEXT names it, with POLYSCOPE_TEST_DOCKER_SSH_DIR the folder holding the
+ * key that signs in (`client_key`) and a `known_hosts` line for the server's host key; the tests through it are skipped without them.
+ */
+export const testSshContext =
+  process.env['POLYSCOPE_TEST_DOCKER_SSH_CONTEXT'] && process.env['POLYSCOPE_TEST_DOCKER_SSH_DIR']
+    ? { name: process.env['POLYSCOPE_TEST_DOCKER_SSH_CONTEXT'], dir: process.env['POLYSCOPE_TEST_DOCKER_SSH_DIR'] }
+    : undefined

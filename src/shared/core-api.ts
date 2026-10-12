@@ -105,6 +105,17 @@ export interface NewDockerLogsSource {
    * DOCKER_HOST's engine, or else DOCKER_CONTEXT's or the CLI's current context's, or else the local one.
    */
   context?: string
+  /**
+   * How to sign in to the host of an `ssh://` context, as an SSH Files Source signs in to its server: `agent` when left
+   * out. Ignored for an engine reached otherwise.
+   */
+  auth?: SshAuth
+  /** The private key file that signs in with `keyFile`; when blank, the SSH config's IdentityFile for the host. */
+  keyFile?: string
+  /** The key file's passphrase, kept as an SSH Files Source's is; blank or left out when editing keeps the stored one. */
+  passphrase?: string
+  /** The password that signs in with `password`, kept like a passphrase; blank or left out when editing keeps it. */
+  password?: string
   /** The Environment the Source is labelled with; unlabelled when left out. */
   environmentId?: string
 }
@@ -222,6 +233,14 @@ export interface DockerLogsSourceInfo extends SourceIdentity {
   type: 'dockerLogs'
   /** Normalised: `default` when none was named. */
   context: string
+  /** How it signs in to an `ssh://` context's host. */
+  auth: SshAuth
+  /** Blank unless it signs in with a key file, and then blank for the SSH config's IdentityFile. */
+  keyFile: string
+  /** Whether a passphrase is stored for the key file; the passphrase itself never leaves the core. */
+  passphraseSet: boolean
+  /** Whether a password is stored; the password itself never leaves the core. */
+  passwordSet: boolean
 }
 
 export interface KubernetesFilesSourceInfo extends SourceIdentity {
@@ -849,8 +868,10 @@ export type CoreErrorCode =
   | 'SFTP_UNAVAILABLE'
   /** A host whose `~/.ssh/config` needs an option Polyscope doesn't support, like ProxyCommand; the message names it. */
   | 'UNSUPPORTED_SSH_OPTION'
-  /** A Docker host (DOCKER_HOST's, or a context's) Polyscope can't reach an engine through yet, like an `ssh://` one; the message names it. */
+  /** A Docker host (DOCKER_HOST's, or a context's) Polyscope can't reach an engine through, like an `fd://` one; the message names it. */
   | 'UNSUPPORTED_DOCKER_HOST'
+  /** An `ssh://` Docker host without the `docker` command, or with none on the signed-in user's PATH. */
+  | 'DOCKER_NOT_FOUND'
   | 'UNKNOWN'
 
 /** What a connection test that passed found out. */

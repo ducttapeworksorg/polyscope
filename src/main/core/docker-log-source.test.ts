@@ -1,9 +1,14 @@
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe } from 'vitest'
 import { dockerEndpointOf } from './docker-contexts'
 import { connectDockerEngine } from './docker-log-source'
+import { dialerOver } from './docker-ssh'
 import { startTestDockerEngine, type TestDockerEngine } from './docker-test-engine'
-import { hasTestDocker, testCounter, testTlsContext } from './docker-test-seed'
+import { hasTestDocker, testCounter, testSshContext, testTlsContext } from './docker-test-seed'
 import { describeLogSourceContract } from './log-source-contract'
+import type { LogSource } from './log-source'
+import { connectSsh, type SshConnection } from './ssh-connection'
 
 const capabilities = { previousLog: false, restarts: true, status: true }
 
@@ -46,4 +51,24 @@ describe.skipIf(!hasTestDocker || !testTlsContext)('Docker Logs against the test
     logSource: (await connectDockerEngine(await dockerEndpointOf(testTlsContext!))).logSource,
     counter: testCounter
   }))
+})
+
+// Each connection to the engine runs the docker command on the host, slow while the other test files keep the engine busy.
+describe.skipIf(!hasTestDocker || !testSshContext)('Docker Logs against the test engine, through an ssh:// context', { timeout: 20_000 }, () => {
+  // One connection for the whole suite, as a Source keeps one: signing in afresh for each test is slow under load.
+  let connection: SshConnection | undefined
+  let reached: Promise<LogSource> | undefined
+  afterAll(() => connection?.close())
+
+  const reach = async () => {
+    const endpoint = await dockerEndpointOf(testSshContext!.name)
+    if (!('ssh' in endpoint)) throw new Error(`${testSshContext!.name} isn't an ssh:// context`)
+    const { host, port = 22, user = '' } = endpoint.ssh
+    const privateKey = await readFile(join(testSshContext!.dir, 'client_key'))
+    // The façade tests check the host key; this suite trusts the server ssh.sh started.
+    connection = await connectSsh({ host, port, user, privateKey }, { checkHostKey: () => 'trusted' })
+    return (await connectDockerEngine(endpoint, dialerOver(connection, host))).logSource
+  }
+
+  describeLogSourceContract('Docker Logs over SSH', capabilities, async () => ({ logSource: await (reached ??= reach()), counter: testCounter }))
 })

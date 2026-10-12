@@ -1,11 +1,13 @@
-import { request as httpRequest, type ClientRequest, type IncomingMessage } from 'node:http'
+import { Agent, request as httpRequest, type ClientRequest, type IncomingMessage } from 'node:http'
 import { request as httpsRequest } from 'node:https'
+import type { Duplex } from 'node:stream'
 import { getCACertificates } from 'node:tls'
 import type { LogGroupNode, LogNode, LogStreamNode, SourcePath } from '@shared/core-api'
 import { dockerStandaloneGroup as standalone } from '@shared/core-api'
 import { containerDetailsOf, containerRunOf, containerStatusOf, engineMillis, type ContainerInspect } from './container-status'
 import { CoreError } from './core-error'
 import { describeEndpoint, type DockerEndpoint } from './docker-contexts'
+import type { DockerDialer } from './docker-ssh'
 import type { LogConnection, LogFollowOptions, LogReadOptions, LogSource, LogStreamInfo } from './log-source'
 import { certificateCodes } from './network-errors'
 
@@ -23,6 +25,8 @@ const isSegment = (name: string | undefined): name is string => name !== undefin
 
 /** A failure to reach the engine at all, by the code Node gives, as a CoreError. */
 function reachError(error: NodeJS.ErrnoException, endpoint: DockerEndpoint): CoreError {
+  // Already told, as a connection dialled over SSH tells why it ended.
+  if (error instanceof CoreError) return error
   const where = describeEndpoint(endpoint)
   if (error.code === 'EACCES' || error.code === 'EPERM') {
     const group = process.platform === 'linux' ? ': add your user to the docker group, then sign in again' : ''
@@ -43,8 +47,40 @@ function reachError(error: NodeJS.ErrnoException, endpoint: DockerEndpoint): Cor
 /** What a TLS connection trusts when it names no CA: the OS's CAs and Node's, as the CLI trusts the OS's. */
 const defaultCas = () => [...new Set([...getCACertificates('default'), ...getCACertificates('system')])]
 
-/** Starts a GET of `path` from the engine: over its socket, or over TCP, with TLS if it's set up for it. */
-function requestTo(endpoint: DockerEndpoint, path: string, onResponse: (response: IncomingMessage) => void): ClientRequest {
+/**
+ * How an engine is reached: where it is, and for one on a host reached over SSH, how connections to it are dialled. Its
+ * short requests share a few connections kept open, as dialling one runs a command on the host; a Follow has its own.
+ */
+interface Engine {
+  endpoint: DockerEndpoint
+  dialed?: { dial: DockerDialer; agent: Agent }
+}
+
+/** How many connections an engine reached over SSH keeps for short requests: OpenSSH lets a connection run 10 commands at once. */
+const dialedConnections = 4
+
+/** Has an HTTP request go over a connection `dial` opens. */
+const dialing = (dial: DockerDialer) => (_options: unknown, done: (error: Error | null, stream?: Duplex) => void) =>
+  void dial().then((stream) => done(null, stream), (error: Error) => done(error))
+
+/** An engine at `endpoint`; reached over connections `dial` opens, if given. */
+function engineAt(endpoint: DockerEndpoint, dial?: DockerDialer): Engine {
+  if (!dial) return { endpoint }
+  const agent = new Agent({ keepAlive: true, maxSockets: dialedConnections })
+  Object.assign(agent, { createConnection: dialing(dial) })
+  return { endpoint, dialed: { dial, agent } }
+}
+
+/**
+ * Starts a GET of `path` from the engine: over its socket, over TCP, with TLS if it's set up for it, or over a
+ * connection dialled to it; one that goes on for long (`streaming`, a Follow) over a connection of its own.
+ */
+function requestTo({ endpoint, dialed }: Engine, path: string, streaming: boolean, onResponse: (response: IncomingMessage) => void): ClientRequest {
+  if (dialed) {
+    const via = streaming ? { createConnection: dialing(dialed.dial) } : { agent: dialed.agent }
+    return httpRequest({ ...via, path, method: 'GET', headers: { host: 'docker' } } as never, onResponse)
+  }
+  if ('ssh' in endpoint) throw new CoreError('UNSUPPORTED_DOCKER_HOST', describeEndpoint(endpoint))
   if ('socketPath' in endpoint) return httpRequest({ socketPath: endpoint.socketPath, path, method: 'GET', headers: { host: 'docker' } }, onResponse)
   const { host, port, tls } = endpoint
   if (!tls) return httpRequest({ host, port, path, method: 'GET' }, onResponse)
@@ -69,10 +105,16 @@ const messageOf = (body: Buffer) => {
 }
 
 /** Sends a GET to the engine, resolving with its response once it answers 2xx, or else failing with a CoreError. */
-function get(endpoint: DockerEndpoint, path: string, query: Record<string, string> = {}): Promise<{ response: IncomingMessage; stop(): void }> {
+function get(
+  engine: Engine,
+  path: string,
+  query: Record<string, string> = {},
+  { streaming = false } = {}
+): Promise<{ response: IncomingMessage; stop(): void }> {
+  const { endpoint } = engine
   const search = new URLSearchParams(query).toString()
   return new Promise((resolve, reject) => {
-    const request = requestTo(endpoint, `${path}${search ? `?${search}` : ''}`, (response) => {
+    const request = requestTo(engine, `${path}${search ? `?${search}` : ''}`, streaming, (response) => {
       const status = response.statusCode ?? 500
       if (status >= 200 && status < 300) return resolve({ response, stop: () => request.destroy() })
       void bodyOf(response).then(
@@ -89,8 +131,8 @@ function get(endpoint: DockerEndpoint, path: string, query: Record<string, strin
   })
 }
 
-async function getJson<T>(endpoint: DockerEndpoint, path: string, query?: Record<string, string>): Promise<T> {
-  const { response } = await get(endpoint, path, query)
+async function getJson<T>(engine: Engine, path: string, query?: Record<string, string>): Promise<T> {
+  const { response } = await get(engine, path, query)
   return JSON.parse((await bodyOf(response)).toString('utf8')) as T
 }
 
@@ -261,12 +303,12 @@ function inspectedNode(node: LogStreamNode, container: ContainerInspect): LogStr
  * level. Containers tell their Container Status and restarts, and a Follow carries on across restarts; Docker keeps
  * every run of a container in one log, so it has no Previous Log.
  */
-function createDockerLogSource(endpoint: DockerEndpoint, apiVersion: string): LogSource {
+function createDockerLogSource(engine: Engine, apiVersion: string): LogSource {
   const api = (path: string) => `/v${apiVersion}${path}`
 
-  const tree = async () => treeOf(await getJson<ContainerSummary[]>(endpoint, api('/containers/json'), { all: 'true' }))
+  const tree = async () => treeOf(await getJson<ContainerSummary[]>(engine, api('/containers/json'), { all: 'true' }))
 
-  const inspect = (ref: string) => getJson<ContainerInspect>(endpoint, api(`/containers/${encodeURIComponent(ref)}/json`))
+  const inspect = (ref: string) => getJson<ContainerInspect>(engine, api(`/containers/${encodeURIComponent(ref)}/json`))
 
   /** Listed nodes as they're shown: each container, and each folded into a row, inspected for how it's doing. */
   const withStatuses = (nodes: LogNode[], containers: Tree): Promise<LogNode[]> =>
@@ -297,7 +339,7 @@ function createDockerLogSource(endpoint: DockerEndpoint, apiVersion: string): Lo
   /** Asks for a container's log, failing with LOG_UNAVAILABLE, naming the log driver, when the engine can't read it back. */
   const logsOf = async ({ id, inspected }: { id: string; inspected: ContainerInspect }, query: Record<string, string>) => {
     try {
-      return await get(endpoint, api(`/containers/${id}/logs`), { stdout: 'true', stderr: 'true', ...query })
+      return await get(engine, api(`/containers/${id}/logs`), { stdout: 'true', stderr: 'true', ...query }, { streaming: query['follow'] === 'true' })
     } catch (error) {
       if (!(error instanceof CoreError) || error.code !== 'LOG_UNAVAILABLE') throw error
       const driver = inspected.HostConfig?.LogConfig?.Type ?? 'unknown'
@@ -354,7 +396,7 @@ function createDockerLogSource(endpoint: DockerEndpoint, apiVersion: string): Lo
       const ended = new Promise<void>((done, fail) => {
         response.on('data', (chunk: Buffer) => decoder.push(chunk))
         response.on('end', done)
-        response.on('error', (error) => fail(reachError(error, endpoint)))
+        response.on('error', (error) => fail(reachError(error, engine.endpoint)))
         // Closed before its end: the engine went away, or the stream was stopped.
         response.on('close', () => fail(new CoreError('UNREACHABLE', 'The log stream was cut off')))
       })
@@ -370,9 +412,13 @@ function createDockerLogSource(endpoint: DockerEndpoint, apiVersion: string): Lo
   }
 }
 
-/** Reaches a Docker Engine, agreeing on the API version to speak: a Log Source over it, and what the engine says it is. */
-export async function connectDockerEngine(endpoint: DockerEndpoint): Promise<{ logSource: LogSource; version: string }> {
-  const engine = await getJson<EngineVersion>(endpoint, '/version')
-  const apiVersion = olderApiVersion(engine.ApiVersion ?? newestApiVersion, newestApiVersion)
-  return { logSource: createDockerLogSource(endpoint, apiVersion), version: describeEngine(engine) }
+/**
+ * Reaches a Docker Engine, agreeing on the API version to speak: a Log Source over it, and what the engine says it is.
+ * An `ssh://` one is reached over connections `dial` opens to it; UNSUPPORTED_DOCKER_HOST without.
+ */
+export async function connectDockerEngine(endpoint: DockerEndpoint, dial?: DockerDialer): Promise<{ logSource: LogSource; version: string }> {
+  const engine = engineAt(endpoint, dial)
+  const version = await getJson<EngineVersion>(engine, '/version')
+  const apiVersion = olderApiVersion(version.ApiVersion ?? newestApiVersion, newestApiVersion)
+  return { logSource: createDockerLogSource(engine, apiVersion), version: describeEngine(version) }
 }
