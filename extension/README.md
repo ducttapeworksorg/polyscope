@@ -1,6 +1,6 @@
 # Polyscope for VS Code
 
-**Read files and logs wherever they live, without leaving VS Code.** Browse a local folder, an S3 bucket, the files inside a Kubernetes pod, or every container log in a namespace, all from one sidebar and all read the same way.
+**Read files and logs wherever they live, without leaving VS Code.** Browse a local folder, a folder on a server, an S3 bucket, the files inside a Kubernetes pod, or every container log in a namespace, all from one sidebar and all read the same way.
 
 Chasing a problem across systems usually means a terminal per place: `tail -f` for a server's files, `aws s3 cp` for archived logs, `kubectl logs` and `kubectl exec … cat` for a cluster. Polyscope puts them in one tree, opens them in the editor you already know, and never writes to any of them.
 
@@ -8,7 +8,7 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 
 ## Features
 
-- **Every place in one sidebar.** Local folders, S3-compatible buckets, files inside pods, and pod logs, each configured once as a **Source**.
+- **Every place in one sidebar.** Local folders, folders on servers over SSH, S3-compatible buckets, files inside pods, and pod logs, each configured once as a **Source**.
 - **Logs that keep up.** Follow a container's log, or a growing file, live. Pause to read, and pick up where you left off. A crashed container's **Previous Log** is a toggle away, in the same tab.
 - **Files of any size.** A multi-gigabyte file opens end-first in a paged viewer, without downloading all of it. Compressed files (`.gz`, `.zst`) open decompressed.
 - **Always know where you are.** Label Sources with an **Environment** like *prod* or *staging*. Its colour tints every tab from that Source, so a file from prod stands out.
@@ -22,6 +22,7 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 | Source Type | What it shows | Signs in with |
 | --- | --- | --- |
 | **Local Filesystem** | A folder on this machine, or a UNC share on Windows | Your own file permissions |
+| **SSH Files** | A folder on a server, read over SFTP, through bastions if your `~/.ssh/config` says so | Your SSH agent, a key file, or a password |
 | **S3-compatible Storage** | A bucket, or the keys under a prefix, on AWS S3, MinIO, Ceph and others | Access keys, or an AWS profile (SSO included) |
 | **Kubernetes Files** | A folder inside every pod of one Deployment, StatefulSet or DaemonSet | Your kubeconfig, as `kubectl` does |
 | **Kubernetes Logs** | The logs of every container in a namespace, grouped by Workload, with pod health and restarts | Your kubeconfig, as `kubectl` does |
@@ -42,7 +43,7 @@ Followed files, Kubernetes Log Streams and Large Files open in a Polyscope viewe
 
 ## Remote development
 
-Under Remote-SSH, WSL and Dev Containers, Polyscope runs on the remote machine. A Local Filesystem Source browses the remote's disk, and Kubernetes Sources use the remote's kubeconfig, with its auth plugins.
+Under Remote-SSH, WSL and Dev Containers, Polyscope runs on the remote machine. A Local Filesystem Source browses the remote's disk, SSH Files Sources use the remote's `~/.ssh/config`, `known_hosts` and SSH agent, and Kubernetes Sources use the remote's kubeconfig, with its auth plugins.
 
 ## UNC shares on Windows
 
@@ -56,7 +57,7 @@ Setting `security.restrictUNCAccess` to `false` lifts the restriction for every 
 
 ## Secrets and settings
 
-S3 secret keys are kept in VS Code's secret storage, encrypted by your operating system's keychain where it has one. Polyscope for VS Code keeps its own Sources and settings, apart from the desktop app's. The gear at the top of the sidebar opens them.
+S3 secret keys, and SSH passwords and key passphrases, are kept in VS Code's secret storage, encrypted by your operating system's keychain where it has one. Polyscope for VS Code keeps its own Sources and settings, apart from the desktop app's. The gear at the top of the sidebar opens them.
 
 ![Polyscope's Settings in the VS Code sidebar](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vscode-settings.png)
 

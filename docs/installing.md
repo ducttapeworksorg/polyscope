@@ -88,7 +88,7 @@ VS Code installs it from its **Extensions** view too, from the [VS Code Marketpl
 - In the editor, open the **Extensions** view, choose **…** at its top, then **Install from VSIX…**, and pick the downloaded file.
 - Or, from a terminal: `code --install-extension polyscope-<version>.vsix` (`codium`, `cursor` or `windsurf` in those editors).
 
-In a Remote-SSH, WSL or Dev Containers window, install it from that window, so it runs on the remote machine: a Local Filesystem Source then browses the remote's disk, and Kubernetes and S3 Sources use the remote's kubeconfig and AWS profiles. If it's already installed on your own machine, the **Extensions** view offers to install it on the remote too.
+In a Remote-SSH, WSL or Dev Containers window, install it from that window, so it runs on the remote machine: a Local Filesystem Source then browses the remote's disk, SSH Files Sources use the remote's `~/.ssh/config`, `known_hosts` and SSH agent, and Kubernetes and S3 Sources use the remote's kubeconfig and AWS profiles. If it's already installed on your own machine, the **Extensions** view offers to install it on the remote too.
 
 ### Using it
 
@@ -117,7 +117,7 @@ The sidebar and viewer tabs take the colours of your VS Code theme and follow it
 
 ### Its own Sources
 
-The extension keeps its own Sources, Environments and settings, apart from the app's. Sources you've added in the app don't appear in the extension, nor the other way round. Add them again in each. S3 secret keys are kept in VS Code's secret storage, which your operating system's keychain encrypts where it has one.
+The extension keeps its own Sources, Environments and settings, apart from the app's. Sources you've added in the app don't appear in the extension, nor the other way round. Add them again in each. S3 secret keys, and SSH passwords and key passphrases, are kept in VS Code's secret storage, which your operating system's keychain encrypts where it has one.
 
 ### Updating it
 

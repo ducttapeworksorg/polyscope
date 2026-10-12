@@ -21,7 +21,7 @@ Polyscope highlights a file by its name: YAML, JSON, XML, source code, and logs,
 - **Binary files**: shown as a size, with **Show as hex** to see the bytes.
 - **Wrap**: the **Wrap** button at the top right wraps long lines.
 
-To watch a growing file on a Local Filesystem or Kubernetes Files Source, turn on **Follow** from its tab's menu, or right-click it in the sidebar. New lines appear as they're written.
+To watch a growing file on a Local Filesystem, SSH Files or Kubernetes Files Source, turn on **Follow** from its tab's menu, or right-click it in the sidebar. New lines appear as they're written.
 
 ## Logs
 
