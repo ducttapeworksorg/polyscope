@@ -1,6 +1,6 @@
 # Polyscope for VS Code
 
-**Read files and logs wherever they live, without leaving VS Code.** Browse a local folder, a folder on a server, an S3 bucket, the files inside a Kubernetes pod, every container log in a namespace, or every container log on a Docker engine, all from one sidebar and all read the same way.
+**Read files and logs wherever they live, without leaving VS Code.** Browse a local folder, a folder on a server, an S3 bucket, an Azure blob container, the files inside a Kubernetes pod, every container log in a namespace, or every container log on a Docker engine, all from one sidebar and all read the same way.
 
 Chasing a problem across systems usually means a terminal per place: `tail -f` for a server's files, `aws s3 cp` for archived logs, `kubectl logs` and `kubectl exec … cat` for a cluster. Polyscope puts them in one tree, opens them in the editor you already know, and never writes to any of them.
 
@@ -8,7 +8,7 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 
 ## Features
 
-- **Every place in one sidebar.** Local folders, folders on servers over SSH, S3-compatible buckets, files inside pods, pod logs and Docker container logs, each configured once as a **Source**.
+- **Every place in one sidebar.** Local folders, folders on servers over SSH, S3-compatible buckets, Azure blob containers, files inside pods, pod logs and Docker container logs, each configured once as a **Source**.
 - **Logs that keep up.** Follow a container's log, or a growing file, live. Pause to read, and pick up where you left off. A crashed container's **Previous Log** is a toggle away, in the same tab.
 - **Files of any size.** A multi-gigabyte file opens end-first in a paged viewer, without downloading all of it. Compressed files (`.gz`, `.zst`) open decompressed.
 - **Always know where you are.** Label Sources with an **Environment** like *prod* or *staging*. Its colour tints every tab from that Source, so a file from prod stands out.
@@ -24,6 +24,7 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 | **Local Filesystem** | A folder on this machine, or a UNC share on Windows | Your own file permissions |
 | **SSH Files** | A folder on a server, read over SFTP, through bastions if your `~/.ssh/config` says so | Your SSH agent, a key file, or a password |
 | **S3-compatible Storage** | A bucket, or the keys under a prefix, on AWS S3, MinIO, Ceph and others | Access keys, or an AWS profile (SSO included) |
+| **Azure Blob Storage** | A container in a storage account, or the blobs under a prefix, Data Lake Gen2 accounts included | A connection string, a SAS, or your Azure CLI sign-in (`az login`) |
 | **Kubernetes Files** | A folder inside every pod of one Deployment, StatefulSet or DaemonSet | Your kubeconfig, as `kubectl` does |
 | **Kubernetes Logs** | The logs of every container in a namespace, grouped by Workload, with pod health and restarts | Your kubeconfig, as `kubectl` does |
 | **Docker Logs** | The logs of every container on a Docker engine, or Podman, grouped by Compose project and service, with container health and restarts | Your Docker contexts, as `docker` does (local socket, TCP with TLS, or SSH) |
@@ -44,7 +45,7 @@ Followed files, container logs (Kubernetes and Docker) and Large Files open in a
 
 ## Remote development
 
-Under Remote-SSH, WSL and Dev Containers, Polyscope runs on the remote machine. A Local Filesystem Source browses the remote's disk, SSH Files Sources use the remote's `~/.ssh/config`, `known_hosts` and SSH agent, Kubernetes Sources use the remote's kubeconfig, with its auth plugins, and Docker Logs Sources the remote's Docker engine and contexts.
+Under Remote-SSH, WSL and Dev Containers, Polyscope runs on the remote machine. A Local Filesystem Source browses the remote's disk, SSH Files Sources use the remote's `~/.ssh/config`, `known_hosts` and SSH agent, Kubernetes Sources use the remote's kubeconfig, with its auth plugins, Azure Blob Storage Sources signing in through Azure CLI the remote's `az login`, and Docker Logs Sources the remote's Docker engine and contexts.
 
 ## UNC shares on Windows
 

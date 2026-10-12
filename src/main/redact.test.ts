@@ -79,6 +79,30 @@ describe('redact', () => {
     expect(redact('read c:/users/alicia/a.log', { homeDir: 'C:\\Users\\alice' })).toBe('read c:/users/alicia/a.log')
   })
 
+  it('removes an Azure storage account’s key, keeping the rest of its connection string', () => {
+    const connectionString = 'DefaultEndpointsProtocol=https;AccountName=contosologs;AccountKey=Eby8vdM02xNO/K1SZ==;EndpointSuffix=core.windows.net'
+    expect(redact(`connecting with ${connectionString} failed`)).toBe(
+      'connecting with DefaultEndpointsProtocol=https;AccountName=contosologs;AccountKey=[redacted];EndpointSuffix=core.windows.net failed'
+    )
+    expect(redact('BlobEndpoint=https://contosologs.blob.core.windows.net/;SharedAccessSignature=sv=2025-01-05&sig=c2ln')).toBe(
+      'BlobEndpoint=https://contosologs.blob.core.windows.net/;SharedAccessSignature=[redacted]&sig=[redacted]'
+    )
+  })
+
+  it('removes a SAS’s signature, keeping what it allows and until when', () => {
+    const url = 'GET https://contosologs.blob.core.windows.net/logs/a.log?sv=2025-01-05&se=2026-10-13T00%3A00%3A00Z&sr=c&sp=rl&sig=a%2Bb%3D'
+    expect(redact(url)).toBe('GET https://contosologs.blob.core.windows.net/logs/a.log?sv=2025-01-05&se=2026-10-13T00%3A00%3A00Z&sr=c&sp=rl&sig=[redacted]')
+    expect(redact('?SIG=abc')).toBe('?SIG=[redacted]')
+    expect(redact('signal=TERM design=flat')).toBe('signal=TERM design=flat')
+  })
+
+  it('removes an Azure Blob Storage Source’s connection string and SAS', () => {
+    expect(redact('{"type":"azureBlob","account":"contosologs","connectionString":"AccountName=contosologs;AccountKey=a2V5","sas":"sv=1&sig=c2ln"}')).toBe(
+      '{"type":"azureBlob","account":"contosologs","connectionString":"[redacted]","sas":"[redacted]"}'
+    )
+    expect(redact('connection_string = UseDevelopmentStorage=true')).toBe('connection_string = [redacted]')
+  })
+
   it('removes an SSH Files Source’s password and key passphrase, and the OpenSSH private key it may quote', () => {
     expect(redact('{"type":"sshFiles","host":"logs.internal","password":"hunter2","passphrase":"open sesame"}')).toBe(
       '{"type":"sshFiles","host":"logs.internal","password":"[redacted]","passphrase":"[redacted]"}'

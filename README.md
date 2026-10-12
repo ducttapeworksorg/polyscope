@@ -1,6 +1,6 @@
 # Polyscope
 
-**One desktop app for reading files and logs, wherever they live.** Browse a folder on your machine or on a server, an S3 bucket, the files inside a Kubernetes pod, every container log in a namespace, or every container log on a Docker engine, side by side in one editor-like window.
+**One desktop app for reading files and logs, wherever they live.** Browse a folder on your machine or on a server, an S3 bucket, an Azure blob container, the files inside a Kubernetes pod, every container log in a namespace, or every container log on a Docker engine, side by side in one editor-like window.
 
 ![Polyscope following a container's log in a Kubernetes namespace](docs/images/kubernetes-logs.png)
 
@@ -10,7 +10,7 @@ Chasing a problem across systems usually means a terminal per place, each with i
 
 Polyscope puts them all in one tree, read the same way:
 
-- **Every place in one sidebar.** Local folders, folders on servers over SSH, S3-compatible buckets, files inside pods, pod logs and Docker container logs, each configured once as a **Source**.
+- **Every place in one sidebar.** Local folders, folders on servers over SSH, S3-compatible buckets, Azure blob containers, files inside pods, pod logs and Docker container logs, each configured once as a **Source**.
 - **A real viewer.** Tabs, syntax and log-level highlighting, search, a minimap, line wrapping, and gzip and zstd files shown decompressed. It's the editor that powers VS Code, opened read-only.
 - **Logs that keep up.** Follow a container's log, or a growing file, live. Pause to read, and pick up where you left off. A crashed container's **Previous Log** is a toggle away, in the same tab.
 - **Files of any size.** Files over 50 MB open end-first in a paged viewer that can jump to any line and search the whole file with a regular expression, without loading it all into memory.
@@ -26,6 +26,7 @@ It runs on Windows, macOS and Linux, and [inside VS Code](#in-vs-code). Find out
 | **Local Filesystem** | A folder on this machine, or a UNC share on Windows | Your own file permissions |
 | **SSH Files** | A folder on a server, read over SFTP, through bastions if your `~/.ssh/config` says so | Your SSH agent, a key file, or a password |
 | **S3-compatible Storage** | A bucket, or the keys under a prefix, on AWS S3, MinIO, Ceph and others | Access keys, or an AWS profile (SSO included) |
+| **Azure Blob Storage** | A container in a storage account, or the blobs under a prefix, Data Lake Gen2 accounts included | A connection string, a SAS, or your Azure CLI sign-in (`az login`) |
 | **Kubernetes Files** | A folder inside every pod of one Deployment, StatefulSet or DaemonSet | Your kubeconfig, as `kubectl` does |
 | **Kubernetes Logs** | The logs of every container in a namespace, grouped by Workload, with pod health and restarts | Your kubeconfig, as `kubectl` does |
 | **Docker Logs** | The logs of every container on a Docker engine, or Podman, grouped by Compose project and service, with container health and restarts | Your Docker contexts, as `docker` does (local socket, TCP with TLS, or SSH) |
@@ -74,7 +75,7 @@ The extension keeps its own Sources, Environments and settings, apart from the a
 
 ## Reporting a bug
 
-Please [open an issue on GitHub](https://github.com/ducttapeworksorg/polyscope/issues). To help us reproduce it, open **Settings → Help → Copy diagnostics** and paste the result into the issue. It contains the Polyscope, OS and Electron versions (VS Code's, in the extension) and the recent app log. Secret keys, tokens, passwords, passphrases, private keys, credential-bearing URLs and your home folder's path are removed first, but read it over before you post it.
+Please [open an issue on GitHub](https://github.com/ducttapeworksorg/polyscope/issues). To help us reproduce it, open **Settings → Help → Copy diagnostics** and paste the result into the issue. It contains the Polyscope, OS and Electron versions (VS Code's, in the extension) and the recent app log. Secret keys, tokens, passwords, passphrases, private keys, credential-bearing URLs (SAS signatures among them) and your home folder's path are removed first, but read it over before you post it.
 
 To report a security problem, please email [security@ducttapeworks.dev](mailto:security@ducttapeworks.dev) rather than opening a public issue.
 

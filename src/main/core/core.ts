@@ -83,8 +83,9 @@ import { searchLargeFile, type LargeFileSearch } from './large-file-search'
 import { createLocalFileSource } from './local-file-source'
 import { startFollow, type Follow } from './log-follow'
 import { currentRunOf, type LogReadOptions, type LogSource } from './log-source'
+import { readCaBundle } from './network-agents'
 import { createRegistryStore, emptyRegistry, type SavedSource } from './registry-store'
-import { createS3FileSource, readCaBundle, type S3Target } from './s3-file-source'
+import { createS3FileSource, type S3Target } from './s3-file-source'
 import { createSecretStore, type SecretStore } from './secret-store'
 import { createSettingsStore } from './settings-store'
 import { findSshAgent } from './ssh-agent'
@@ -132,7 +133,7 @@ function withDefaults(saved: SavedSource): SavedSource {
       return { ...source, auth: source.auth ?? 'agent', keyFile: source.keyFile ?? '' }
     case 'azureBlob':
       // Before SAS and Azure CLI sign-in, every Azure Blob Storage Source signed in with a connection string.
-      return { ...source, auth: source.auth ?? 'connectionString', endpoint: source.endpoint ?? '' }
+      return { ...source, auth: source.auth ?? 'connectionString', endpoint: source.endpoint ?? '', caBundlePath: source.caBundlePath ?? '', proxyUrl: source.proxyUrl ?? '' }
     case 'kubernetesFiles':
     case 'kubernetesLogs':
       return source
@@ -147,7 +148,7 @@ type Target =
   | Pick<LocalSourceInfo, 'type' | 'rootPath' | 'showHidden'>
   | Pick<SshFilesSourceInfo, 'type' | 'host' | 'user' | 'port' | 'path' | 'auth' | 'keyFile'>
   | Omit<S3SourceInfo, 'id' | 'name' | 'environmentId' | 'lastNLines' | 'secretKeySet'>
-  | Pick<AzureBlobSourceInfo, 'type' | 'account' | 'container' | 'prefix' | 'endpoint' | 'auth'>
+  | Pick<AzureBlobSourceInfo, 'type' | 'account' | 'container' | 'prefix' | 'endpoint' | 'auth' | 'caBundlePath' | 'proxyUrl'>
   | Pick<KubernetesFilesSourceInfo, 'type' | 'context' | 'namespace' | 'workloadKind' | 'workloadName' | 'path'>
   | Pick<KubernetesLogsSourceInfo, 'type' | 'context' | 'namespace'>
   | Pick<DockerLogsSourceInfo, 'type' | 'context' | 'auth' | 'keyFile'>
@@ -317,7 +318,9 @@ function azureBlobTargetOf(input: NewAzureBlobSource): AzureBlobSettings {
   if (!container) throw new CoreError('CONTAINER_REQUIRED', 'An Azure Blob Storage Source needs a container')
   const auth = input.auth ?? 'connectionString'
   const endpoint = normaliseUrl(input.endpoint ?? '', 'https', 'INVALID_HOST').replace(/\/+$/, '')
-  return { type: 'azureBlob', account, container, prefix: normalisePrefix(input.prefix), endpoint, auth }
+  const caBundlePath = input.caBundlePath?.trim() ?? ''
+  const proxyUrl = normaliseUrl(input.proxyUrl ?? '', 'http', 'INVALID_PROXY')
+  return { type: 'azureBlob', account, container, prefix: normalisePrefix(input.prefix), endpoint, auth, caBundlePath, proxyUrl }
 }
 
 /**
@@ -325,8 +328,8 @@ function azureBlobTargetOf(input: NewAzureBlobSource): AzureBlobSettings {
  * (when signing in with one) checked and filled in.
  */
 function azureBlobTargetWith(settings: AzureBlobSettings, secret: string | undefined): AzureBlobTarget {
-  const { account, container, prefix, endpoint } = settings
-  const target = (signIn: AzureBlobTarget['signIn']) => ({ account, container, prefix, endpoint, signIn })
+  const { account, container, prefix, endpoint, proxyUrl } = settings
+  const target = (signIn: AzureBlobTarget['signIn']) => ({ account, container, prefix, endpoint, proxyUrl, signIn })
   if (settings.auth === 'azureCli') return target({ azureCli: true })
   if (settings.auth === 'sas') {
     if (secret === undefined) throw new CoreError('SAS_REQUIRED', 'An Azure Blob Storage Source signing in with a SAS needs one')
@@ -336,6 +339,13 @@ function azureBlobTargetWith(settings: AzureBlobSettings, secret: string | undef
   if (secret === undefined) throw new CoreError('CONNECTION_STRING_REQUIRED', 'An Azure Blob Storage Source needs a connection string')
   checkConnectionString(secret, account)
   return target({ connectionString: secret })
+}
+
+/** What an Azure Blob Storage File Source needs to reach its container: azureBlobTargetWith's, with the CA bundle read in. */
+async function azureBlobTargetReadIn(settings: AzureBlobSettings, secret: string | undefined): Promise<AzureBlobTarget> {
+  const target = azureBlobTargetWith(settings, secret)
+  const caBundle = settings.caBundlePath ? await readCaBundle(settings.caBundlePath) : undefined
+  return { ...target, ...(caBundle && { caBundle }) }
 }
 
 /** What an S3 File Source needs to reach its store: the settings, with the secret key (when signing in with keys) and CA bundle read in. */
@@ -1065,7 +1075,7 @@ export function createCore(options: CoreOptions = {}): Core {
     if (target.type === 'local') backend = { kind: 'files', fileSource: await reachLocal(target) }
     else if (target.type === 'sshFiles') backend = { kind: 'files', fileSource: await reachSsh(target, secret) }
     else if (target.type === 's3') backend = { kind: 'files', fileSource: createS3FileSource(await s3TargetOf(target, secret)) }
-    else if (target.type === 'azureBlob') backend = { kind: 'files', fileSource: createAzureBlobFileSource(azureBlobTargetWith(target, secret)) }
+    else if (target.type === 'azureBlob') backend = { kind: 'files', fileSource: createAzureBlobFileSource(await azureBlobTargetReadIn(target, secret)) }
     else if (target.type === 'kubernetesFiles') backend = { kind: 'files', fileSource: await reachKubernetesFiles(target) }
     else if (target.type === 'dockerLogs') {
       const engine = await reachDocker(target, secret)

@@ -9,6 +9,8 @@ import { gzipSync } from 'node:zlib'
 import * as vscode from 'vscode'
 import type { FollowEvent, HostKey } from '@shared/core-api'
 import { MB } from '@shared/settings'
+import { hasTestAccount, seedPrefix as seedBlobs, takesTokens, testAzureBlobSource, testEndpoint, testSasUrl } from '../../src/main/core/azure-blob-test-store'
+import { startManagedIdentity } from '../../src/main/core/azure-test-identity'
 import { kubeConfigFor } from '../../src/main/core/kubeconfig'
 import { startTestDockerEngine } from '../../src/main/core/docker-test-engine'
 import { execInPod } from '../../src/main/core/kubernetes-exec'
@@ -348,6 +350,114 @@ const firstRunS3: [string, () => Promise<void>][] = [
           await remove()
         }
       })
+    }
+  ]
+]
+
+const blobText = 'a blob in Azure\n'
+
+/** Runs `test` with `env` set in the extension host, which is this process, as with the AWS files above. */
+async function withEnv(env: Record<string, string>, test: () => Promise<void>) {
+  const before = Object.fromEntries(Object.keys(env).map((name) => [name, process.env[name]]))
+  Object.assign(process.env, env)
+  try {
+    await test()
+  } finally {
+    for (const [name, value] of Object.entries(before)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
+}
+
+// Against the test Azure storage account (Azurite in CI), as the core's Azure Blob Storage tests; skipped without one.
+const firstRunAzure: [string, () => Promise<void>][] = [
+  [
+    'an Azure Blob Storage Source signing in with a connection string connects, and its blobs read through VS Code’s file system',
+    async () => {
+      const { core } = await extension()
+      const { prefix, remove } = await seedBlobs({ 'a.log': blobText, 'logs/b.log': 'b\n' })
+      const source = await core.addSource(testAzureBlobSource('Container', prefix))
+
+      try {
+        assert.deepEqual((await core.connect(source.id)).map(nameOf).sort(), ['a.log', 'logs'])
+        assert.equal(text(await vscode.workspace.fs.readFile(uriOf(source.id, 'a.log'))), blobText)
+      } finally {
+        await core.deleteSource(source.id)
+        await remove()
+      }
+    }
+  ],
+  [
+    'an Azure Blob Storage Source’s connection string is kept in SecretStorage when edited without retyping it, copied with a duplicate and forgotten with the Source',
+    async () => {
+      const { core, secrets } = await extension()
+      const { prefix, remove } = await seedBlobs({ 'a.log': blobText })
+      const settings = testAzureBlobSource('Container', prefix)
+      const source = await core.addSource(settings)
+
+      try {
+        assert.equal(await secrets.get(source.id, 'connectionString'), settings.connectionString)
+        const edited = await core.editSource(source.id, { ...settings, name: 'Renamed', connectionString: '' })
+        assert.equal(edited.type === 'azureBlob' && edited.connectionStringSet, true)
+        const copy = await core.duplicateSource(source.id)
+        assert.equal(text(await vscode.workspace.fs.readFile(uriOf(copy.id, 'a.log'))), blobText)
+
+        await core.deleteSource(copy.id)
+        assert.equal(await secrets.get(copy.id, 'connectionString'), undefined)
+        assert.equal(await secrets.get(source.id, 'connectionString'), settings.connectionString, 'The original keeps its connection string')
+      } finally {
+        await core.deleteSource(source.id)
+        await remove()
+      }
+      assert.equal(await secrets.get(source.id, 'connectionString'), undefined)
+    }
+  ],
+  [
+    'an Azure Blob Storage Source signing in with a SAS URL connects, its SAS kept in SecretStorage until the Source is deleted',
+    async () => {
+      const { core } = await extension()
+      const { prefix, remove } = await seedBlobs({ 'a.log': blobText })
+      const { account, container } = testAzureBlobSource('', '')
+      const sas = await testSasUrl()
+      const { secrets } = await extension()
+      const source = await core.addSource({ type: 'azureBlob', name: 'SAS', account, container, prefix, auth: 'sas', sas })
+
+      try {
+        assert.equal(await secrets.get(source.id, 'sas'), sas)
+        assert.equal(text(await vscode.workspace.fs.readFile(uriOf(source.id, 'a.log'))), blobText)
+      } finally {
+        await core.deleteSource(source.id)
+        await remove()
+      }
+      assert.equal(await secrets.get(source.id, 'sas'), undefined)
+    }
+  ],
+  [
+    // Where the extension host runs, so on the remote machine under Remote-SSH: a managed identity stands in for az login.
+    'an Azure Blob Storage Source signing in through the extension host’s Azure credentials connects, storing nothing',
+    async () => {
+      if (!takesTokens) return console.log('    (skipped: the test account takes no tokens, as POLYSCOPE_TEST_AZURE_OAUTH says)')
+      const { core, secrets } = await extension()
+      const identity = await startManagedIdentity()
+      const { prefix, remove } = await seedBlobs({ 'a.log': blobText })
+      const { account, container } = testAzureBlobSource('', '')
+
+      try {
+        await withEnv(identity.env, async () => {
+          const source = await core.addSource({ type: 'azureBlob', name: 'Azure CLI', account, container, prefix, endpoint: testEndpoint, auth: 'azureCli' })
+          try {
+            assert.equal(text(await vscode.workspace.fs.readFile(uriOf(source.id, 'a.log'))), blobText)
+            assert.equal(await secrets.get(source.id, 'connectionString'), undefined)
+            assert.equal(await secrets.get(source.id, 'sas'), undefined)
+          } finally {
+            await core.deleteSource(source.id)
+          }
+        })
+      } finally {
+        await identity.close()
+        await remove()
+      }
     }
   ]
 ]
@@ -897,11 +1007,17 @@ const reloaded: [string, () => Promise<void>][] = [
 
 /** Runs this phase's tests in order, as VS Code's test runner calls it; failing if any of them fails. */
 export async function run(): Promise<void> {
-  const tests = phase === 'reloaded' ? reloaded : [...firstRun, ...(hasTestCluster ? firstRunKubernetes : []), ...(hasTestStore ? firstRunS3 : [])]
+  const tests =
+    phase === 'reloaded'
+      ? reloaded
+      : [...firstRun, ...(hasTestCluster ? firstRunKubernetes : []), ...(hasTestStore ? firstRunS3 : []), ...(hasTestAccount ? firstRunAzure : [])]
   if (phase !== 'reloaded' && !hasTestCluster) {
     console.log(`  - ${firstRunKubernetes.length} Kubernetes tests skipped: POLYSCOPE_TEST_KUBE_CONTEXT isn’t set`)
   }
   if (phase !== 'reloaded' && !hasTestStore) console.log(`  - ${firstRunS3.length} S3 tests skipped: POLYSCOPE_TEST_S3_ENDPOINT isn’t set`)
+  if (phase !== 'reloaded' && !hasTestAccount) {
+    console.log(`  - ${firstRunAzure.length} Azure Blob Storage tests skipped: POLYSCOPE_TEST_AZURE_CONNECTION_STRING isn’t set`)
+  }
   const failures: string[] = []
   for (const [name, test] of tests) {
     try {

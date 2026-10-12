@@ -5,10 +5,10 @@
 import { webcrypto } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http'
-import { connect, type Server, type Socket } from 'node:net'
+import { connect, isIP, type Server, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createServer as createTlsServer } from 'node:tls'
+import { connect as connectTls, createServer as createTlsServer } from 'node:tls'
 // @peculiar/x509 needs the Reflect metadata API, and leaves providing it to its users.
 import 'reflect-metadata'
 import {
@@ -139,9 +139,9 @@ async function listen(server: Server | HttpServer) {
 }
 
 /**
- * Serves `endpoint` (an http URL) over https on 127.0.0.1, with a certificate a private test CA issued through its
- * issuing CA (both sent); `caPath` is a PEM file of the root CA's certificate and `issuingCaPath` of the issuing
- * CA's, both gone once the front is closed.
+ * Serves `endpoint` over https on 127.0.0.1, with a certificate a private test CA issued through its issuing CA (both
+ * sent); `caPath` is a PEM file of the root CA's certificate and `issuingCaPath` of the issuing CA's, both gone once the
+ * front is closed. An https `endpoint` (Azurite's, say) is reached over TLS in turn, trusting what Node trusts.
  */
 export async function startTlsFront(endpoint: string) {
   const { ca, issuingCa, cert, key } = await (certificates ??= createCertificates())
@@ -150,8 +150,12 @@ export async function startTlsFront(endpoint: string) {
   const issuingCaPath = join(dir, 'issuing-ca.pem')
   await writeFile(caPath, ca)
   await writeFile(issuingCaPath, issuingCa)
-  const { hostname, port } = new URL(endpoint)
-  const server = createTlsServer({ cert: [cert, issuingCa].join('\n'), key }, (socket) => splice(socket, connect(Number(port), hostname)))
+  const { protocol, hostname, port } = new URL(endpoint)
+  const upstream = () =>
+    protocol === 'https:'
+      ? connectTls({ host: hostname, port: Number(port || 443), ...(!isIP(hostname) && { servername: hostname }) })
+      : connect(Number(port || 80), hostname)
+  const server = createTlsServer({ cert: [cert, issuingCa].join('\n'), key }, (socket) => splice(socket, upstream()))
   const listening = await listen(server)
   return {
     url: `https://127.0.0.1:${listening.port}`,

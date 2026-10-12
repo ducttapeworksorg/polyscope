@@ -240,3 +240,21 @@ test('a SAS URL pasted into a new Azure Blob Storage Source fills in its account
   await expect(dialog.getByText(/Storage Blob Data Reader/)).toBeVisible()
   await expect(dialog.locator('input[type="password"]')).toHaveCount(0)
 })
+
+test('a new Azure Blob Storage Source takes a blob endpoint, a CA bundle and a proxy', async () => {
+  const window = await app.firstWindow()
+  const dialog = await openAddSource(window, 'azureBlob')
+  const endpoint = dialog.getByLabel('Blob endpoint')
+
+  // A connection string says where its endpoint is itself.
+  await expect(endpoint).toHaveCount(0)
+  await dialog.locator('label.segmented__option', { hasText: 'Azure CLI' }).click()
+  await dialog.getByLabel('Storage account', { exact: true }).pressSequentially('contosologs')
+  await dialog.getByLabel('Container', { exact: true }).pressSequentially('app')
+  await endpoint.fill('https://contosologs.blob.core.usgovcloudapi.net')
+  await expect(dialog.getByLabel('CA bundle')).toBeVisible()
+  await dialog.getByLabel('Proxy').fill('socks5://proxy.corp:1080')
+
+  await dialog.getByRole('button', { name: 'Test connection' }).click()
+  await expect(dialog.getByRole('status')).toHaveText('That proxy isn’t an http or https address.')
+})

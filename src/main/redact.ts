@@ -1,8 +1,10 @@
 const hidden = '[redacted]'
 
 // Names whose values are secret, wherever they turn up: `secretAccessKey`, `X-Amz-Signature`, `access_token`,
-// `client_secret`, a kubeconfig's `client-key-data`…
-const secretName = String.raw`[\w.-]*(?:secret|password|passwd|pwd|passphrase|token|credential|signature|api[-_]?key|access[-_]?key|private[-_]?key|key[-_]?data)[\w.-]*`
+// `client_secret`, a kubeconfig's `client-key-data`, an Azure connection string's `AccountKey`…
+const secretName = String.raw`[\w.-]*(?:secret|password|passwd|pwd|passphrase|token|credential|signature|api[-_]?key|access[-_]?key|account[-_]?key|private[-_]?key|key[-_]?data|connection[-_]?string)[\w.-]*`
+// Names too short to look for inside others (`signal`, `kansas`), so only on their own: an Azure SAS, and its signature.
+const shortSecretName = String.raw`\b(?:sas|sas[-_]?url|sig)\b`
 // A value: quoted (JSON, or a shell-style `key="…"`), or bare up to the next separator.
 const value = String.raw`"(?:[^"\\]|\\.)*"|'[^']*'|[^\s&,;"'<>]+`
 
@@ -25,6 +27,7 @@ const rules: [RegExp, string | typeof hideValue][] = [
   // Cookies, every one of them to the end of the line.
   [/\b((?:set-)?cookie)(\s*[:=]\s*)[^\r\n]+/gi, `$1$2${hidden}`],
   [new RegExp(String.raw`(["']?)(${secretName})\1(\s*[:=]\s*)(${value})`, 'gi'), hideValue],
+  [new RegExp(String.raw`(["']?)(${shortSecretName})\1(\s*[:=]\s*)(${value})`, 'gi'), hideValue],
   [/\b(bearer)\s+[\w.~+/=-]+/gi, `$1 ${hidden}`],
   // AWS access key IDs and JWTs are recognisable on their own, whatever surrounds them.
   [/\b(?:AKIA|ASIA|AGPA|AIDA|AROA|ANPA)[A-Z0-9]{16}\b/g, hidden],
@@ -35,8 +38,8 @@ const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&
 
 /**
  * Removes secrets from text about to leave the machine (a diagnostics report, say): private keys, the credentials
- * in URLs, secret-named keys and query parameters, Authorization headers, cookies, bearer tokens, AWS access key
- * IDs and JWTs.
+ * in URLs, secret-named keys and query parameters (Azure connection strings' account keys and SAS signatures among
+ * them), Authorization headers, cookies, bearer tokens, AWS access key IDs and JWTs.
  * With `homeDir`, it's shown as `~`, keeping the user's name out too. Errs towards hiding too much.
  */
 export function redact(text: string, options: { homeDir?: string } = {}): string {
