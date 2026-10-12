@@ -90,6 +90,22 @@ export const KubernetesLogsIcon = () => (
   </KubernetesWheel>
 )
 
+/** Crates stacked on a hull, as Docker's whale carries them, for Docker Logs. */
+export const DockerLogsIcon = () => (
+  <svg {...base}>
+    <path d="M2.75 6.25h3v3h-3zM5.75 6.25h3v3h-3zM8.75 6.25h3v3h-3zM5.75 3.25h3v3h-3z" />
+    <path d="M1.25 9.25h13c-.6 2.9-3.1 4.5-6.5 4.5s-5.9-1.6-6.5-4.5z" />
+  </svg>
+)
+
+/** A shipping container, ribbed, for a Docker container. */
+export const ContainerIcon = () => (
+  <svg {...base}>
+    <rect x="1.75" y="4.25" width="12.5" height="7.5" rx=".75" />
+    <path d="M5 6.25v3.5M8 6.25v3.5M11 6.25v3.5" />
+  </svg>
+)
+
 /** Lines of text, for a Log Stream. */
 export const LogIcon = () => (
   <svg {...base}>

@@ -17,7 +17,7 @@ interface Props {
 }
 
 /** A connection test, and how it went; one that met an SSH server whose host key isn't known offers to trust it. */
-type TestRun = { state: 'testing' } | { state: 'passed' } | { state: 'failed'; message: string; hostKey?: HostKey }
+type TestRun = { state: 'testing' } | { state: 'passed'; serverVersion?: string } | { state: 'failed'; message: string; hostKey?: HostKey }
 
 /** Settings with their Environment label set to `environmentId`, or taken off when it's undefined. */
 const labelled = ({ environmentId: _, ...settings }: NewSource, environmentId: string | undefined): NewSource =>
@@ -48,8 +48,8 @@ export function SourceDialog({ editing, environments, onManageEnvironments, onSa
     // Settings changed while testing replace the run; its result would describe settings no longer shown.
     const finish = (outcome: TestRun) => setTest((current) => (current === run ? outcome : current))
     try {
-      await core.testConnection(settings, editing?.id)
-      finish({ state: 'passed' })
+      const { serverVersion } = await core.testConnection(settings, editing?.id)
+      finish({ state: 'passed', ...(serverVersion && { serverVersion }) })
     } catch (e) {
       const hostKey = e instanceof CoreCallError && e.code === 'HOST_KEY_UNKNOWN' ? e.hostKey : undefined
       finish({ state: 'failed', message: describeError(e), ...(hostKey && { hostKey }) })
@@ -151,7 +151,8 @@ export function SourceDialog({ editing, environments, onManageEnvironments, onSa
             {t(test?.state === 'testing' ? 'sourceDialog.testing' : 'sourceDialog.test')}
           </button>
           <p className={`dialog__test-result ${test?.state === 'failed' && !test.hostKey ? 'is-failed' : ''}`} role="status">
-            {test?.state === 'passed' && t('sourceDialog.testSucceeded')}
+            {test?.state === 'passed' &&
+              (test.serverVersion ? t('sourceDialog.testSucceededWith', { server: test.serverVersion }) : t('sourceDialog.testSucceeded'))}
             {test?.state === 'failed' && (test.hostKey ? t('sourceDialog.hostKeyUnknown', { host: test.hostKey.host }) : test.message)}
           </p>
         </div>

@@ -9,6 +9,7 @@ import type {
   ConnectionState,
   CoreApi,
   CoreEvents,
+  DockerLogsSourceInfo,
   EntryNode,
   FoldedNode,
   Environment,
@@ -44,11 +45,12 @@ import type {
   FileLogOptions,
   TreeNode
 } from '@shared/core-api'
-import { filesWorkloadKinds, followableSourceTypes, workloadKinds } from '@shared/core-api'
+import { defaultDockerContext, filesWorkloadKinds, followableSourceTypes, workloadKinds } from '@shared/core-api'
 import { searchRegExp } from '@shared/search'
 import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings } from '@shared/settings'
 import { listAwsProfiles } from './aws-profiles'
 import { CoreError } from './core-error'
+import { connectDockerEngine, dockerEndpointOf } from './docker-log-source'
 import { createEnvironmentStore, defaultEnvironments, isColor } from './environment-store'
 import {
   binarySniffLength,
@@ -122,6 +124,7 @@ function withDefaults(saved: SavedSource): SavedSource {
       return { ...source, auth: source.auth ?? 'keyFile', keyFile: source.keyFile ?? '' }
     case 'kubernetesFiles':
     case 'kubernetesLogs':
+    case 'dockerLogs':
       return source
   }
 }
@@ -136,6 +139,7 @@ type Target =
   | Omit<S3SourceInfo, 'id' | 'name' | 'environmentId' | 'lastNLines' | 'secretKeySet'>
   | Pick<KubernetesFilesSourceInfo, 'type' | 'context' | 'namespace' | 'workloadKind' | 'workloadName' | 'path'>
   | Pick<KubernetesLogsSourceInfo, 'type' | 'context' | 'namespace'>
+  | Pick<DockerLogsSourceInfo, 'type' | 'context'>
 
 type S3Settings = Extract<Target, { type: 's3' }>
 
@@ -243,6 +247,7 @@ function clusterOf(input: { context?: string; namespace?: string }) {
 function targetOf(input: NewSource): Target {
   if (input.type === 'local') return { type: 'local', rootPath: input.rootPath.trim(), showHidden: input.showHidden ?? true }
   if (input.type === 'kubernetesLogs') return { type: 'kubernetesLogs', ...clusterOf(input) }
+  if (input.type === 'dockerLogs') return { type: 'dockerLogs', context: input.context?.trim() || defaultDockerContext }
   if (input.type === 'kubernetesFiles') {
     const cluster = clusterOf(input)
     const workloadKind = workloadKindOf(input.workloadKind)
@@ -870,7 +875,11 @@ export function createCore(options: CoreOptions = {}): Core {
   const listLogNodes = async (logSource: LogSource, path: SourcePath): Promise<TreeNode[]> => {
     const nodes = (await logSource.listChildren(path)).map((node) => offered(node, logSource.capabilities))
     if (nodes.every((node) => node.kind === 'logStream')) return nodes
-    const rank = (node: LogNode) => (node.kubernetes?.kind === 'workloads' ? workloadKinds.indexOf(node.kubernetes.workloadKind) : 0)
+    // Kubernetes' groups of Workloads in their kinds' order; Docker's Standalone group after the Compose projects.
+    const rank = (node: LogNode) =>
+      node.kubernetes?.kind === 'workloads' ? workloadKinds.indexOf(node.kubernetes.workloadKind)
+      : node.docker?.kind === 'standalone' ? 1
+      : 0
     return nodes.toSorted((a, b) => rank(a) - rank(b) || byName.compare(a.name, b.name))
   }
 
@@ -960,6 +969,9 @@ export function createCore(options: CoreOptions = {}): Core {
     return logSource
   }
 
+  /** Opens a Docker Logs Source's engine, once it has answered: its Log Source, and what the engine says it is. */
+  const reachDocker = ({ context }: Extract<Target, { type: 'dockerLogs' }>) => connectDockerEngine(dockerEndpointOf(context))
+
   /**
    * Opens a Source's File or Log Source and lists its root: what connecting, or testing a connection, has to get through.
    * An S3 Source signing in with keys needs its `secret` key, as an SSH Files Source with an encrypted key file needs its
@@ -967,13 +979,18 @@ export function createCore(options: CoreOptions = {}): Core {
    */
   const open = async (target: Target, secret?: string) => {
     let backend: Backend
+    let serverVersion: string | undefined
     if (target.type === 'local') backend = { kind: 'files', fileSource: await reachLocal(target) }
     else if (target.type === 'sshFiles') backend = { kind: 'files', fileSource: await reachSsh(target, secret) }
     else if (target.type === 's3') backend = { kind: 'files', fileSource: createS3FileSource(await s3TargetOf(target, secret)) }
     else if (target.type === 'kubernetesFiles') backend = { kind: 'files', fileSource: await reachKubernetesFiles(target) }
-    else backend = { kind: 'logs', logSource: await reachKubernetes(target) }
+    else if (target.type === 'dockerLogs') {
+      const engine = await reachDocker(target)
+      backend = { kind: 'logs', logSource: engine.logSource }
+      serverVersion = engine.version
+    } else backend = { kind: 'logs', logSource: await reachKubernetes(target) }
     try {
-      return { backend, nodes: await listBackend(backend, '') }
+      return { backend, nodes: await listBackend(backend, ''), ...(serverVersion !== undefined && { serverVersion }) }
     } catch (error) {
       closeBackend(backend)
       throw error
@@ -1008,8 +1025,10 @@ export function createCore(options: CoreOptions = {}): Core {
       await reachLocal(target)
       return { saved: { ...target, name, ...label } }
     }
-    // Nor is a cluster: it may be away, or its context not in the kubeconfig yet.
-    if (target.type === 'kubernetesLogs' || target.type === 'kubernetesFiles') return { saved: { ...target, name, ...label } }
+    // Nor is a cluster or an engine: it may be away, or its context not in the kubeconfig yet.
+    if (target.type === 'kubernetesLogs' || target.type === 'kubernetesFiles' || target.type === 'dockerLogs') {
+      return { saved: { ...target, name, ...label } }
+    }
     // An S3 or SSH Files Source isn't reached until it's connected: it may be saved while its server is away.
     const typed = await secretFor(input)
     if (target.type === 's3' && target.auth === 'keys' && typed === undefined && (await secretFor(input, editing)) === undefined) {
@@ -1239,8 +1258,9 @@ export function createCore(options: CoreOptions = {}): Core {
 
     async testConnection(input, sourceId) {
       await loaded
-      const { backend } = await open(targetOf(input), await secretFor(input, sourceId))
+      const { backend, serverVersion } = await open(targetOf(input), await secretFor(input, sourceId))
       closeBackend(backend)
+      return serverVersion === undefined ? {} : { serverVersion }
     },
 
     async disconnect(sourceId) {

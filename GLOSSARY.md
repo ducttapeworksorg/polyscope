@@ -49,6 +49,9 @@ How many of a **Workload**'s pods are ready out of how many are desired (e.g. `2
 
 ### Docker
 
+**Standalone**:
+The group in a Docker Logs **Source**'s tree holding the containers not started by Docker Compose; the rest are grouped by Compose project, then service.
+
 **Container Status**:
 The health of a Docker container as shown in the tree: running, exited (with its exit code), restarting or unhealthy, plus its restart count when greater than zero. The Docker counterpart of **Pod Status**.
 

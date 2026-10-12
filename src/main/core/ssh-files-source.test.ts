@@ -275,7 +275,7 @@ describe('an SSH Files Source’s host key', () => {
     const path = await server.seed({ 'app.log': 'a' })
     await knownHosts(knownHostsLine(server, { hashed: true }))
 
-    await expect(createCore().testConnection(await settingsFor(server, path))).resolves.toBeUndefined()
+    await expect(createCore().testConnection(await settingsFor(server, path))).resolves.toEqual({})
   })
 
   it('that isn’t known fails with its type and fingerprint, and once trusted is trusted after a restart too', async () => {
@@ -308,7 +308,7 @@ describe('an SSH Files Source’s host key', () => {
     expect(failure).toMatchObject({ code: 'HOST_KEY_UNKNOWN', hostKey: { fingerprint: fingerprintOf(server.hostKey) } })
     await core.trustHostKey(failure.hostKey)
 
-    await expect(core.testConnection(settings)).resolves.toBeUndefined()
+    await expect(core.testConnection(settings)).resolves.toEqual({})
     expect(await readFile(join(home, '.ssh', 'known_hosts'), 'utf8')).toBe('# mine\n')
     await expect(stat(join(home, '.ssh', 'known_hosts2'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
@@ -349,7 +349,7 @@ describe('an SSH Files Source’s host key', () => {
 
     expect(await readFile(join(home, '.ssh', 'known_hosts'), 'utf8')).toBe(`${line}
 `)
-    await expect(core.testConnection(await settingsFor(server, '/'))).resolves.toBeUndefined()
+    await expect(core.testConnection(await settingsFor(server, '/'))).resolves.toEqual({})
   })
 
   it('can’t be trusted unless a connection offered it', async () => {
@@ -637,7 +637,7 @@ describe('connecting an SSH Files Source', () => {
 
     await failsWith('PASSPHRASE_REQUIRED', server, settings)
     await failsWith('PASSPHRASE_WRONG', server, { ...settings, passphrase: 'battery staple' })
-    await expect(createCore().testConnection({ ...settings, passphrase: 'correct horse' })).resolves.toBeUndefined()
+    await expect(createCore().testConnection({ ...settings, passphrase: 'correct horse' })).resolves.toEqual({})
   })
 
   it('tests an edit with the stored passphrase when it’s left blank, and connects with it', async () => {
@@ -647,7 +647,7 @@ describe('connecting an SSH Files Source', () => {
     const settings = await settingsFor(server, '/', { passphrase: 'correct horse' })
     const source = await core.addSource(settings)
 
-    await expect(core.testConnection({ ...settings, passphrase: '' }, source.id)).resolves.toBeUndefined()
+    await expect(core.testConnection({ ...settings, passphrase: '' }, source.id)).resolves.toEqual({})
     expect(await core.connect(source.id)).toEqual([])
   })
 
@@ -743,7 +743,7 @@ describe('an SSH Files Source on an SSH config alias', () => {
     await sshConfig('Include config.d/*', 'Host *', `  User ${server.user}`, `  IdentityFile ${await keyFile(server.clientKey)}`)
     await knownHosts(knownHostsLine(server))
 
-    await expect(createCore().testConnection(aliasSettings('web.test', path))).resolves.toBeUndefined()
+    await expect(createCore().testConnection(aliasSettings('web.test', path))).resolves.toEqual({})
   })
 
   it('lets settings typed in the Source win over the config’s, as ssh’s command line does', async () => {
@@ -753,7 +753,7 @@ describe('an SSH Files Source on an SSH config alias', () => {
     await knownHosts(knownHostsLine(server))
 
     const typed = aliasSettings('logs', path, { port: server.port, user: server.user, keyFile: await keyFile(server.clientKey) })
-    await expect(createCore().testConnection(typed)).resolves.toBeUndefined()
+    await expect(createCore().testConnection(typed)).resolves.toEqual({})
   })
 
   it('signs in through the SSH agent as the config’s User', async () => {
@@ -763,7 +763,7 @@ describe('an SSH Files Source on an SSH config alias', () => {
     await sshConfig('Host logs', `  HostName ${server.host}`, `  Port ${server.port}`, `  User ${server.user}`)
     await knownHosts(knownHostsLine(server))
 
-    await expect(createCore().testConnection(aliasSettings('logs', path, { auth: 'agent' }))).resolves.toBeUndefined()
+    await expect(createCore().testConnection(aliasSettings('logs', path, { auth: 'agent' }))).resolves.toEqual({})
   })
 
   it('needs a user, and a key file, from the Source or the config', async () => {
@@ -872,7 +872,7 @@ describe('an SSH Files Source through ProxyJump', () => {
       { host: 'second.invalid', port: second.port, keyType: 'ssh-ed25519', fingerprint: fingerprintOf(second.hostKey) },
       { host: 'logs.invalid', port: server.port, keyType: 'ssh-ed25519', fingerprint: fingerprintOf(server.hostKey) }
     ])
-    await expect(core.testConnection(settings)).resolves.toBeUndefined()
+    await expect(core.testConnection(settings)).resolves.toEqual({})
   })
 
   it('refuses a bastion whose host key isn’t the one known for it', async () => {
@@ -909,7 +909,7 @@ describe('an SSH Files Source through ProxyJump', () => {
 
     // The bastion has no IdentityFile of its own here, so it's signed into with the agent, as the server is.
     await startAgent(first.clientKey, server.clientKey)
-    await expect(createCore().testConnection(aliasSettings('logs', path, { auth: 'agent' }))).resolves.toBeUndefined()
+    await expect(createCore().testConnection(aliasSettings('logs', path, { auth: 'agent' }))).resolves.toEqual({})
   })
 
   it('fails naming ProxyCommand when a bastion needs it', async () => {
@@ -959,7 +959,7 @@ describe.skipIf(!sshdTarget)('an SSH Files Source against sshd', () => {
     expect(failure).toMatchObject({ code: 'HOST_KEY_UNKNOWN', hostKey: { fingerprint: fingerprintOf(await hostKey()) } })
     await core.trustHostKey(failure.hostKey)
 
-    await expect(core.testConnection(settings)).resolves.toBeUndefined()
+    await expect(core.testConnection(settings)).resolves.toEqual({})
     await rm(folder, { recursive: true, force: true })
   })
 

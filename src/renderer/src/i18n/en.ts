@@ -26,6 +26,8 @@ export const en = {
   'sourceType.kubernetesFiles.hint': 'Files inside a Workload’s pods',
   'sourceType.kubernetesLogs': 'Kubernetes Logs',
   'sourceType.kubernetesLogs.hint': 'Container logs in a namespace',
+  'sourceType.dockerLogs': 'Docker Logs',
+  'sourceType.dockerLogs.hint': 'Container logs from a Docker Engine, grouped by Compose project',
 
   'sourceDialog.addTitle': 'Add Source',
   'sourceDialog.editTitle': 'Edit {name}',
@@ -37,6 +39,7 @@ export const en = {
   'sourceDialog.test': 'Test connection',
   'sourceDialog.testing': 'Testing…',
   'sourceDialog.testSucceeded': 'Connection succeeded.',
+  'sourceDialog.testSucceededWith': 'Connection succeeded: {server}.',
   'sourceDialog.hostKeyUnknown':
     'Polyscope hasn’t seen {host}’s host key before. Check its fingerprint with the server’s administrator, then trust it to connect.',
   'sourceDialog.trustHostKey': 'Trust and test again',
@@ -132,6 +135,11 @@ export const en = {
   'hostKey.type': 'Key type: {keyType}',
   'hostKey.fingerprint': 'Fingerprint: {fingerprint}',
 
+  'dockerSource.context': 'Context',
+  'dockerSource.context.default': 'default',
+  'dockerSource.context.hint': 'The engine DOCKER_HOST names, or else the local one: its socket, or its named pipe on Windows.',
+  'dockerSource.defaultName': 'Docker',
+  'dockerGroup.standalone': 'Standalone',
   'kubernetesSource.context': 'Context',
   'kubernetesSource.context.choose': 'Choose a context',
   'kubernetesSource.context.hint': 'From your kubeconfig. Auth plugins like aws or kubelogin work as they do for kubectl.',
@@ -192,6 +200,7 @@ export const en = {
   'tree.loading': 'Loading…',
   'tree.emptyFolder': 'Empty folder',
   'tree.emptyNamespace': 'No Workloads or pods in this namespace',
+  'tree.noContainers': 'No containers in this engine',
   'tree.emptyLogNode': 'Nothing here',
   'tree.noPods': 'This Workload has no pods',
   'tree.retry': 'Retry',
@@ -456,6 +465,7 @@ export const en = {
     'The server’s host key isn’t the one known for it, so Polyscope won’t connect: someone may be impersonating it. Check with the server’s administrator. ({message})',
   'error.SIGN_IN_REFUSED': 'The server refused to let you sign in: {message}',
   'error.SFTP_UNAVAILABLE': 'The server’s SFTP subsystem is turned off, so its files can’t be read. ({message})',
+  'error.UNSUPPORTED_DOCKER_HOST': 'Polyscope can only reach a Docker Engine through a local socket so far, not DOCKER_HOST={message}.',
   'error.UNSUPPORTED_SSH_OPTION': 'Your ~/.ssh/config asks for something Polyscope doesn’t support: {message}',
   'error.UNKNOWN': 'Couldn’t complete that: {message}'
 } satisfies Record<string, string> &

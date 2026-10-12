@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import {
   sourceTypeIds,
   type KubernetesFilesSourceInfo,
+  type DockerLogsSourceInfo,
   type KubernetesLogsSourceInfo,
   type LocalSourceInfo,
   type S3SourceInfo,
@@ -17,6 +18,7 @@ export type SavedSource =
   | Omit<S3SourceInfo, 'secretKeySet'>
   | KubernetesFilesSourceInfo
   | KubernetesLogsSourceInfo
+  | DockerLogsSourceInfo
 
 /** Everything the user configured about their Sources, as saved between launches. */
 export interface Registry {

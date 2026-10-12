@@ -848,7 +848,7 @@ describe('testing a connection', () => {
   it('succeeds for settings that can be reached, without adding a Source', async () => {
     const core = createCore()
 
-    await expect(core.testConnection(localSource('', ` ${dir} `))).resolves.toBeUndefined()
+    await expect(core.testConnection(localSource('', ` ${dir} `))).resolves.toEqual({})
 
     expect(await core.listSources()).toEqual([])
   })

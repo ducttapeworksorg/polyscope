@@ -1,0 +1,347 @@
+import { chmod } from 'node:fs/promises'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { FollowEvent, NewDockerLogsSource, TreeNode } from '@shared/core-api'
+import { createCore, type Core } from './core'
+import { startTestDockerEngine, type TestContainer, type TestDockerEngine } from './docker-test-engine'
+import { hasTestDocker, testCounter, testProject, testTicker } from './docker-test-seed'
+
+const settings = (changes: Partial<NewDockerLogsSource> = {}): NewDockerLogsSource => ({ type: 'dockerLogs', name: 'Laptop', ...changes })
+
+let engine: TestDockerEngine | undefined
+
+/** Starts a stand-in engine holding `containers`, and points DOCKER_HOST at it. */
+async function engineWith(containers: TestContainer[] = []) {
+  engine = await startTestDockerEngine(containers)
+  vi.stubEnv('DOCKER_HOST', engine.host)
+  return engine
+}
+
+afterEach(async () => {
+  vi.unstubAllEnvs()
+  await engine?.close()
+  engine = undefined
+})
+
+describe('adding a Docker Logs Source', () => {
+  it('is listed with the default context unless it names one', async () => {
+    const core = createCore()
+
+    const added = await core.addSource(settings())
+
+    const expected = { id: added.id, type: 'dockerLogs', name: 'Laptop', context: 'default' }
+    expect(added).toEqual(expected)
+    expect(await core.listSources()).toEqual([expected])
+  })
+
+  it('can be saved while its engine is away', async () => {
+    vi.stubEnv('DOCKER_HOST', 'unix:///nowhere/docker.sock')
+
+    await expect(createCore().addSource(settings())).resolves.toMatchObject({ context: 'default' })
+  })
+
+  it('tests a connection by reaching the engine, which tells its version', async () => {
+    const { version } = await engineWith()
+
+    expect(await createCore().testConnection(settings())).toEqual({ serverVersion: `Docker Engine ${version}` })
+  })
+
+  it('fails when the engine is not running', async () => {
+    vi.stubEnv('DOCKER_HOST', 'unix:///nowhere/docker.sock')
+
+    await expect(createCore().testConnection(settings())).rejects.toMatchObject({ code: 'UNREACHABLE', message: expect.stringContaining('Docker isn’t running') })
+  })
+
+  // Root may use any socket, and Windows' named pipes have no mode to take away.
+  it.skipIf(process.platform !== 'linux' || process.getuid?.() === 0)('says to join the docker group when its socket may not be used', async () => {
+    const { host } = await engineWith()
+    await chmod(host.slice('unix://'.length), 0o000)
+
+    await expect(createCore().testConnection(settings())).rejects.toMatchObject({ code: 'PERMISSION_DENIED', message: expect.stringContaining('docker group') })
+  })
+
+  it('cannot reach an engine over the network yet', async () => {
+    vi.stubEnv('DOCKER_HOST', 'tcp://docker.internal:2376')
+
+    await expect(createCore().testConnection(settings())).rejects.toMatchObject({ code: 'UNSUPPORTED_DOCKER_HOST' })
+  })
+})
+
+const compose = (project: string, service: string) => ({ 'com.docker.compose.project': project, 'com.docker.compose.service': service })
+
+/** A time a few seconds into the test's morning, with nanoseconds, as the engine timestamps lines. */
+const at = (second: number, nanos = 0) => `2026-10-12T10:00:${String(second).padStart(2, '0')}.${String(nanos).padStart(9, '0')}Z`
+
+/** The names of listed nodes; a node without one by its kind. */
+const names = (nodes: TreeNode[]) => nodes.map((node) => ('name' in node ? node.name : node.kind))
+
+/** Connects a Docker Logs Source to the stand-in engine, holding `containers`. */
+async function connected(containers: TestContainer[]) {
+  await engineWith(containers)
+  const core = createCore()
+  const source = await core.addSource(settings())
+  const root = await core.connect(source.id)
+  return { core, sourceId: source.id, root }
+}
+
+describe('the tree of a Docker Logs Source', () => {
+  const shop: TestContainer[] = [
+    { name: 'shop-worker-2', labels: compose('shop', 'worker'), state: 'exited' },
+    { name: 'shop-web-1', labels: compose('shop', 'web') },
+    { name: 'shop-worker-1', labels: compose('shop', 'worker') },
+    { name: 'blog-app-1', labels: compose('blog', 'app') },
+    { name: 'redis' },
+    { name: 'scratch', state: 'exited' }
+  ]
+
+  it('has a group per Compose project, then one for the containers outside Compose, which never folds', async () => {
+    const { root } = await connected(shop)
+
+    expect(root.map((node) => [names([node])[0], node.kind === 'group' && node.docker?.kind])).toEqual([
+      ['blog', 'project'],
+      ['shop', 'project'],
+      ['_standalone', 'standalone']
+    ])
+    expect(root[2]).toMatchObject({ path: '_standalone', unfoldable: true })
+    expect(root[2]).not.toHaveProperty('folded')
+  })
+
+  it('lists a project’s services, then a service’s containers, stopped ones too', async () => {
+    const { core, sourceId } = await connected(shop)
+
+    expect((await core.expand(sourceId, 'shop')).map((node) => node.path)).toEqual(['shop/web', 'shop/worker'])
+    expect(await core.expand(sourceId, 'shop/worker')).toEqual([
+      { kind: 'logStream', name: 'shop-worker-1', path: 'shop/worker/shop-worker-1', docker: { kind: 'container' } },
+      { kind: 'logStream', name: 'shop-worker-2', path: 'shop/worker/shop-worker-2', docker: { kind: 'container' } }
+    ])
+    expect(names(await core.expand(sourceId, '_standalone'))).toEqual(['redis', 'scratch'])
+  })
+
+  it('folds a service’s only container into it, and a project’s only service, the paths kept whole', async () => {
+    const { core, sourceId, root } = await connected(shop)
+
+    const container = { kind: 'logStream', name: 'blog-app-1', path: 'blog/app/blog-app-1', docker: { kind: 'container' } }
+    expect(root[0]).toEqual({
+      kind: 'group',
+      name: 'blog',
+      path: 'blog',
+      docker: { kind: 'project' },
+      folded: { kind: 'group', name: 'app', path: 'blog/app', docker: { kind: 'service' }, folded: container }
+    })
+    const [web, worker] = await core.expand(sourceId, 'shop')
+    expect(web).toMatchObject({ folded: { path: 'shop/web/shop-web-1' } })
+    expect(worker).not.toHaveProperty('folded')
+  })
+
+  it('puts a container under Standalone when its Compose labels could not be a path', async () => {
+    const { core, sourceId, root } = await connected([{ name: 'odd', labels: compose('a/b', 'web') }])
+
+    expect(root.map((node) => node.path)).toEqual(['_standalone'])
+    expect(names(await core.expand(sourceId, '_standalone'))).toEqual(['odd'])
+  })
+
+  it('shows new containers when a group is expanded again', async () => {
+    const { core, sourceId } = await connected(shop)
+
+    engine!.add({ name: 'shop-worker-3', labels: compose('shop', 'worker') })
+
+    expect(names(await core.expand(sourceId, 'shop/worker'))).toEqual(['shop-worker-1', 'shop-worker-2', 'shop-worker-3'])
+  })
+
+  it('has an empty root when the engine has no containers', async () => {
+    const { root } = await connected([])
+
+    expect(root).toEqual([])
+  })
+})
+
+describe('opening a container’s log', () => {
+  const app: TestContainer = {
+    name: 'app',
+    logs: [
+      { stream: 'stdout', time: at(1), text: 'starting' },
+      { stream: 'stderr', time: at(2), text: 'warning: no config' },
+      { stream: 'stdout', time: at(3), text: 'listening on :8080' },
+      { stream: 'stderr', time: at(4, 500), text: 'error: bad request' }
+    ]
+  }
+
+  it('shows stdout and stderr together, in the order they were written, with no Previous Log to switch to', async () => {
+    const { core, sourceId } = await connected([app])
+
+    expect(await core.openLog(sourceId, '_standalone/app')).toEqual({
+      view: 'log',
+      of: 'logStream',
+      path: '_standalone/app',
+      name: 'app',
+      offersPreviousLog: false,
+      previous: false,
+      restarted: false,
+      lastNLines: 10_000,
+      timestamps: false,
+      content: 'starting\nwarning: no config\nlistening on :8080\nerror: bad request'
+    })
+  })
+
+  it('shows only the last N lines, with when each was logged when asked', async () => {
+    const { core, sourceId } = await connected([app])
+
+    const log = await core.openLog(sourceId, '_standalone/app', { lastNLines: 2, timestamps: true })
+
+    expect(log.content).toBe(`${at(3)} listening on :8080\n${at(4, 500)} error: bad request`)
+  })
+
+  it('reads the whole log', async () => {
+    const { core, sourceId } = await connected([app])
+
+    expect((await core.openLog(sourceId, '_standalone/app', { lastNLines: 'all' })).content.split('\n')).toHaveLength(4)
+  })
+
+  it('reads a TTY container’s log as it was written', async () => {
+    const { core, sourceId } = await connected([{ ...app, name: 'shell', tty: true }])
+
+    expect((await core.openLog(sourceId, '_standalone/shell')).content).toBe('starting\nwarning: no config\nlistening on :8080\nerror: bad request')
+  })
+
+  it('reads a stopped container’s log', async () => {
+    const { core, sourceId } = await connected([{ ...app, state: 'exited' }])
+
+    expect((await core.openLog(sourceId, '_standalone/app')).content).toContain('error: bad request')
+  })
+
+  it('has no Previous Log to open', async () => {
+    const { core, sourceId } = await connected([app])
+
+    await expect(core.openLog(sourceId, '_standalone/app', { previous: true })).rejects.toMatchObject({ code: 'LOG_UNAVAILABLE' })
+  })
+
+  it('reports a container removed since it was listed', async () => {
+    const { core, sourceId } = await connected([app])
+
+    await expect(core.openLog(sourceId, '_standalone/gone')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+})
+
+/** Collects every Follow update the core sends, by followId. */
+function followUpdates(core: Core) {
+  const events: FollowEvent[] = []
+  const unsubscribe = core.onFollowEvent((event) => events.push(event))
+  const of = (followId: string) => events.filter((e) => e.followId === followId).flatMap((e) => (e.kind === 'lines' ? e.lines : [e.kind]))
+  return { events, of, unsubscribe }
+}
+
+describe('following a container’s log', () => {
+  const app: TestContainer = { name: 'app', logs: [1, 2, 3].map((i) => ({ stream: 'stdout' as const, time: at(i), text: `line ${i}` })) }
+
+  it('starts from the last N lines, then adds lines as they are written, stdout and stderr alike', async () => {
+    const { core, sourceId } = await connected([app])
+    const updates = followUpdates(core)
+
+    const followed = await core.followLog(sourceId, '_standalone/app', { lastNLines: 2 })
+    engine!.log('app', 'line 4')
+    engine!.log('app', 'oops', 'stderr')
+
+    expect(followed).toMatchObject({ content: 'line 2\nline 3', offersPreviousLog: false })
+    await vi.waitFor(() => expect(updates.of(followed.followId)).toEqual(['line 4', 'oops']))
+    await core.disconnect(sourceId)
+    updates.unsubscribe()
+  })
+
+  it('holds lines back while paused, and sends them once resumed', async () => {
+    const { core, sourceId } = await connected([app])
+    const updates = followUpdates(core)
+    const followed = await core.followLog(sourceId, '_standalone/app', { lastNLines: 1 })
+
+    await core.pauseFollow(followed.followId)
+    engine!.log('app', 'line 4')
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(updates.of(followed.followId)).toEqual([])
+
+    await core.resumeFollow(followed.followId)
+    expect(updates.of(followed.followId)).toEqual(['line 4'])
+    await core.disconnect(sourceId)
+    updates.unsubscribe()
+  })
+
+  it('ends when the container stops', async () => {
+    const { core, sourceId } = await connected([app])
+    const updates = followUpdates(core)
+    const followed = await core.followLog(sourceId, '_standalone/app', { lastNLines: 1 })
+
+    engine!.log('app', 'bye')
+    engine!.stop('app')
+
+    await vi.waitFor(() => expect(updates.of(followed.followId)).toEqual(['bye', 'ended']))
+    expect(updates.events.at(-1)).toMatchObject({ kind: 'ended', reason: 'exited' })
+    updates.unsubscribe()
+  })
+
+  it('ends when the Source is disconnected', async () => {
+    const { core, sourceId } = await connected([app])
+    const updates = followUpdates(core)
+    const followed = await core.followLog(sourceId, '_standalone/app', { lastNLines: 1 })
+
+    await core.disconnect(sourceId)
+
+    expect(updates.events).toEqual([{ followId: followed.followId, kind: 'ended', reason: 'disconnected' }])
+    updates.unsubscribe()
+  })
+})
+
+describe.skipIf(!hasTestDocker)('Docker Logs against the test engine', () => {
+  let core: Core
+  let sourceId: string
+  let root: TreeNode[]
+
+  beforeEach(async () => {
+    core = createCore()
+    sourceId = (await core.addSource(settings())).id
+    root = await core.connect(sourceId)
+  })
+
+  afterEach(() => core.disconnect(sourceId))
+
+  it('tests a connection, telling the engine’s version', async () => {
+    expect(await core.testConnection(settings())).toEqual({ serverVersion: expect.stringMatching(/^Docker Engine \d+\.\d+/) })
+  })
+
+  it('lists the Compose project’s services, folding the one of one container, and the standalone containers, stopped ones too', async () => {
+    expect(names(root)).toEqual(expect.arrayContaining([testProject, '_standalone']))
+    const services = await core.expand(sourceId, testProject)
+    expect(names(services)).toEqual(['console', 'web', 'worker'])
+    expect(services[1]).toMatchObject({ folded: { kind: 'logStream', path: `${testProject}/web/${testProject}-web-1` } })
+    expect(names(await core.expand(sourceId, `${testProject}/worker`))).toEqual([`${testProject}-worker-1`, `${testProject}-worker-2`])
+    expect(names(await core.expand(sourceId, '_standalone'))).toEqual(expect.arrayContaining(['polyscope-counter', 'polyscope-done', 'polyscope-ticker']))
+  })
+
+  it('shows stdout and stderr together, in the order they were written', async () => {
+    const log = await core.openLog(sourceId, `${testProject}/worker/${testProject}-worker-1`)
+
+    expect(log.content).toBe('out 1\nerr 1\nout 2\nerr 2\nout 3\nerr 3')
+  })
+
+  it('reads a TTY container’s log as it was written', async () => {
+    const log = await core.openLog(sourceId, `${testProject}/console/${testProject}-console-1`)
+
+    expect(log.content).toBe('console ready\r')
+  })
+
+  it('reads the last N lines of a stopped container’s log', async () => {
+    expect((await core.openLog(sourceId, '_standalone/polyscope-done', { lastNLines: 1 })).content).toBe('all done')
+  })
+
+  it('reads the last N lines with timestamps', async () => {
+    const log = await core.openLog(sourceId, testCounter, { lastNLines: 2, timestamps: true })
+
+    expect(log.content).toMatch(/^\S+Z line 99\n\S+Z line 100$/)
+  })
+
+  it('follows a log as lines are written', async () => {
+    const updates = followUpdates(core)
+    const followed = await core.followLog(sourceId, testTicker, { lastNLines: 1 })
+
+    const tick = Number(/tick (\d+)/.exec(followed.content)![1])
+    await vi.waitFor(() => expect(updates.of(followed.followId)).toContain(`tick ${tick + 2}`), { timeout: 10_000 })
+    expect(updates.of(followed.followId).slice(0, 2)).toEqual([`tick ${tick + 1}`, `tick ${tick + 2}`])
+    updates.unsubscribe()
+  })
+})

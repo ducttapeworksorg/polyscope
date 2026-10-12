@@ -43,6 +43,7 @@
   --type-s3: #d4b483;
   --type-kubernetes-files: #8ab4f8;
   --type-kubernetes-logs: #b4a3e8;
+  --type-docker-logs: #7fb3d5;
 
   --font-ui: 'Atkinson Hyperlegible Next Variable', system-ui, sans-serif;
   --font-mono: 'Red Hat Mono Variable', ui-monospace, monospace;
@@ -94,6 +95,7 @@
   --type-s3: #8a6a2e;
   --type-kubernetes-files: #1a5fb4;
   --type-kubernetes-logs: #6a52b8;
+  --type-docker-logs: #2f78a8;
 
   color-scheme: light;
 }
@@ -986,6 +988,10 @@ body.is-resizing {
 
 .source-group--kubernetesLogs {
   --group-hue: var(--type-kubernetes-logs);
+}
+
+.source-group--dockerLogs {
+  --group-hue: var(--type-docker-logs);
 }
 
 .source-group + .source-group {

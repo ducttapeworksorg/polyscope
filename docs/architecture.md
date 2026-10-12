@@ -190,6 +190,7 @@ flowchart TB
     S3["s3-file-source<br/>AWS SDK"]
     KF["kubernetes-file-source<br/>→ shell-file-source over pod exec"]
     KL["kubernetes-log-source<br/>Kubernetes API"]
+    DL["docker-log-source<br/>Docker Engine API"]
   end
 
   Facade --> Stores
@@ -200,6 +201,7 @@ flowchart TB
   Facade --> LS
   FS --> Local & SSH & S3 & KF
   LS --> KL
+  LS --> DL
 ```
 
 #### The façade: `core.ts`
@@ -231,6 +233,7 @@ Each interface has a **contract test suite** (`file-source-contract.ts`, `log-so
 | S3-compatible Storage | `s3-file-source.ts` | `@aws-sdk/client-s3` (`ListObjectsV2`, `HeadObject`, ranged `GetObject`); custom CA bundles and proxies |
 | Kubernetes Files | `kubernetes-file-source.ts` → `shell-file-source.ts` + `kubernetes-exec.ts` | Finds the Workload's pods through the Kubernetes API, then runs small POSIX `sh` scripts (`stat`, `dd`…) in the container over the exec API, as `kubectl exec` does |
 | Kubernetes Logs | `kubernetes-log-source.ts` | Kubernetes API: lists Workloads, pods and containers; reads and streams container logs |
+| Docker Logs | `docker-log-source.ts` | Docker Engine HTTP API over the local engine's Unix socket or named pipe (DOCKER_HOST's, or the default), its version agreed from `/version`: lists every container, grouped by its Compose labels, and reads and streams its log, taking apart the frames stdout and stderr are multiplexed into unless it has a TTY |
 
 Supporting modules: `kubeconfig.ts` (loads `KUBECONFIG` or `~/.kube/config`), `kubernetes-api.ts` (shared API helpers and error mapping), `pod-status.ts` (Pod Status and Ready Count), `rbac.ts`, `aws-profiles.ts`, `proxy-env.ts`, `network-errors.ts`.
 
