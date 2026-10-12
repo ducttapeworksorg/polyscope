@@ -2,7 +2,7 @@
 // POLYSCOPE_TEST_AZURE_CONNECTION_STRING. Tests that need it are skipped without it.
 
 import { randomUUID } from 'node:crypto'
-import { BlobServiceClient } from '@azure/storage-blob'
+import { BlobServiceClient, ContainerSASPermissions } from '@azure/storage-blob'
 import type { NewAzureBlobSource } from '@shared/core-api'
 
 const connectionString = process.env['POLYSCOPE_TEST_AZURE_CONNECTION_STRING']
@@ -11,6 +11,15 @@ const connectionString = process.env['POLYSCOPE_TEST_AZURE_CONNECTION_STRING']
 export const hasTestAccount = Boolean(connectionString)
 
 export const testContainer = 'polyscope-test'
+
+/** The test account's blob endpoint, as its connection string gives it. */
+export const testEndpoint = /(?:^|;)\s*BlobEndpoint=([^;]+)/i.exec(connectionString ?? '')?.[1] ?? ''
+
+/**
+ * Whether the test account takes Microsoft Entra tokens, as Azurite does over https when run with `--oauth basic`:
+ * tests signing in as the user are skipped without it.
+ */
+export const takesTokens = testEndpoint.startsWith('https://') && process.env['POLYSCOPE_TEST_AZURE_OAUTH'] === '1'
 
 /** The test account's name, as its connection string gives it. */
 export const testAccount = /(?:^|;)\s*AccountName=([^;]+)/i.exec(connectionString ?? '')?.[1] ?? ''
@@ -27,6 +36,15 @@ export const testAzureBlobSource = (name: string, prefix: string): NewAzureBlobS
 
 let client: BlobServiceClient | undefined
 const testClient = () => (client ??= BlobServiceClient.fromConnectionString(connectionString ?? '')).getContainerClient(testContainer)
+
+/**
+ * A SAS URL for the test container, signed with the test account's key: allowed to list and read unless `permissions`
+ * says otherwise (as `ContainerSASPermissions.parse` reads them), and good for an hour unless it `expiresOn` sooner.
+ */
+export async function testSasUrl({ permissions = 'rl', expiresOn = new Date(Date.now() + 60 * 60_000) } = {}) {
+  await ensureContainer()
+  return testClient().generateSasUrl({ permissions: ContainerSASPermissions.parse(permissions), startsOn: new Date(Date.now() - 5 * 60_000), expiresOn })
+}
 
 let containerReady: Promise<unknown> | undefined
 const ensureContainer = () => (containerReady ??= testClient().createIfNotExists())

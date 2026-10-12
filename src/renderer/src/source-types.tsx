@@ -3,6 +3,7 @@ import {
   defaultDockerContext,
   dockerStandaloneGroup,
   filesWorkloadKinds,
+  type AzureBlobAuth,
   type AzureBlobSourceInfo,
   type DockerLogsSourceInfo,
   type FilesWorkloadKind,
@@ -17,6 +18,7 @@ import {
   type SshAuth,
   type SshFilesSourceInfo
 } from '@shared/core-api'
+import { parseSas } from '@shared/azure-sas'
 import { ComboBox } from './components/ComboBox'
 import { BlobStorageIcon, BucketIcon, DockerLogsIcon, HardDriveIcon, KubernetesFilesIcon, KubernetesLogsIcon, TerminalIcon } from './components/icons'
 import { core, describeError } from './core-client'
@@ -410,42 +412,66 @@ function AzureBlobFields({ value, onChange, editing }: FieldsProps<AzureBlobSett
       {hint && <span className="field__hint">{t(hint)}</span>}
     </label>
   )
-  const stored = editing?.type === 'azureBlob' ? editing.connectionStringSet : undefined
+  const auth = value.auth ?? 'connectionString'
+  // Only a secret stored for the way the Source signed in when it was saved counts.
+  const storedFor = (way: AzureBlobAuth) => (editing?.type === 'azureBlob' && editing.auth === way ? editing[way === 'sas' ? 'sasSet' : 'connectionStringSet'] : undefined)
   const [weakSecrets, setWeakSecrets] = useState(false)
 
   useEffect(() => {
     void window.polyscope.secretStorageIsWeak().then(setWeakSecrets)
   }, [])
 
+  // A pasted SAS URL says which account and container it's for, so they needn't be typed again.
+  const setSas = (sas: string) => {
+    const parsed = parseSas(sas)
+    set({ sas, ...(parsed?.account && { account: parsed.account }), ...(parsed?.container && { container: parsed.container }) })
+  }
+
+  /** A secret's field: typed in, sent to the core once, and never shown again; the core only says whether one is stored. */
+  const secret = (key: 'connectionString' | 'sas', onInput: (text: string) => void) => {
+    const stored = storedFor(key)
+    return (
+      <label className="field">
+        <span className="field__label">{t(`azureBlobSource.${key}`)}</span>
+        <input
+          type="password"
+          className="field__input field__input--path"
+          value={value[key] ?? ''}
+          onChange={(e) => onInput(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <span className="field__hint">
+          {t(stored === undefined ? `azureBlobSource.${key}.hint` : stored ? 'azureBlobSource.secret.stored' : `azureBlobSource.${key}.missing`)}
+        </span>
+        {weakSecrets && <span className="field__problem">{t('azureBlobSource.secret.weak')}</span>}
+      </label>
+    )
+  }
+
   return (
     <>
+      <div className="field">
+        <span className="field__label" id="azure-blob-auth-label">
+          {t('azureBlobSource.auth')}
+        </span>
+        <div className="segmented" role="radiogroup" aria-labelledby="azure-blob-auth-label">
+          {(['connectionString', 'sas', 'azureCli'] as const satisfies AzureBlobAuth[]).map((option) => (
+            <label key={option} className="segmented__option">
+              <input type="radio" name="azure-blob-auth" value={option} checked={auth === option} onChange={() => onChange({ ...value, auth: option })} />
+              {t(`azureBlobSource.auth.${option}`)}
+            </label>
+          ))}
+        </div>
+      </div>
+      {auth === 'connectionString' && secret('connectionString', (connectionString) => onChange({ ...value, connectionString }))}
+      {auth === 'sas' && secret('sas', setSas)}
+      {auth === 'azureCli' && <p className="field__hint">{t('azureBlobSource.azureCli.hint')}</p>}
       <div className="field-pair">
         {text('account', 'azureBlobSource.account')}
         {text('container', 'azureBlobSource.container')}
       </div>
       {text('prefix', 'azureBlobSource.prefix', 'azureBlobSource.prefix.hint')}
-      <label className="field">
-        <span className="field__label">{t('azureBlobSource.connectionString')}</span>
-        {/* Typed in, sent to the core once, and never shown again: the core only says whether one is stored. */}
-        <input
-          type="password"
-          className="field__input field__input--path"
-          value={value.connectionString ?? ''}
-          onChange={(e) => onChange({ ...value, connectionString: e.target.value })}
-          autoComplete="off"
-          spellCheck={false}
-        />
-        <span className="field__hint">
-          {t(
-            stored === undefined
-              ? 'azureBlobSource.connectionString.hint'
-              : stored
-                ? 'azureBlobSource.connectionString.stored'
-                : 'azureBlobSource.connectionString.missing'
-          )}
-        </span>
-        {weakSecrets && <span className="field__problem">{t('azureBlobSource.connectionString.weak')}</span>}
-      </label>
     </>
   )
 }
@@ -847,9 +873,19 @@ export const sourceTypeUi: SourceTypeUis = {
     label: 'sourceType.azureBlob',
     hint: 'sourceType.azureBlob.hint',
     Icon: BlobStorageIcon,
-    blank: () => ({ type: 'azureBlob', name: '', account: '', container: '', prefix: '', connectionString: '' }),
-    // Everything but the connection string, which the renderer never has: left blank, the stored one stays.
-    settingsOf: ({ name, account, container, prefix }) => ({ type: 'azureBlob', name, account, container, prefix, connectionString: '' }),
+    blank: () => ({ type: 'azureBlob', name: '', account: '', container: '', prefix: '', auth: 'connectionString', connectionString: '', sas: '' }),
+    // Everything but the connection string or SAS, which the renderer never has: left blank, the stored one stays.
+    settingsOf: ({ name, account, container, prefix, endpoint, auth }) => ({
+      type: 'azureBlob',
+      name,
+      account,
+      container,
+      prefix,
+      endpoint,
+      auth,
+      connectionString: '',
+      sas: ''
+    }),
     fullPath: blobPath,
     Fields: AzureBlobFields
   },
