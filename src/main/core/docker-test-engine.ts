@@ -242,8 +242,15 @@ export async function startTestDockerEngine(containers: TestContainer[] = []): P
   }
 
   const windows = process.platform === 'win32'
-  const socket = windows ? `\\\\.\\pipe\\polyscope-test-docker-${randomUUID()}` : join(tmpdir(), `polyscope-docker-${randomUUID()}.sock`)
-  await new Promise<void>((resolve) => server.listen(socket, resolve))
+  // macOS caps a Unix socket's path at 104 bytes, and its tmpdir() is long, so the name stays short.
+  const socket = windows ? `\\\\.\\pipe\\polyscope-test-docker-${randomUUID()}` : join(tmpdir(), `polyscope-docker-${randomUUID().slice(0, 8)}.sock`)
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(socket, () => {
+      server.off('error', reject)
+      resolve()
+    })
+  })
 
   return {
     host: windows ? `npipe://${socket.replaceAll('\\', '/')}` : `unix://${socket}`,
