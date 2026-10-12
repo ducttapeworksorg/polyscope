@@ -242,3 +242,30 @@ jobs:
         run: |
           kubectl -n polyscope-test get all -o wide
           kubectl -n polyscope-files get all -o wide
+
+  # Docker Logs against the runner's own Docker Engine, as well as the in-process stand-in the build job tests against,
+  # seeded with a Compose project and standalone containers (tests/docker/seed.sh).
+  integration-docker:
+    name: integration (Docker)
+    runs-on: ubuntu-latest
+    env:
+      POLYSCOPE_TEST_DOCKER: seeded
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Seed the engine
+        run: tests/docker/seed.sh
+
+      - run: npm ci
+
+      # The Log Source contract suite and the core façade tests, against the engine as well as the stand-in.
+      - run: npx vitest run src/main/core/docker
+
+      - name: Show the seeded containers
+        if: failure()
+        run: docker ps -a

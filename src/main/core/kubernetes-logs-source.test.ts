@@ -795,7 +795,7 @@ describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () 
     })
 
     it('tests a connection by listing the namespace', async () => {
-      await expect(core.testConnection(testKubernetesLogsSource())).resolves.toBeUndefined()
+      await expect(core.testConnection(testKubernetesLogsSource())).resolves.toEqual({})
     })
   })
 

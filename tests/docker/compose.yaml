@@ -1,0 +1,19 @@
+# What the Docker Logs integration tests expect to find in a Compose project; tests/docker/seed.sh brings it up, with
+# the standalone containers, as CI does (see .github/workflows/ci.yml).
+name: polyscope-test
+services:
+  # One container, so it folds into the service's row; the project has several services, so they don't fold into its row.
+  web:
+    image: busybox:1.36
+    command: ['sh', '-c', 'echo web ready; exec sleep 3600000']
+  # Two containers, each writing to stdout and stderr in turn.
+  worker:
+    image: busybox:1.36
+    deploy:
+      replicas: 2
+    command: ['sh', '-c', 'for i in 1 2 3; do echo "out $$i"; sleep 0.2; echo "err $$i" >&2; sleep 0.2; done; exec sleep 3600000']
+  # A TTY, whose log is read as it was written rather than multiplexed.
+  console:
+    image: busybox:1.36
+    tty: true
+    command: ['sh', '-c', 'echo console ready; exec sleep 3600000']

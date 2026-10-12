@@ -3,10 +3,10 @@
 
 import type { Settings } from './settings'
 
-export type SourceTypeId = 'local' | 'sshFiles' | 's3' | 'kubernetesFiles' | 'kubernetesLogs'
+export type SourceTypeId = 'local' | 'sshFiles' | 's3' | 'kubernetesFiles' | 'kubernetesLogs' | 'dockerLogs'
 
 /** Every Source Type, in the default order of its sidebar group. */
-export const sourceTypeIds: readonly SourceTypeId[] = ['local', 'sshFiles', 's3', 'kubernetesFiles', 'kubernetesLogs']
+export const sourceTypeIds: readonly SourceTypeId[] = ['local', 'sshFiles', 's3', 'kubernetesFiles', 'kubernetesLogs', 'dockerLogs']
 
 export interface NewLocalSource {
   type: 'local'
@@ -94,6 +94,18 @@ export interface NewKubernetesLogsSource {
   environmentId?: string
 }
 
+/** The context a Docker Logs Source uses when it names none: DOCKER_HOST, or else the local engine. */
+export const defaultDockerContext = 'default'
+
+export interface NewDockerLogsSource {
+  type: 'dockerLogs'
+  name: string
+  /** The Docker context whose engine the Source reads: `default`, DOCKER_HOST or else the local engine, when blank or left out. */
+  context?: string
+  /** The Environment the Source is labelled with; unlabelled when left out. */
+  environmentId?: string
+}
+
 /** The kinds of Workload a Kubernetes Files Source can browse: those whose pods run for good. */
 export type FilesWorkloadKind = Extract<WorkloadKind, 'Deployment' | 'StatefulSet' | 'DaemonSet'>
 
@@ -132,7 +144,7 @@ export type S3Auth = 'keys' | 'profile'
 export type SshAuth = 'agent' | 'keyFile' | 'password'
 
 /** The user-editable settings of a Source; its Source Type decides which fields exist. */
-export type NewSource = NewLocalSource | NewSshFilesSource | NewS3Source | NewKubernetesFilesSource | NewKubernetesLogsSource
+export type NewSource = NewLocalSource | NewSshFilesSource | NewS3Source | NewKubernetesFilesSource | NewKubernetesLogsSource | NewDockerLogsSource
 
 /** How many of a log's last lines a log view fetches and keeps: a number of lines, or all of them. */
 export type LastNLines = number | 'all'
@@ -203,6 +215,12 @@ export interface KubernetesLogsSourceInfo extends SourceIdentity {
   namespace: string
 }
 
+export interface DockerLogsSourceInfo extends SourceIdentity {
+  type: 'dockerLogs'
+  /** Normalised: `default` when none was named. */
+  context: string
+}
+
 export interface KubernetesFilesSourceInfo extends SourceIdentity {
   type: 'kubernetesFiles'
   context: string
@@ -213,7 +231,13 @@ export interface KubernetesFilesSourceInfo extends SourceIdentity {
   path: string
 }
 
-export type SourceInfo = LocalSourceInfo | SshFilesSourceInfo | S3SourceInfo | KubernetesFilesSourceInfo | KubernetesLogsSourceInfo
+export type SourceInfo =
+  | LocalSourceInfo
+  | SshFilesSourceInfo
+  | S3SourceInfo
+  | KubernetesFilesSourceInfo
+  | KubernetesLogsSourceInfo
+  | DockerLogsSourceInfo
 
 /** A context in the user's kubeconfig, as offered when adding a Kubernetes Source. */
 export interface KubeContext {
@@ -348,6 +372,8 @@ export interface LogGroupNode extends LogNodeBase {
   unfoldable?: true
   /** What the group is, in a Kubernetes Logs Source. */
   kubernetes?: KubernetesLogGroup
+  /** What the group is, in a Docker Logs Source. */
+  docker?: DockerLogGroup
 }
 
 /** A Log Stream in a Log Source's tree: what opens in a log view. */
@@ -359,6 +385,8 @@ export interface LogStreamNode extends LogNodeBase {
   restarts?: number
   /** What the Log Stream is, in a Kubernetes Logs Source. */
   kubernetes?: KubernetesLogStream
+  /** What the Log Stream is, in a Docker Logs Source. */
+  docker?: DockerLogStream
 }
 
 /** The kinds of Workload a Kubernetes Logs Source groups its tree by; a Pod stands for a pod no Workload owns. */
@@ -394,6 +422,21 @@ export interface KubernetesLogStream {
 }
 
 export type ContainerRole = 'init' | 'sidecar'
+
+/**
+ * What a group is in a Docker Logs Source. Its root holds a group per Compose project, which holds a group per service,
+ * which holds its containers: the Log Streams. Containers outside Compose are under one Standalone group, which never
+ * folds. A project may fold in its only service, a service its only container.
+ */
+export type DockerLogGroup = { kind: 'project' } | { kind: 'service' } | { kind: 'standalone' }
+
+/** The Standalone group's path, and name: never a Compose project's, which can't start with `_`. */
+export const dockerStandaloneGroup = '_standalone'
+
+/** What a Log Stream is in a Docker Logs Source: a container, running or stopped. */
+export interface DockerLogStream {
+  kind: 'container'
+}
 
 /** How many of a Workload's pods are ready, out of how many it wants. */
 export interface ReadyCount {
@@ -788,7 +831,15 @@ export type CoreErrorCode =
   | 'SFTP_UNAVAILABLE'
   /** A host whose `~/.ssh/config` needs an option Polyscope doesn't support, like ProxyCommand; the message names it. */
   | 'UNSUPPORTED_SSH_OPTION'
+  /** A DOCKER_HOST Polyscope can't reach an engine through yet, like a `tcp://` or `ssh://` one; the message names it. */
+  | 'UNSUPPORTED_DOCKER_HOST'
   | 'UNKNOWN'
+
+/** What a connection test that passed found out. */
+export interface TestedConnection {
+  /** What the Source reached says it is, e.g. `Docker Engine 27.3.1`; left out by Source Types that don't tell. */
+  serverVersion?: string
+}
 
 export interface CoreApi {
   /** Every Source, grouped by Source Type: groups in group order, Sources in their order within the group. */
@@ -817,7 +868,7 @@ export interface CoreApi {
    * Checks that settings could be connected to, without saving anything. When editing, `sourceId`
    * names the Source whose stored secrets stand in for any left blank.
    */
-  testConnection(input: NewSource, sourceId?: string): Promise<void>
+  testConnection(input: NewSource, sourceId?: string): Promise<TestedConnection>
   /** Drops the connection and stops all activity against the Source. */
   disconnect(sourceId: string): Promise<void>
   /**

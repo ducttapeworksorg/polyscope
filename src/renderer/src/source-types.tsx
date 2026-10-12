@@ -1,6 +1,9 @@
 import { useEffect, useId, useState, type ComponentType } from 'react'
 import {
+  defaultDockerContext,
+  dockerStandaloneGroup,
   filesWorkloadKinds,
+  type DockerLogsSourceInfo,
   type FilesWorkloadKind,
   type KubeContext,
   type KubernetesFilesSourceInfo,
@@ -14,7 +17,7 @@ import {
   type SshFilesSourceInfo
 } from '@shared/core-api'
 import { ComboBox } from './components/ComboBox'
-import { BucketIcon, HardDriveIcon, KubernetesFilesIcon, KubernetesLogsIcon, TerminalIcon } from './components/icons'
+import { BucketIcon, DockerLogsIcon, HardDriveIcon, KubernetesFilesIcon, KubernetesLogsIcon, TerminalIcon } from './components/icons'
 import { core, describeError } from './core-client'
 import { t, type MessageKey } from './i18n'
 
@@ -627,6 +630,41 @@ function KubernetesFilesFields({ value, onChange }: FieldsProps<KubernetesFilesS
   )
 }
 
+type DockerLogsSettings = Extract<NewSource, { type: 'dockerLogs' }>
+
+/** The name a Docker Logs Source is given from its context: Docker, for the default one. */
+const dockerName = (context: string) => (context === defaultDockerContext ? t('dockerSource.defaultName') : context)
+
+function DockerLogsFields({ value, onChange }: FieldsProps<DockerLogsSettings>) {
+  const context = value.context || defaultDockerContext
+  // A new Source is named after its context.
+  useEffect(() => {
+    if (!value.name.trim()) onChange({ ...value, name: dockerName(context) })
+    // Named once, when the fields appear.
+  }, [])
+
+  return (
+    <div className="field">
+      <label className="field__label" htmlFor="docker-context">
+        {t('dockerSource.context')}
+      </label>
+      <select id="docker-context" className="field__input field__select" value={context} onChange={(e) => onChange({ ...value, context: e.target.value })}>
+        <option value={defaultDockerContext}>{t('dockerSource.context.default')}</option>
+        {context !== defaultDockerContext && <option value={context}>{context}</option>}
+      </select>
+      <span className="field__hint">{t('dockerSource.context.hint')}</span>
+    </div>
+  )
+}
+
+/** Where a Docker Logs Source's node is: its context, then its container's name, which is how `docker logs` knows it. */
+function enginePath({ context }: DockerLogsSourceInfo, path: SourcePath) {
+  if (!path) return context
+  if (path === dockerStandaloneGroup) return `${context}: ${t('dockerGroup.standalone')}`
+  const segments = path.split('/')
+  return `${context}: ${segments[0] === dockerStandaloneGroup || segments.length === 3 ? segments.at(-1) : path}`
+}
+
 /** Where a Source path is in its bucket, as an `s3://` URL. */
 function objectUrl({ bucket, prefix }: S3SourceInfo, path: SourcePath) {
   return `s3://${bucket}/${[prefix, path].filter(Boolean).join('/')}`
@@ -724,6 +762,15 @@ export const sourceTypeUi: SourceTypeUis = {
     settingsOf: ({ name, context, namespace }) => ({ type: 'kubernetesLogs', name, context, namespace }),
     fullPath: ({ context, namespace }, path) => `${context}: ${namespace}${path ? `/${path}` : ''}`,
     Fields: KubernetesLogsFields
+  },
+  dockerLogs: {
+    label: 'sourceType.dockerLogs',
+    hint: 'sourceType.dockerLogs.hint',
+    Icon: DockerLogsIcon,
+    blank: () => ({ type: 'dockerLogs', name: '', context: defaultDockerContext }),
+    settingsOf: ({ name, context }) => ({ type: 'dockerLogs', name, context }),
+    fullPath: enginePath,
+    Fields: DockerLogsFields
   }
 }
 

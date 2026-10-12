@@ -32,7 +32,7 @@ import { uiFor } from '../source-types'
 import { followsFiles } from '../workspace'
 import type { MenuItem } from './ContextMenu'
 import { EnvironmentBadge } from './EnvironmentBadge'
-import { ChevronIcon, KeyIcon, ReloadIcon, WarningIcon } from './icons'
+import { ChevronIcon, ContainerIcon, KeyIcon, ReloadIcon, WarningIcon } from './icons'
 import { KubernetesIcon } from './KubernetesIcon'
 import { MaterialIcon } from './MaterialIcon'
 
@@ -486,6 +486,7 @@ export function SourceTree(props: Props) {
     if (kubernetes?.kind === 'container') return <KubernetesIcon container role={kubernetes.role} />
     if (kubernetes?.kind === 'pod') return <KubernetesIcon workloadKind="Pod" />
     if (kubernetes) return <KubernetesIcon workloadKind={kubernetes.workloadKind} />
+    if (node.docker?.kind === 'container') return <ContainerIcon />
     if (node.kind === 'logStream') return <MaterialIcon icon="log" theme={theme} />
     return <MaterialIcon icon="folder" theme={theme} open={expanded.has(node.path)} />
   }
@@ -539,7 +540,10 @@ export function SourceTree(props: Props) {
     const common = {
       path: node.path,
       depth,
-      label: node.kubernetes?.kind === 'workloads' ? t(`workloadGroup.${node.kubernetes.workloadKind}`) : node.name,
+      label:
+        node.kubernetes?.kind === 'workloads' ? t(`workloadGroup.${node.kubernetes.workloadKind}`)
+        : node.docker?.kind === 'standalone' ? t('dockerGroup.standalone')
+        : node.name,
       icon: logIcon(node),
       menuItems: [refresh, ...openLog, ...copyItems(chain)],
       status:
@@ -569,7 +573,8 @@ export function SourceTree(props: Props) {
   /** What an empty listing says: a namespace or node of a Log Source has no folders to be empty. */
   const emptyNote = (path: SourcePath) =>
     source.type === 'kubernetesFiles' && !path && !rootFolded ? 'tree.noPods'
-    : source.type !== 'kubernetesLogs' ? 'tree.emptyFolder'
+    : source.type === 'dockerLogs' && !path ? 'tree.noContainers'
+    : source.type !== 'kubernetesLogs' && source.type !== 'dockerLogs' ? 'tree.emptyFolder'
     : path ? 'tree.emptyLogNode'
     : 'tree.emptyNamespace'
 
