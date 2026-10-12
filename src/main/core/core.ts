@@ -529,7 +529,9 @@ export function createCore(options: CoreOptions = {}): Core {
     const offersPreviousLog = logSource.capabilities.previousLog
     // A Source Type without Previous Logs is never asked for one.
     if (previous && !offersPreviousLog) throw new CoreError('LOG_UNAVAILABLE', `Its Log Streams have no Previous Log: ${path}`)
-    const { name, hasPreviousLog } = await logSource.logStreamAt(path)
+    const { name, hasPreviousLog, unreadable } = await logSource.logStreamAt(path)
+    // Not a log still to come: following it would wait for good.
+    if (unreadable) throw new CoreError('LOG_UNAVAILABLE', unreadable)
     await settingsLoaded
     const lastNLines = asked ?? sourceFor(sourceId).lastNLines ?? settings.defaultLastNLines
     const read = { timestamps: timestamps || forFollowing, previous }

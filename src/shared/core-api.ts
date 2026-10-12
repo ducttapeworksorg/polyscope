@@ -340,7 +340,7 @@ export interface LogCapabilities {
   previousLog: boolean
   /** Its Log Streams restart: their nodes tell how many times, and a Follow carries on across restarts, marking each. */
   restarts: boolean
-  /** Its nodes tell how they're doing (a Kubernetes pod's Pod Status). */
+  /** Its nodes tell how they're doing (a Kubernetes pod's Pod Status, a Docker container's Container Status). */
   status: boolean
 }
 
@@ -436,6 +436,12 @@ export const dockerStandaloneGroup = '_standalone'
 /** What a Log Stream is in a Docker Logs Source: a container, running or stopped. */
 export interface DockerLogStream {
   kind: 'container'
+  /** The image it runs, as it was asked for, e.g. `nginx:1.27`. */
+  image?: string
+  /** Milliseconds since the epoch at which its current run started, or its last one if it isn't running; left out if it never has. */
+  startedAt?: number
+  /** Milliseconds since the epoch at which it exited, when it isn't running; left out while it is. */
+  finishedAt?: number
 }
 
 /** How many of a Workload's pods are ready, out of how many it wants. */
@@ -447,7 +453,7 @@ export interface ReadyCount {
 /** How a node is doing: as it should, on its way up, in trouble, or neither (going away, or out of touch). */
 export type NodeHealth = 'healthy' | 'pending' | 'failing' | 'inactive'
 
-/** A node's health as the tree shows it: a pod's Pod Status (see GLOSSARY.md). */
+/** A node's health as the tree shows it: a pod's Pod Status, or a container's Container Status (see GLOSSARY.md). */
 export interface NodeStatus {
   /** What it's doing, or what's wrong with it, e.g. a pod's phase the way kubectl puts it: Running, Pending, CrashLoopBackOff, OOMKilled, Terminating… */
   reason: string

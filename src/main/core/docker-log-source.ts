@@ -1,6 +1,7 @@
 import { request as httpRequest, type IncomingMessage } from 'node:http'
 import type { LogGroupNode, LogNode, LogStreamNode, SourcePath } from '@shared/core-api'
 import { defaultDockerContext, dockerStandaloneGroup as standalone } from '@shared/core-api'
+import { containerDetailsOf, containerRunOf, containerStatusOf, engineMillis, type ContainerInspect } from './container-status'
 import { CoreError } from './core-error'
 import type { LogConnection, LogFollowOptions, LogReadOptions, LogSource, LogStreamInfo } from './log-source'
 
@@ -11,6 +12,9 @@ export interface DockerEndpoint {
 
 /** The newest Engine API version Polyscope speaks; an older engine is spoken to in its own. */
 const newestApiVersion = '1.47'
+
+/** Log drivers whose logs the engine reads back itself. */
+const readableDrivers = new Set(['json-file', 'local', 'journald'])
 
 const composeProject = 'com.docker.compose.project'
 const composeService = 'com.docker.compose.service'
@@ -70,7 +74,8 @@ function get(endpoint: DockerEndpoint, path: string, query: Record<string, strin
       void bodyOf(response).then(
         (body) => {
           const message = messageOf(body) || `HTTP ${status}`
-          reject(new CoreError(status === 404 ? 'NOT_FOUND' : 'UNKNOWN', message))
+          // 501, from the logs endpoint: the container's log driver sends its log elsewhere.
+          reject(new CoreError(status === 404 ? 'NOT_FOUND' : status === 501 ? 'LOG_UNAVAILABLE' : 'UNKNOWN', message))
         },
         (error: Error) => reject(reachError(error, endpoint))
       )
@@ -96,10 +101,6 @@ interface ContainerSummary {
   Names?: string[]
   Labels?: Record<string, string> | null
 }
-interface ContainerInspect {
-  Config?: { Tty?: boolean }
-  State?: { StartedAt?: string }
-}
 
 /** The older of two Engine API versions, like `1.45`. */
 const olderApiVersion = (a: string, b: string) => {
@@ -121,6 +122,26 @@ function sinceOf(time: string) {
   const seconds = Date.parse(`${whole}Z`) / 1000
   if (!Number.isFinite(seconds)) throw new CoreError('UNKNOWN', `Not an RFC 3339 time: ${time}`)
   return `${seconds}.${fraction.padEnd(9, '0').slice(0, 9)}`
+}
+
+/** An RFC 3339 time as nanoseconds since the epoch, to compare. */
+const nanosOf = (time: string) => {
+  const [seconds, fraction] = sinceOf(time).split('.')
+  return BigInt(seconds!) * 1_000_000_000n + BigInt(fraction!)
+}
+
+/**
+ * Where a Follow of a container's current run starts: when the run started, to the second, as its first lines may come
+ * before the engine notes it started; but not before the last run ended, whose lines would come again. Its whole log
+ * if it never started.
+ */
+function runStartOf({ State: state = {} }: ContainerInspect): string | undefined {
+  if (engineMillis(state.StartedAt) === undefined) return undefined
+  const started = state.StartedAt!
+  const second = started.replace(/\.\d+/, '')
+  const ended = state.FinishedAt
+  const endedBetween = engineMillis(ended) !== undefined && nanosOf(ended!) > nanosOf(second) && nanosOf(ended!) <= nanosOf(started)
+  return endedBetween ? ended : second
 }
 
 /**
@@ -223,48 +244,92 @@ function treeOf(containers: ContainerSummary[]): Tree {
   return tree
 }
 
+/** A container's node with what inspecting it tells: its Container Status, its restarts once it has restarted, and its details. */
+function inspectedNode(node: LogStreamNode, container: ContainerInspect): LogStreamNode {
+  const status = containerStatusOf(container)
+  return { ...node, ...(status.restarts > 0 && { restarts: status.restarts }), status, docker: containerDetailsOf(container) }
+}
+
 /**
  * A Docker Engine's containers, running and stopped, as a Log Source whose Log Streams are containers. Paths name a
  * Compose project, its service, then the container, e.g. `shop/web/shop-web-1`; containers outside Compose are under
  * `_standalone`. A project with one service and a service with one container carry it folded in, paths keeping every
- * level. It has no capabilities yet: Docker keeps every run of a container in one log, so has no Previous Log.
+ * level. Containers tell their Container Status and restarts, and a Follow carries on across restarts; Docker keeps
+ * every run of a container in one log, so it has no Previous Log.
  */
 function createDockerLogSource(endpoint: DockerEndpoint, apiVersion: string): LogSource {
   const api = (path: string) => `/v${apiVersion}${path}`
 
   const tree = async () => treeOf(await getJson<ContainerSummary[]>(endpoint, api('/containers/json'), { all: 'true' }))
 
+  const inspect = (ref: string) => getJson<ContainerInspect>(endpoint, api(`/containers/${encodeURIComponent(ref)}/json`))
+
+  /** Listed nodes as they're shown: each container, and each folded into a row, inspected for how it's doing. */
+  const withStatuses = (nodes: LogNode[], containers: Tree): Promise<LogNode[]> =>
+    Promise.all(
+      nodes.map(async (node): Promise<LogNode> => {
+        if (node.kind === 'group') return node.folded ? { ...node, folded: (await withStatuses([node.folded], containers))[0]! } : node
+        const id = containers.get(node.path)?.id
+        if (!id) return node
+        try {
+          return inspectedNode(node, await inspect(id))
+        } catch (error) {
+          // Removed since it was listed: it's shown as listed, and gone once listed again.
+          if (error instanceof CoreError && error.code === 'NOT_FOUND') return node
+          throw error
+        }
+      })
+    )
+
   /** The container at a Log Stream's path: its id, and whether it runs with a TTY. */
   const containerAt = async (path: SourcePath) => {
     const entry = (await tree()).get(path)
     if (!entry) throw new CoreError('NOT_FOUND', `No container at ${path}`)
     if (entry.node?.kind !== 'logStream' || !entry.id) throw new CoreError('NOT_A_LOG_STREAM', `Only containers have logs: ${path}`)
-    const inspected = await getJson<ContainerInspect>(endpoint, api(`/containers/${entry.id}/json`))
-    return { id: entry.id, name: entry.node.name, tty: inspected.Config?.Tty ?? false, startedAt: inspected.State?.StartedAt }
+    const inspected = await inspect(entry.id)
+    return { id: entry.id, name: entry.node.name, tty: inspected.Config?.Tty ?? false, inspected }
   }
 
-  const logsOf = (id: string, query: Record<string, string>) =>
-    get(endpoint, api(`/containers/${id}/logs`), { stdout: 'true', stderr: 'true', ...query })
+  /** Asks for a container's log, failing with LOG_UNAVAILABLE, naming the log driver, when the engine can't read it back. */
+  const logsOf = async ({ id, inspected }: { id: string; inspected: ContainerInspect }, query: Record<string, string>) => {
+    try {
+      return await get(endpoint, api(`/containers/${id}/logs`), { stdout: 'true', stderr: 'true', ...query })
+    } catch (error) {
+      if (!(error instanceof CoreError) || error.code !== 'LOG_UNAVAILABLE') throw error
+      const driver = inspected.HostConfig?.LogConfig?.Type ?? 'unknown'
+      throw new CoreError('LOG_UNAVAILABLE', `its log driver, ${driver}, sends it where Docker can’t read it back`)
+    }
+  }
 
   return {
-    capabilities: { previousLog: false, restarts: false, status: false },
+    capabilities: { previousLog: false, restarts: true, status: true },
 
     async listChildren(path) {
-      const entry = (await tree()).get(path)
+      const containers = await tree()
+      const entry = containers.get(path)
       if (!entry) throw new CoreError('NOT_FOUND', `Nothing at ${path} in the engine`)
       if (entry.node?.kind === 'logStream') throw new CoreError('NOT_A_FOLDER', `A log has no children: ${path}`)
-      return entry.children
+      return withStatuses(entry.children, containers)
     },
 
     async logStreamAt(path): Promise<LogStreamInfo> {
-      return { name: (await containerAt(path)).name }
+      const container = await containerAt(path)
+      // Other drivers' logs the engine keeps a copy of to read back, unless that's turned off: only asking tells.
+      if (readableDrivers.has(container.inspected.HostConfig?.LogConfig?.Type ?? 'json-file')) return { name: container.name }
+      try {
+        ;(await logsOf(container, { tail: '0' })).stop()
+        return { name: container.name }
+      } catch (error) {
+        if (!(error instanceof CoreError) || error.code !== 'LOG_UNAVAILABLE') throw error
+        return { name: container.name, unreadable: error.message }
+      }
     },
 
     async readLog(path, { tailLines, limitBytes, timestamps = false }: LogReadOptions = {}) {
-      const { id, tty } = await containerAt(path)
-      const { response, stop } = await logsOf(id, { tail: tailLines === undefined ? 'all' : String(tailLines), timestamps: String(timestamps) })
+      const container = await containerAt(path)
+      const { response, stop } = await logsOf(container, { tail: tailLines === undefined ? 'all' : String(tailLines), timestamps: String(timestamps) })
       let text = ''
-      const decoder = logDecoder(tty, (piece) => (text += piece), limitBytes)
+      const decoder = logDecoder(container.tty, (piece) => (text += piece), limitBytes)
       for await (const chunk of response) {
         decoder.push(chunk as Buffer)
         if (!decoder.full) continue
@@ -275,11 +340,12 @@ function createDockerLogSource(endpoint: DockerEndpoint, apiVersion: string): Lo
     },
 
     async followLog(path, { sinceTime }: LogFollowOptions, onText): Promise<LogConnection> {
-      const { id, tty, startedAt } = await containerAt(path)
-      // From the start of the current run, to the second: a container's first lines may come before the engine notes it started.
-      // A container that never started has the zero time for StartedAt: its whole log, then.
-      const since = sinceTime ?? (startedAt?.startsWith('0001-') ? undefined : startedAt?.replace(/\.\d+/, ''))
-      const { response, stop } = await logsOf(id, { follow: 'true', timestamps: 'true', ...(since && { since: sinceOf(since) }) })
+      const container = await containerAt(path)
+      const { tty, inspected } = container
+      // Between runs, its log is all the last run's: there's nothing to follow until the next starts.
+      if (inspected.State?.Status === 'restarting') throw new CoreError('LOG_UNAVAILABLE', `Waiting for the engine to restart ${path}`)
+      const since = sinceTime ?? runStartOf(inspected)
+      const { response, stop } = await logsOf(container, { follow: 'true', timestamps: 'true', ...(since && { since: sinceOf(since) }) })
       const decoder = logDecoder(tty, onText)
       const ended = new Promise<void>((done, fail) => {
         response.on('data', (chunk: Buffer) => decoder.push(chunk))
@@ -291,6 +357,11 @@ function createDockerLogSource(endpoint: DockerEndpoint, apiVersion: string): Lo
       // Settled whether or not anyone is still waiting on it, say after stopping.
       ended.catch(() => undefined)
       return { ended, stop }
+    },
+
+    /** Inspects the container by its name, the path's last segment, trusting the path. */
+    async currentRun(path) {
+      return containerRunOf(await inspect(path.slice(path.lastIndexOf('/') + 1)))
     }
   }
 }

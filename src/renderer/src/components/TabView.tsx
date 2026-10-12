@@ -27,7 +27,7 @@ interface Props {
 }
 
 /**
- * What the active tab shows: any error opening it, banners for a Disconnected Source or a pod that's gone,
+ * What the active tab shows: any error opening it, banners for a Disconnected Source or a pod or Log Stream that's gone,
  * its toolbar, and the viewer.
  */
 export function TabView({ viewerRef, model, settings, connection, onReconnect, panelId, onOpenAnyway, children }: Props) {
@@ -48,6 +48,11 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
           <button type="button" className="button button--quiet" disabled={connection.state === 'connecting'} onClick={onReconnect}>
             {t(connection.state === 'connecting' ? 'viewer.reconnecting' : 'viewer.reconnect')}
           </button>
+        </div>
+      )}
+      {activeTab?.logStreamGone && (
+        <div className="workbench__banner" role="status">
+          <span className="workbench__banner-text">{t('viewer.logStreamGone', { name: activeTab.file.name })}</span>
         </div>
       )}
       {activeTab?.podGone && (

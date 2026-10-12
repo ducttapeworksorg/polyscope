@@ -41,6 +41,11 @@ export interface LogStreamInfo {
   name: string
   /** Whether it has a Previous Log to switch to, having restarted; only from a Source Type with Previous Logs. */
   hasPreviousLog?: boolean
+  /**
+   * Set, to why, when its log can't be read at all, nor will be by waiting: say a Docker container whose log driver
+   * sends its log somewhere the engine can't read it back from.
+   */
+  unreadable?: string
   /** Set by a Kubernetes Logs Source: the container's pod and name, and how many times it has restarted. */
   kubernetes?: { pod: string; container: string; restarts: number }
 }
@@ -60,11 +65,14 @@ export interface LogSource {
    * Fails with NOT_FOUND for a path that isn't in the tree, NOT_A_FOLDER for a Log Stream's that has no children.
    */
   listChildren(path: SourcePath): Promise<LogNode[]>
-  /** What a log's path points at. Fails with NOT_FOUND for a path that isn't in the tree, NOT_A_LOG_STREAM for one that isn't a log's. */
+  /**
+   * What a log's path points at, and whether its log can be read. Fails with NOT_FOUND for a path that isn't in the
+   * tree, NOT_A_LOG_STREAM for one that isn't a log's.
+   */
   logStreamAt(path: SourcePath): Promise<LogStreamInfo>
   /**
    * A Log Stream's log as text, lines ending in '\n'. Fails like logStreamAt, with LOG_UNAVAILABLE when there's no log to
-   * give yet (for a Previous Log, no run before the current one), or with PREVIOUS_LOG_GONE for a Previous Log whose
+   * give yet (for a Previous Log, no run before the current one) or ever (`unreadable`), or with PREVIOUS_LOG_GONE for a Previous Log whose
    * run is no longer kept. Asked for a Previous Log only when the Source Type has them.
    */
   readLog(path: SourcePath, options?: LogReadOptions): Promise<string>

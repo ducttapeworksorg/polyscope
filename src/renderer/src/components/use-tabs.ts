@@ -10,6 +10,7 @@ import {
   followIdsOf,
   isLog,
   largeFileIdsOf,
+  markLogStreamGone,
   markPodGone,
   noteRestart,
   openTab,
@@ -59,12 +60,12 @@ export function useTabs({ onSourcesChanged }: Options) {
   const { tabs } = workspace
   const activeTab = tabs.find((tab) => tab.key === workspace.activeKey) ?? null
 
-  // A Follow that ends by itself (its container finished, its Source disconnected…) leaves its tab showing what it got.
-  // One whose container restarts lets its tab switch to the Previous Log.
+  // A Follow that ends by itself (its container finished or is gone, its Source disconnected…) leaves its tab showing
+  // what it got. One whose container restarts lets its tab switch to the Previous Log.
   useEffect(
     () =>
       core.onFollowEvent((event) => {
-        if (event.kind === 'ended') setWorkspace((ws) => endFollow(ws, event.followId))
+        if (event.kind === 'ended') setWorkspace((ws) => endFollow(ws, event.followId, event.reason))
         if (event.kind === 'restarted') setWorkspace((ws) => noteRestart(ws, event.followId))
       }),
     []
@@ -248,6 +249,10 @@ export function useTabs({ onSourcesChanged }: Options) {
       else if ('followId' in read) void core.stopFollow(read.followId).catch(() => undefined)
     } catch (error) {
       if (!isLatest()) return
+      // Removed, say a container: the tab keeps what it last read, saying it's gone.
+      if (error instanceof CoreCallError && error.code === 'NOT_FOUND' && log.of === 'logStream' && isLog(file) && file.view === 'log') {
+        return setWorkspace((ws) => markLogStreamGone(ws, key))
+      }
       // Switching to or from the Previous Log, or trying again after failing to: the tab says why, and can switch back.
       const failsInTab = log.of === 'logStream' && (previous !== (isLog(file) && file.previous) || file.view === 'logFailed')
       if (!failsInTab) return setOpenError(describeError(error))

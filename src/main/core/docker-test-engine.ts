@@ -20,11 +20,23 @@ export interface TestContainer {
   /** Its labels: Compose's `com.docker.compose.project` and `com.docker.compose.service` put it in a Compose project. */
   labels?: Record<string, string>
   /** Running unless given; an exited container's log can still be read. */
-  state?: 'running' | 'exited'
+  state?: 'created' | 'running' | 'paused' | 'restarting' | 'removing' | 'exited' | 'dead'
+  /** What it exited with last; 0 unless given. */
+  exitCode?: number
+  /** How its healthcheck is going; it has none unless given. */
+  health?: 'starting' | 'healthy' | 'unhealthy'
+  /** How many times the engine has restarted it; 0 unless given. */
+  restartCount?: number
+  /** Its image; `busybox:1.36` unless given. */
+  image?: string
+  /** Its log driver: the engine can read back only `json-file`'s, `local`'s and `journald`'s; `json-file` unless given. */
+  logDriver?: string
   /** Whether it runs with a TTY, so its log comes as it was written, not multiplexed; off unless given. */
   tty?: boolean
   /** When its current run started; the first entry's time, or else now, unless given. */
   startedAt?: string
+  /** When its last run ended; never unless given. */
+  finishedAt?: string
   logs?: TestLogEntry[]
 }
 
@@ -37,8 +49,16 @@ export interface TestDockerEngine {
   add(container: TestContainer): void
   /** Has a container log a line now, sending it to whoever follows its log. */
   log(name: string, text: string, stream?: TestLogEntry['stream']): void
-  /** Stops a running container, ending every Follow of its log. */
-  stop(name: string): void
+  /** Stops a running container, exiting with `exitCode` (0 unless given), ending every Follow of its log. */
+  stop(name: string, exitCode?: number): void
+  /** Has a running container crash and the engine restart it, ending every Follow of its log as its run ends. */
+  restart(name: string): void
+  /** Has a running container crash, the engine waiting to restart it, ending every Follow of its log; `start` restarts it. */
+  crash(name: string): void
+  /** Starts a container's next run. */
+  start(name: string): void
+  /** Removes a container, ending every Follow of its log. */
+  remove(name: string): void
   close(): Promise<void>
 }
 
@@ -58,6 +78,9 @@ function nanosOf(time: string) {
   return BigInt(Date.parse(`${whole}Z`)) * 1_000_000n + BigInt(fraction.padEnd(9, '0').slice(0, 9))
 }
 
+/** An RFC 3339 time in whole milliseconds since the epoch. */
+const nanosToMillis = (time: string) => Number(nanosOf(time) / 1_000_000n)
+
 /** A frame of a multiplexed log stream: its stream's id (1 stdout, 2 stderr) and length, then the payload. */
 function frame(stream: TestLogEntry['stream'], payload: string) {
   const body = Buffer.from(payload)
@@ -68,9 +91,10 @@ function frame(stream: TestLogEntry['stream'], payload: string) {
 }
 
 export async function startTestDockerEngine(containers: TestContainer[] = []): Promise<TestDockerEngine> {
-  interface Held extends Required<Omit<TestContainer, 'labels'>> {
+  interface Held extends Required<Omit<TestContainer, 'labels' | 'health'>> {
     id: string
     labels: Record<string, string>
+    health?: TestContainer['health']
     followers: Set<{ send(entry: TestLogEntry): void; end(): void }>
   }
   const held: Held[] = []
@@ -80,14 +104,24 @@ export async function startTestDockerEngine(containers: TestContainer[] = []): P
       id: randomUUID().replaceAll('-', '').repeat(2),
       labels: {},
       state: 'running',
+      exitCode: 0,
+      restartCount: 0,
+      image: 'busybox:1.36',
+      logDriver: 'json-file',
       tty: false,
       startedAt: logs[0]?.time ?? nanoTime(new Date()),
+      finishedAt: '0001-01-01T00:00:00Z',
       logs,
       followers: new Set(),
       ...container
     })
   }
   containers.forEach(add)
+
+  const endFollows = (container: Held) => {
+    for (const follower of container.followers) follower.end()
+    container.followers.clear()
+  }
 
   const named = (name: string) => {
     const container = held.find((c) => c.name === name)
@@ -106,20 +140,35 @@ export async function startTestDockerEngine(containers: TestContainer[] = []): P
   const summary = (c: Held) => ({
     Id: c.id,
     Names: [`/${c.name}`],
-    Image: 'busybox:1.36',
+    Image: c.image,
     Labels: c.labels,
     State: c.state,
-    Status: c.state === 'running' ? 'Up 5 minutes' : 'Exited (0) 2 minutes ago'
+    Status: c.state === 'running' ? 'Up 5 minutes' : `Exited (${c.exitCode}) 2 minutes ago`
   })
 
   const inspect = (c: Held) => ({
     Id: c.id,
     Name: `/${c.name}`,
-    Config: { Image: 'busybox:1.36', Tty: c.tty, Labels: c.labels },
-    State: { Status: c.state, Running: c.state === 'running', ExitCode: 0, StartedAt: c.startedAt, FinishedAt: '0001-01-01T00:00:00Z' }
+    Config: { Image: c.image, Tty: c.tty, Labels: c.labels },
+    RestartCount: c.restartCount,
+    HostConfig: { LogConfig: { Type: c.logDriver, Config: {} } },
+    State: {
+      Status: c.state,
+      Running: ['running', 'paused', 'restarting'].includes(c.state),
+      Paused: c.state === 'paused',
+      Restarting: c.state === 'restarting',
+      ExitCode: c.exitCode,
+      StartedAt: c.startedAt,
+      FinishedAt: c.finishedAt,
+      ...(c.health && { Health: { Status: c.health, FailingStreak: c.health === 'unhealthy' ? 3 : 0, Log: [] } })
+    }
   })
 
+  /** Log drivers whose logs the engine can read back. */
+  const readable = new Set(['json-file', 'local', 'journald'])
+
   const logs = (request: IncomingMessage, response: ServerResponse, c: Held, query: URLSearchParams) => {
+    if (!readable.has(c.logDriver)) return json(response, 501, { message: 'configured logging driver does not support reading' })
     const timestamps = ['1', 'true'].includes(query.get('timestamps') ?? '')
     const follow = ['1', 'true'].includes(query.get('follow') ?? '') && c.state === 'running'
     const streams = new Set((['stdout', 'stderr'] as const).filter((s) => ['1', 'true'].includes(query.get(s) ?? '')))
@@ -177,6 +226,19 @@ export async function startTestDockerEngine(containers: TestContainer[] = []): P
     return match[2] === 'json' ? json(response, 200, inspect(container)) : logs(request, response, container, url.searchParams)
   })
 
+  const crash = (name: string) => {
+    const container = named(name)
+    Object.assign(container, { state: 'restarting', exitCode: 1, finishedAt: nanoTime(new Date()), restartCount: container.restartCount + 1 })
+    endFollows(container)
+  }
+
+  const start = (name: string) => {
+    const container = named(name)
+    // The next run starts a little after the last ended, as the engine notes them.
+    const started = new Date(Math.max(Date.now(), nanosToMillis(container.finishedAt) + 1))
+    Object.assign(container, { state: 'running', startedAt: nanoTime(started) })
+  }
+
   const windows = process.platform === 'win32'
   const socket = windows ? `\\\\.\\pipe\\polyscope-test-docker-${randomUUID()}` : join(tmpdir(), `polyscope-docker-${randomUUID()}.sock`)
   await new Promise<void>((resolve) => server.listen(socket, resolve))
@@ -191,11 +253,21 @@ export async function startTestDockerEngine(containers: TestContainer[] = []): P
       container.logs.push(entry)
       for (const follower of container.followers) follower.send(entry)
     },
-    stop(name) {
+    stop(name, exitCode = 0) {
       const container = named(name)
-      container.state = 'exited'
-      for (const follower of container.followers) follower.end()
-      container.followers.clear()
+      Object.assign(container, { state: 'exited', exitCode, finishedAt: nanoTime(new Date()) })
+      endFollows(container)
+    },
+    restart(name) {
+      crash(name)
+      start(name)
+    },
+    crash,
+    start,
+    remove(name) {
+      const container = named(name)
+      held.splice(held.indexOf(container), 1)
+      endFollows(container)
     },
     async close() {
       server.closeAllConnections()

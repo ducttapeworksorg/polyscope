@@ -4,7 +4,7 @@ import { startTestDockerEngine, type TestDockerEngine } from './docker-test-engi
 import { hasTestDocker, testCounter } from './docker-test-seed'
 import { describeLogSourceContract } from './log-source-contract'
 
-const capabilities = { previousLog: false, restarts: false, status: false }
+const capabilities = { previousLog: false, restarts: true, status: true }
 
 /** What the seed's `counter` logs before it sleeps, a millisecond apart: `line 1` to `line 100`. */
 const counterLogs = Array.from({ length: 100 }, (_, i) => ({

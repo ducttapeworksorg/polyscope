@@ -12,3 +12,12 @@ export const testTicker = '_standalone/polyscope-ticker'
 
 /** The seed's Compose project, as tests/docker/compose.yaml names it. */
 export const testProject = 'polyscope-test'
+
+/** The seed's standalone `polyscope-crasher`, which logs `run started`, then `crashing` 10 s later and exits 1, restarted each time. */
+export const testCrasher = '_standalone/polyscope-crasher'
+
+/** The seed's standalone `polyscope-unhealthy`, whose healthcheck always fails. */
+export const testUnhealthy = '_standalone/polyscope-unhealthy'
+
+/** The seed's standalone `polyscope-syslog`, which logs to syslog with no copy for the engine to read back. */
+export const testSyslog = '_standalone/polyscope-syslog'

@@ -1,5 +1,6 @@
 import type {
   FileLog,
+  FollowEndReason,
   FollowedFile,
   FollowedLog,
   LanguageId,
@@ -99,6 +100,8 @@ export interface OpenTab {
   wrap?: boolean
   /** Set, to the pod's name, when a Kubernetes Files tab's pod turned out to be gone: it shows what was last read from it. */
   podGone?: string
+  /** Set when a log tab's Log Stream (a container, say) turned out to be gone: it shows what was last read from it. */
+  logStreamGone?: true
   /** Whether a log tab's container has restarted, as last read or since seen by its Follow, so has a Previous Log. */
   restarted?: boolean
   /** Whether a log tab's Log Stream's Source Type has Previous Logs, as last read; left out until a read has said. */
@@ -197,9 +200,18 @@ export function reopenTab(ws: Workspace, key: string, file: TabContent, openAs: 
 /** Marks a tab as showing what was last read from `pod`, which no longer exists; its content stays. */
 export const markPodGone = (ws: Workspace, key: string, pod: string): Workspace => updateTab(ws, key, { podGone: pod })
 
+/** Marks a log tab as showing what was last read from its Log Stream, which no longer exists; its content stays. */
+export const markLogStreamGone = (ws: Workspace, key: string): Workspace => updateTab(ws, key, { logStreamGone: true })
+
 /** Puts a freshly read log in its tab, with the Follow that goes on from it, if any. Pins the tab. */
-export const reopenLogTab = (ws: Workspace, key: string, file: TabContent): Workspace =>
-  updateTab(ws, key, { file, follow: followOf(file), ...restartedOf(file), pinned: true })
+export function reopenLogTab(ws: Workspace, key: string, file: TabContent): Workspace {
+  const tab = ws.tabs.find((open) => open.key === key)
+  if (!tab) return ws
+  // Read afresh, so from a Log Stream that's there.
+  const { logStreamGone: _, ...reopened } = tab
+  const fresh = { ...reopened, file, follow: followOf(file), ...restartedOf(file), pinned: true }
+  return { ...ws, tabs: ws.tabs.map((open) => (open === tab ? fresh : open)) }
+}
 
 /** Changes how a log tab is shown or followed, leaving its content as it is. */
 export const setLogView = (ws: Workspace, key: string, change: Partial<Pick<OpenTab, 'follow' | 'utc' | 'wrap'>>): Workspace =>
@@ -211,10 +223,12 @@ export function noteRestart(ws: Workspace, followId: string): Workspace {
   return tab ? updateTab(ws, tab.key, { restarted: true }) : ws
 }
 
-/** Marks a Follow as over in whichever tab it was going on, leaving what it showed. */
-export function endFollow(ws: Workspace, followId: string): Workspace {
+/** Marks a Follow as over in whichever tab it was going on, leaving what it showed; and its Log Stream as gone if that's why. */
+export function endFollow(ws: Workspace, followId: string, reason?: FollowEndReason): Workspace {
   const tab = ws.tabs.find((open) => open.follow?.followId === followId)
-  return tab ? updateTab(ws, tab.key, { follow: undefined }) : ws
+  if (!tab) return ws
+  const gone = reason === 'gone' && tab.file.view === 'log' && tab.file.of === 'logStream'
+  return updateTab(ws, tab.key, { follow: undefined, ...(gone && { logStreamGone: true }) })
 }
 
 /** The Large Files open in the tabs, which the core keeps (and caches) until they're closed. */
