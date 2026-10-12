@@ -72,4 +72,18 @@ describe('redact', () => {
     expect(redact('read /home/alice/a.log and /home/alice', { homeDir: '/home/alice' })).toBe('read ~/a.log and ~')
     expect(redact('read /home/alicia/a.log', { homeDir: '/home/alice' })).toBe('read /home/alicia/a.log')
   })
+
+  it('replaces a Windows home directory written with forward slashes, as ~/.ssh/config often names key files', () => {
+    const error = "Couldn't read the key file C:/Users/alice/.ssh/id_ed25519: ENOENT"
+    expect(redact(error, { homeDir: 'C:\\Users\\alice' })).toBe("Couldn't read the key file ~/.ssh/id_ed25519: ENOENT")
+    expect(redact('read c:/users/alicia/a.log', { homeDir: 'C:\\Users\\alice' })).toBe('read c:/users/alicia/a.log')
+  })
+
+  it('removes an SSH Files Source’s password and key passphrase, and the OpenSSH private key it may quote', () => {
+    expect(redact('{"type":"sshFiles","host":"logs.internal","password":"hunter2","passphrase":"open sesame"}')).toBe(
+      '{"type":"sshFiles","host":"logs.internal","password":"[redacted]","passphrase":"[redacted]"}'
+    )
+    const key = '-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----'
+    expect(redact(`signing in with ${key} failed`)).toBe('signing in with [redacted private key] failed')
+  })
 })
