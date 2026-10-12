@@ -478,11 +478,33 @@ export function createCore(options: CoreOptions = {}): Core {
     return connection?.state === 'connected' && !connection.dropped ? connection.backend : undefined
   }
 
-  const fileSourceFor = async (sourceId: string, path: SourcePath) => {
-    const backend = await backendFor(sourceId)
-    if (backend.kind !== 'files') throw new CoreError('NOT_A_FILE', `A Log Source has no files: ${path}`)
-    return backend.fileSource
+  /** Whether `error` came of the connection to `backend` dropping, which is since marked dropped or connected again. */
+  const droppedUnder = (sourceId: string, backend: Backend, error: unknown) => {
+    const connection = connections.get(sourceId)
+    return asCoreError(error).code === 'UNREACHABLE' && connection?.state === 'connected' && (connection.dropped || connection.backend !== backend)
   }
+
+  /**
+   * Runs `run` with a Connected Source's backend, and once more, connected again, if the connection dropped under it:
+   * a call made as it drops goes over it before the drop is noticed. Calls over a connection only read, so are safe to
+   * run again.
+   */
+  const withBackend = async <T>(sourceId: string, run: (backend: Backend) => Promise<T>) => {
+    const backend = await backendFor(sourceId)
+    try {
+      return await run(backend)
+    } catch (error) {
+      if (!droppedUnder(sourceId, backend, error)) throw error
+      return run(await backendFor(sourceId))
+    }
+  }
+
+  /** `run` with a Connected Source's File Source, as withBackend runs it. */
+  const withFileSource = <T>(sourceId: string, path: SourcePath, run: (fileSource: FileSource) => Promise<T>) =>
+    withBackend(sourceId, (backend) => {
+      if (backend.kind !== 'files') throw new CoreError('NOT_A_FILE', `A Log Source has no files: ${path}`)
+      return run(backend.fileSource)
+    })
 
   const logSourceFor = async (sourceId: string, path: SourcePath) => {
     const backend = await backendFor(sourceId)
@@ -575,24 +597,55 @@ export function createCore(options: CoreOptions = {}): Core {
   }
 
   /** A file of a File Source as readUpTo reads it, once the settings it's read by are loaded. */
-  const fileToRead = async (sourceId: string, path: SourcePath) => {
-    await loaded
-    const fileSource = await fileSourceFor(sourceId, path)
+  const fileToRead = async (fileSource: FileSource, path: SourcePath) => {
     const info = await fileSource.stat(path)
     if (info.kind !== 'file') throw new CoreError('NOT_A_FILE', `Not a file: ${path}`)
     const name = path.slice(path.lastIndexOf('/') + 1)
     const { compression } = compressionOf(name)
     await settingsLoaded
-    return { fileSource, file: { path, name, size: info.size, ...(compression && { compression }) } }
+    return { path, name, size: info.size, ...(compression && { compression }) }
   }
 
   /** Whether a file's content is over one of the size settings, telling without reading more than that much of it. */
   const isOver = async (sourceId: string, path: SourcePath, limit: 'largeFileThreshold' | 'openAnywayLimit') => {
-    const { fileSource, file } = await fileToRead(sourceId, path)
-    const bytes = settings[limit]
-    // A compressed file's size says nothing of its content's, so that is decompressed up to the limit to tell.
-    if (!file.compression) return file.size > bytes
-    return !(await readUpTo(fileSource, file, bytes, 0)).whole
+    await loaded
+    return withFileSource(sourceId, path, async (fileSource) => {
+      const file = await fileToRead(fileSource, path)
+      const bytes = settings[limit]
+      // A compressed file's size says nothing of its content's, so that is decompressed up to the limit to tell.
+      if (!file.compression) return file.size > bytes
+      return !(await readUpTo(fileSource, file, bytes, 0)).whole
+    })
+  }
+
+  /** A file of a File Source opened as openFile opens it: in the editor, the Large File Viewer, as binary or as hex. */
+  const openWith = async (
+    fileSource: FileSource,
+    sourceId: string,
+    path: SourcePath,
+    options: OpenOptions,
+    askedEncoding: TextEncoding | undefined
+  ): Promise<OpenedFile> => {
+    const info = await fileSource.stat(path)
+    if (info.kind !== 'file') throw new CoreError('NOT_A_FILE', `Not a file: ${path}`)
+    const name = path.slice(path.lastIndexOf('/') + 1)
+    await settingsLoaded
+    const { innerName, compression } = compressionOf(name)
+    const common = { path, name, size: info.size, modifiedTime: info.modifiedTime, ...(compression && { compression }) }
+    const head = options.hex ? hexDumpLimit : binarySniffLength
+    const inEditor = Boolean(options.inEditor) && !options.hex
+    // Settings keep the "open anyway" limit no lower than the threshold.
+    const limit = inEditor ? settings.openAnywayLimit : settings.largeFileThreshold
+    const { bytes, whole } = await readUpTo(fileSource, common, limit, head)
+    if (!whole && inEditor) {
+      throw new CoreError('OVER_OPEN_ANYWAY_LIMIT', `The file's content is over the "open anyway" limit of ${limit} bytes`)
+    }
+    if (!whole) return openLarge(sourceFor(sourceId), fileSource, info, common, bytes, options, askedEncoding)
+    const encoding = askedEncoding ?? (options.hex ? null : detectEncoding(bytes))
+    if (encoding) return { view: 'editor', ...common, content: decode(bytes, encoding), encoding, language: languageFor(innerName) }
+    if (!options.hex) return { view: 'binary', ...common, contentLength: bytes.length }
+    const shown = bytes.subarray(0, hexDumpLimit)
+    return { view: 'hex', ...common, content: hexDump(shown), contentLength: bytes.length, shownLength: shown.length }
   }
 
   // Follows under way, by id, each with the Source it reads from.
@@ -1200,52 +1253,37 @@ export function createCore(options: CoreOptions = {}): Core {
 
     async expand(sourceId, path, cursor) {
       await loaded
-      const backend = await backendFor(sourceId)
-      try {
-        return await listBackend(backend, path, cursor)
-      } catch (error) {
-        const { code, message } = asCoreError(error)
-        return [{ kind: 'error', path, code, message }]
-      }
+      return withBackend(sourceId, async (backend) => {
+        try {
+          return await listBackend(backend, path, cursor)
+        } catch (error) {
+          if (droppedUnder(sourceId, backend, error)) throw error
+          const { code, message } = asCoreError(error)
+          return [{ kind: 'error', path, code, message }]
+        }
+      })
     },
 
     async openFile(sourceId, path, options = {}) {
       await loaded
       const askedEncoding = options.encoding === undefined ? undefined : checkEncoding(options.encoding)
-      const fileSource = await fileSourceFor(sourceId, path)
-      const info = await fileSource.stat(path)
-      if (info.kind !== 'file') throw new CoreError('NOT_A_FILE', `Not a file: ${path}`)
-      const name = path.slice(path.lastIndexOf('/') + 1)
-      await settingsLoaded
-      const { innerName, compression } = compressionOf(name)
-      const common = { path, name, size: info.size, modifiedTime: info.modifiedTime, ...(compression && { compression }) }
-      const head = options.hex ? hexDumpLimit : binarySniffLength
-      const inEditor = Boolean(options.inEditor) && !options.hex
-      // Settings keep the "open anyway" limit no lower than the threshold.
-      const limit = inEditor ? settings.openAnywayLimit : settings.largeFileThreshold
-      const { bytes, whole } = await readUpTo(fileSource, common, limit, head)
-      if (!whole && inEditor) {
-        throw new CoreError('OVER_OPEN_ANYWAY_LIMIT', `The file's content is over the "open anyway" limit of ${limit} bytes`)
-      }
-      if (!whole) return openLarge(sourceFor(sourceId), fileSource, info, common, bytes, options, askedEncoding)
-      const encoding = askedEncoding ?? (options.hex ? null : detectEncoding(bytes))
-      if (encoding) return { view: 'editor', ...common, content: decode(bytes, encoding), encoding, language: languageFor(innerName) }
-      if (!options.hex) return { view: 'binary', ...common, contentLength: bytes.length }
-      const shown = bytes.subarray(0, hexDumpLimit)
-      return { view: 'hex', ...common, content: hexDump(shown), contentLength: bytes.length, shownLength: shown.length }
+      return withFileSource(sourceId, path, (fileSource) => openWith(fileSource, sourceId, path, options, askedEncoding))
     },
 
     async statPath(sourceId, path) {
       await loaded
-      return (await fileSourceFor(sourceId, path)).stat(path)
+      return withFileSource(sourceId, path, (fileSource) => fileSource.stat(path))
     },
 
     async readFile(sourceId, path) {
-      const { fileSource, file } = await fileToRead(sourceId, path)
-      const limit = settings.openAnywayLimit
-      const { bytes, whole } = await readUpTo(fileSource, file, limit, 0)
-      if (!whole) throw new CoreError('OVER_OPEN_ANYWAY_LIMIT', `The file's content is over the "open anyway" limit of ${limit} bytes`)
-      return bytes
+      await loaded
+      return withFileSource(sourceId, path, async (fileSource) => {
+        const file = await fileToRead(fileSource, path)
+        const limit = settings.openAnywayLimit
+        const { bytes, whole } = await readUpTo(fileSource, file, limit, 0)
+        if (!whole) throw new CoreError('OVER_OPEN_ANYWAY_LIMIT', `The file's content is over the "open anyway" limit of ${limit} bytes`)
+        return bytes
+      })
     },
 
     isLargeFile: (sourceId, path) => isOver(sourceId, path, 'largeFileThreshold'),
@@ -1327,7 +1365,7 @@ export function createCore(options: CoreOptions = {}): Core {
 
     async openFileLog(sourceId, path, options = {}) {
       await loaded
-      return (await readFileLog(await fileSourceFor(sourceId, path), sourceId, path, options)).fileLog
+      return withFileSource(sourceId, path, async (fileSource) => (await readFileLog(fileSource, sourceId, path, options)).fileLog)
     },
 
     async followFile(sourceId, path, options = {}) {
@@ -1335,8 +1373,10 @@ export function createCore(options: CoreOptions = {}): Core {
       if (!followableSourceTypes.includes(sourceFor(sourceId).type)) {
         throw new CoreError('NOT_FOLLOWABLE', `Only Local, Kubernetes Files and SSH Files Sources’ files grow, so only they can be followed: ${path}`)
       }
-      const fileSource = await fileSourceFor(sourceId, path)
-      const { fileLog, end, before, identity } = await readFileLog(fileSource, sourceId, path, options, true)
+      const { fileSource, fileLog, end, before, identity } = await withFileSource(sourceId, path, async (fileSource) => ({
+        fileSource,
+        ...(await readFileLog(fileSource, sourceId, path, options, true))
+      }))
       // Disconnected, reconnected or dropped while reading: this Follow would outlive the connection it was for.
       const live = liveBackendOf(sourceId)
       if (live?.kind !== 'files' || live.fileSource !== fileSource) {
