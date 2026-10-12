@@ -44,9 +44,11 @@ export function redact(text: string, options: { homeDir?: string } = {}): string
   for (const [pattern, replacement] of rules) result = result.replace(pattern, replacement as string)
   const { homeDir } = options
   if (homeDir) {
-    // Windows paths are case-insensitive; elsewhere only the exact directory (not /home/alicia for /home/alice) matches.
-    const flags = homeDir.includes('\\') ? 'gi' : 'g'
-    result = result.replace(new RegExp(`${escapeRegExp(homeDir)}(?![\\w.-])`, flags), '~')
+    // Windows paths are case-insensitive, and may be written with forward slashes (as ~/.ssh/config often names key
+    // files); elsewhere only the exact directory (not /home/alicia for /home/alice) matches.
+    const windows = homeDir.includes('\\')
+    const home = windows ? homeDir.split('\\').map(escapeRegExp).join('[\\\\/]') : escapeRegExp(homeDir)
+    result = result.replace(new RegExp(`${home}(?![\\w.-])`, windows ? 'gi' : 'g'), '~')
   }
   return result
 }

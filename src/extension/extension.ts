@@ -53,7 +53,9 @@ export async function activate(context: ExtensionContext): Promise<TestApi | und
   log.info(`Polyscope ${context.extension.packageJSON.version} started (VS Code ${version}, ${process.platform} ${process.arch})`)
   // Unlike the desktop app (see login-shell-path.ts), the login shell's PATH isn't loaded for kubeconfig exec auth
   // plugins: VS Code starts its extension host, local or remote, with the environment its login shell sets up.
-  const startCore = (secrets: SecretStore) => createCore({ dataDir, secrets })
+  // ssh2's helper for talking to Pageant, which the build copies beside the bundle (see scripts/build-extension.mts).
+  const pageantHelper = join(context.extensionPath, 'dist', 'pagent.exe')
+  const startCore = (secrets: SecretStore) => createCore({ dataDir, secrets, ...(process.platform === 'win32' && { pageantHelper }) })
   const secrets = createVsCodeSecretStore(context.secrets)
   const core = startCore(secrets)
 

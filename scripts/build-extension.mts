@@ -36,6 +36,9 @@ const nodeBundle = (entry: string, outDir: string, fileName: string): InlineConf
 })
 
 await build(nodeBundle('src/extension/extension.ts', join(extensionDir, 'dist'), 'extension.js'))
+// ssh2's helper for signing in through Pageant on Windows, shipped as the desktop app ships it (electron-builder.yml),
+// for src/extension/extension.ts to hand to the core.
+copyFileSync(join(root, 'node_modules', 'ssh2', 'util', 'pagent.exe'), join(extensionDir, 'dist', 'pagent.exe'))
 
 // The sidebar's and the viewer tabs' pages, each as one script with a fixed name, sharing one stylesheet; the rest is
 // found from them.

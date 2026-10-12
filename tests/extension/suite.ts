@@ -7,7 +7,7 @@ import { homedir, tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import * as vscode from 'vscode'
-import type { FollowEvent } from '@shared/core-api'
+import type { FollowEvent, HostKey } from '@shared/core-api'
 import { MB } from '@shared/settings'
 import { kubeConfigFor } from '../../src/main/core/kubeconfig'
 import { execInPod } from '../../src/main/core/kubernetes-exec'
@@ -23,6 +23,7 @@ import {
   tickerNamespace
 } from '../../src/main/core/kubernetes-test-cluster'
 import { hasTestStore, seedPrefix, testS3Source } from '../../src/main/core/s3-test-store'
+import { startTestSshServer } from '../../src/main/core/ssh-test-server'
 import type { TestApi } from '../../src/extension/extension'
 import { polyscopeLogUri as logUriOf, polyscopeUri as uriOf } from '../../src/extension/polyscope-uri'
 import { viewerViewType } from '../../src/extension/viewer-tab'
@@ -574,6 +575,51 @@ const firstRun: [string, () => Promise<void>][] = [
       } finally {
         listening?.dispose()
         await core.editSource(source!.id, { type: 'local', name: 'Files', rootPath: files })
+      }
+    }
+  ],
+  [
+    'an SSH Files Source signing in with a password, its host key trusted, reads through VS Code’s file system, its password kept in SecretStorage',
+    async () => {
+      const { core, open, secrets } = await extension()
+      const password = 'not-a-real-password'
+      // In this process, as the extension host is: the core connects to it as to any server.
+      const server = await startTestSshServer({ password })
+      const path = await server.seed({ 'app.log': log, 'nested/hello.txt': hello })
+      const { host, port, user } = server
+      const settings = { type: 'sshFiles', name: 'Server', host, port, user, path, auth: 'password', password } as const
+
+      try {
+        // As the Add Source dialog does: Test connection offers the new server's host key, which the user trusts.
+        const unknown = await core.testConnection(settings).then(
+          () => assert.fail('The server’s host key isn’t known yet'),
+          (error: { code: string; hostKey: HostKey }) => error
+        )
+        assert.equal(unknown.code, 'HOST_KEY_UNKNOWN')
+        await core.trustHostKey(unknown.hostKey)
+        await core.testConnection(settings)
+        const source = await core.addSource(settings)
+
+        try {
+          assert.equal(source.type === 'sshFiles' && source.passwordSet, true)
+          assert.equal(await secrets.get(source.id, 'password'), password)
+
+          // Read while Disconnected, which connects it.
+          const listed = await vscode.workspace.fs.readDirectory(uriOf(source.id, ''))
+          assert.deepEqual(listed.sort(), [
+            ['app.log', vscode.FileType.File],
+            ['nested', vscode.FileType.Directory]
+          ])
+          assert.equal(text(await vscode.workspace.fs.readFile(uriOf(source.id, 'nested/hello.txt'))), hello)
+          await open({ kind: 'file', sourceId: source.id, path: 'app.log', name: 'app.log', pinned: true })
+          assert.equal(await shownInTextTab(uriOf(source.id, 'app.log', source.name)), log)
+          await vscode.commands.executeCommand('workbench.action.closeActiveEditor')
+        } finally {
+          await core.deleteSource(source.id)
+        }
+        assert.equal(await secrets.get(source.id, 'password'), undefined, 'Deleting the Source forgets its password')
+      } finally {
+        await server.close()
       }
     }
   ],
