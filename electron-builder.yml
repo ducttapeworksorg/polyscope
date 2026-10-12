@@ -72,3 +72,8 @@ linux:
   synopsis: A viewer for files and logs from many systems
   maintainer: Ducttapeworks <info@ducttapeworks.dev>
   executableName: polyscope
+
+rpm:
+  # Without /usr/lib/.build-id links: every Electron app's binaries have the same build IDs, so the links clash with
+  # other Electron apps' (Lens, for one), and RPM then refuses the whole transaction.
+  fpm: ['--rpm-rpmbuild-define', '_build_id_links none']
