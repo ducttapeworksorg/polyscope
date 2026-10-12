@@ -7,6 +7,6 @@ describe.skipIf(!hasTestAccount)('Azure Blob Storage against the test account', 
   describeFileSourceContract('Azure Blob Storage', async (tree) => {
     const { prefix, remove } = await seedPrefix(tree)
     const { account, container, connectionString = '' } = testAzureBlobSource('Contract', prefix)
-    return { fileSource: createAzureBlobFileSource({ account, container, prefix, signIn: { connectionString } }), dispose: remove }
+    return { fileSource: createAzureBlobFileSource({ account, container, prefix, proxyUrl: '', signIn: { connectionString } }), dispose: remove }
   })
 })

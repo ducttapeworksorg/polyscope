@@ -60,9 +60,11 @@ export interface NewAzureBlobSource {
   /** The blob name prefix the Source is rooted at, e.g. `logs/app`; the whole container when blank or left out. */
   prefix?: string
   /**
-   * The account's blob endpoint, for signing in with a SAS token or as yourself, e.g. `https://127.0.0.1:10000/devstoreaccount1`
-   * for Azurite; Azure's own (`https://<account>.blob.core.windows.net`) when blank or left out. A connection string or
-   * SAS URL says where its endpoint is itself.
+   * The account's blob endpoint, for signing in with a SAS token or as yourself: e.g.
+   * `https://<account>.blob.core.usgovcloudapi.net` for Azure Government, `https://<account>.blob.core.chinacloudapi.cn`
+   * for Azure in China, or `https://127.0.0.1:10000/devstoreaccount1` for Azurite; Azure's own
+   * (`https://<account>.blob.core.windows.net`) when blank or left out. A connection string or SAS URL says where its
+   * endpoint is itself.
    */
   endpoint?: string
   /** How the Source signs in: a connection string, a SAS, or as yourself through Azure CLI. A connection string unless given. */
@@ -77,6 +79,10 @@ export interface NewAzureBlobSource {
    * account and container, when it names them.
    */
   sas?: string
+  /** A PEM file of CA certificates trusted as well as the OS trust store; none when blank or left out. */
+  caBundlePath?: string
+  /** A proxy for this Source alone, e.g. `http://proxy.corp:3128`; when blank or left out, HTTPS_PROXY / NO_PROXY decide. */
+  proxyUrl?: string
   /** The Environment the Source is labelled with; unlabelled when left out. */
   environmentId?: string
 }
@@ -260,6 +266,10 @@ export interface AzureBlobSourceInfo extends SourceIdentity {
   connectionStringSet: boolean
   /** Whether a SAS is stored for the Source, likewise. */
   sasSet: boolean
+  /** Blank for none. */
+  caBundlePath: string
+  /** Normalised: a URL with its scheme; blank to follow HTTPS_PROXY / NO_PROXY. */
+  proxyUrl: string
 }
 
 export interface SshFilesSourceInfo extends SourceIdentity {

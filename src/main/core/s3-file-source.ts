@@ -5,18 +5,15 @@ import {
   S3Client,
   S3ServiceException
 } from '@aws-sdk/client-s3'
-import { readFile } from 'node:fs/promises'
-import { Agent as HttpAgent } from 'node:http'
-import { Agent as HttpsAgent } from 'node:https'
-import { getCACertificates } from 'node:tls'
 import type { CoreErrorCode } from '@shared/core-api'
 import { CoreError } from './core-error'
 import type { FileSource } from './file-source'
+import { networkAgents, type NetworkSettings } from './network-agents'
 import { certificateCodes, networkCodes } from './network-errors'
 import { createObjectStoreFileSource, type ObjectStore } from './object-store-file-source'
 
 /** Where an S3 Source points and how it signs in, normalised and with its secret filled in. */
-export interface S3Target {
+export interface S3Target extends NetworkSettings {
   /** A URL with its scheme, or blank for AWS itself. */
   host: string
   bucket: string
@@ -26,11 +23,6 @@ export interface S3Target {
   pathStyle: boolean
   /** Typed keys, or the name of an AWS profile to sign in with: blank for the default credential chain. */
   credentials: { accessKeyId: string; secretAccessKey: string } | { profile: string }
-  verifyTls: boolean
-  /** PEM CA certificates to trust as well as Node's own and the OS trust store. */
-  caBundle?: string
-  /** A proxy for every request; blank to follow HTTPS_PROXY / NO_PROXY. */
-  proxyUrl: string
 }
 
 /** The most entries S3 lists in one request, and so in one page of the tree. */
@@ -66,29 +58,6 @@ function toCoreError(error: unknown, what: string): CoreError {
   return new CoreError('UNKNOWN', `${what}: ${message}`)
 }
 
-/** Reads a CA bundle, which must hold at least one PEM certificate. */
-export async function readCaBundle(path: string) {
-  let bundle: string
-  try {
-    bundle = await readFile(path, 'utf8')
-  } catch (error) {
-    throw new CoreError('CA_BUNDLE_UNREADABLE', error instanceof Error ? error.message : String(error))
-  }
-  if (!bundle.includes('-----BEGIN CERTIFICATE-----')) throw new CoreError('CA_BUNDLE_UNREADABLE', `No PEM certificates in ${path}`)
-  return bundle
-}
-
-/** The agents requests go out through: trusting Node's CAs, the OS's and the target's own, and via its proxy. */
-function agentsFor({ verifyTls, caBundle, proxyUrl }: S3Target) {
-  // A proxy of the Source's own takes every request; otherwise the environment's settings, as they are now, decide.
-  const proxyEnv = proxyUrl ? { HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl } : { ...process.env }
-  const ca = [...new Set([...getCACertificates('default'), ...getCACertificates('system')]), ...(caBundle ? [caBundle] : [])]
-  return {
-    httpAgent: new HttpAgent({ keepAlive: true, proxyEnv }),
-    httpsAgent: new HttpsAgent({ keepAlive: true, proxyEnv, ca, rejectUnauthorized: verifyTls })
-  }
-}
-
 /** A File Source over the keys under a bucket's prefix, with key prefixes (up to a '/') shown as folders. */
 export function createS3FileSource(target: S3Target, { pageSize = s3PageSize } = {}): FileSource {
   const { bucket, credentials } = target
@@ -98,7 +67,7 @@ export function createS3FileSource(target: S3Target, { pageSize = s3PageSize } =
     forcePathStyle: target.pathStyle,
     // Without keys or a profile the SDK goes down its default credential chain.
     ...('profile' in credentials ? credentials.profile && { profile: credentials.profile } : { credentials }),
-    requestHandler: agentsFor(target),
+    requestHandler: networkAgents(target),
     // Checksums only where S3 insists: many S3-compatible stores don't support the newer ones.
     requestChecksumCalculation: 'WHEN_REQUIRED',
     responseChecksumValidation: 'WHEN_REQUIRED'

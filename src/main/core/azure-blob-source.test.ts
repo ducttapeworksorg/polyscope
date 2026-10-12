@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -12,7 +12,7 @@ import { hasTestAccount, seedPrefix, takesTokens, testAzureBlobSource, testEndpo
 import { expiredAzureCli, startManagedIdentity } from './azure-test-identity'
 import { createCore } from './core'
 import { createSecretStore } from './secret-store'
-import { startTlsFront } from './test-network'
+import { startProxy, startTlsFront } from './test-network'
 
 let dir: string
 
@@ -69,7 +69,9 @@ describe('adding an Azure Blob Storage Source', () => {
       endpoint: '',
       auth: 'connectionString',
       connectionStringSet: true,
-      sasSet: false
+      sasSet: false,
+      caBundlePath: '',
+      proxyUrl: ''
     }
     expect(added).toEqual(expected)
     expect(await core.listSources()).toEqual([expected])
@@ -276,6 +278,43 @@ describe('an Azure Blob Storage Source’s SAS', () => {
 
     await expect(core.connect(source.id)).rejects.toMatchObject({ code: 'SAS_EXPIRED', message: expect.stringContaining('2020-01-01') })
     expect(await core.connectionState(source.id)).toMatchObject({ state: 'error', code: 'SAS_EXPIRED' })
+  })
+})
+
+describe('an Azure Blob Storage Source’s endpoint, trust and proxy settings', () => {
+  it('are normalised', async () => {
+    const added = await createCore().addSource(
+      offline({ endpoint: 'contosologs.blob.core.chinacloudapi.cn/', caBundlePath: ' /etc/ssl/corp.pem ', proxyUrl: ' proxy.corp:3128/ ' })
+    )
+
+    expect(added).toMatchObject({ endpoint: 'https://contosologs.blob.core.chinacloudapi.cn', caBundlePath: '/etc/ssl/corp.pem', proxyUrl: 'http://proxy.corp:3128' })
+  })
+
+  it.each(['socks5://proxy.corp:1080', 'http://'])('refuse a proxy that isn’t an http(s) address: %s', async (proxyUrl) => {
+    await expect(createCore().addSource(offline({ proxyUrl }))).rejects.toMatchObject({ code: 'INVALID_PROXY' })
+  })
+
+  it('take their defaults for a Source saved before they existed', async () => {
+    const dataDir = join(dir, 'user-data')
+    await mkdir(dataDir)
+    const saved = { id: 'old', type: 'azureBlob', name: 'Old', account: 'contosologs', container: 'logs', prefix: '' }
+    await writeFile(join(dataDir, 'sources.json'), JSON.stringify({ version: 1, sources: [saved], groupOrder: ['local', 'azureBlob'] }))
+
+    const [source] = await createCore({ dataDir }).listSources()
+
+    expect(source).toMatchObject({ auth: 'connectionString', endpoint: '', caBundlePath: '', proxyUrl: '' })
+  })
+
+  it('keep a Source from connecting when its CA bundle can’t be read, or holds no certificates', async () => {
+    const empty = join(dir, 'empty.pem')
+    await writeFile(empty, 'not a certificate\n')
+    const core = createCore()
+    const missing = await core.addSource(offline({ caBundlePath: join(dir, 'missing.pem') }))
+    const notCertificates = await core.addSource(offline({ caBundlePath: empty }))
+
+    await expect(core.connect(missing.id)).rejects.toMatchObject({ code: 'CA_BUNDLE_UNREADABLE' })
+    await expect(core.connect(notCertificates.id)).rejects.toMatchObject({ code: 'CA_BUNDLE_UNREADABLE' })
+    await expect(core.testConnection(offline({ caBundlePath: empty }))).rejects.toMatchObject({ code: 'CA_BUNDLE_UNREADABLE' })
   })
 })
 
@@ -547,6 +586,102 @@ describe.skipIf(!hasTestAccount)('an Azure Blob Storage Source against the test 
     expect(await core.openFile(source.id, 'app/a.log')).toMatchObject({ content: 'a' })
     expect(await secrets.get(source.id, 'connectionString')).toBeUndefined()
     expect(await secrets.get(source.id, 'sas')).toBeUndefined()
+  })
+
+  describe('in a corporate network', () => {
+    /**
+     * The test account behind TLS, with a certificate from a private CA: its blob `endpoint` there, a `caBundlePath`
+     * that trusts it, and the front's `host` (and port), as a proxy is asked to tunnel to it.
+     */
+    const behindTls = async () => {
+      const front = await startTlsFront(testEndpoint)
+      disposals.push(front.close)
+      return { endpoint: `${front.url}${new URL(testEndpoint).pathname}`, caBundlePath: front.caPath, host: new URL(front.url).host }
+    }
+    const proxy = async () => {
+      const started = await startProxy()
+      disposals.push(started.close)
+      return started
+    }
+    /** Settings signing in with a SAS token alone, at the blob endpoint they're given rather than Azure's. */
+    const atEndpoint = async ({ endpoint, ...changes }: Partial<NewAzureBlobSource> & { endpoint: string }): Promise<NewAzureBlobSource> => {
+      const { account, container } = testAzureBlobSource('Logs', '')
+      const prefix = await seeded({ 'a.log': 'a' })
+      return { type: 'azureBlob', name: 'Logs', account, container, prefix, endpoint, auth: 'sas', sas: new URL(await testSasUrl()).search, ...changes }
+    }
+    const connects = async (settings: NewAzureBlobSource) => {
+      const core = createCore()
+      const source = await core.addSource(settings)
+      return names(await core.connect(source.id))
+    }
+
+    it('refuses a certificate from an unknown CA', async () => {
+      const { endpoint } = await behindTls()
+      const settings = await atEndpoint({ endpoint })
+      const core = createCore()
+      const source = await core.addSource(settings)
+
+      await expect(core.connect(source.id)).rejects.toMatchObject({ code: 'CERTIFICATE_UNTRUSTED' })
+      await expect(core.testConnection(settings)).rejects.toMatchObject({ code: 'CERTIFICATE_UNTRUSTED' })
+    })
+
+    it('reaches the account at the endpoint it’s given, trusting a certificate from the CA bundle', async () => {
+      const { endpoint, caBundlePath } = await behindTls()
+
+      expect(await connects(await atEndpoint({ endpoint, caBundlePath }))).toEqual(['a.log'])
+    })
+
+    it('goes through its own proxy, whatever NO_PROXY says', async () => {
+      vi.stubEnv('NO_PROXY', '*')
+      const { url, tunnels } = await proxy()
+      const { endpoint, caBundlePath, host } = await behindTls()
+
+      expect(await connects(await atEndpoint({ endpoint, caBundlePath, proxyUrl: url }))).toEqual(['a.log'])
+      expect(tunnels).toContain(host)
+    })
+
+    it('goes through HTTPS_PROXY without a proxy of its own', async () => {
+      const { url, tunnels } = await proxy()
+      vi.stubEnv('HTTPS_PROXY', url)
+      vi.stubEnv('NO_PROXY', undefined)
+      const { endpoint, caBundlePath, host } = await behindTls()
+
+      expect(await connects(await atEndpoint({ endpoint, caBundlePath }))).toEqual(['a.log'])
+      expect(tunnels).toContain(host)
+    })
+
+    it('goes straight to hosts NO_PROXY lists', async () => {
+      const { url, tunnels } = await proxy()
+      vi.stubEnv('HTTPS_PROXY', url)
+      vi.stubEnv('NO_PROXY', '127.0.0.1')
+      const { endpoint, caBundlePath } = await behindTls()
+
+      expect(await connects(await atEndpoint({ endpoint, caBundlePath }))).toEqual(['a.log'])
+      expect(tunnels).toEqual([])
+    })
+
+    it.skipIf(!takesTokens)('signs in through Azure’s default credentials through them too', async () => {
+      const identity = await startManagedIdentity()
+      disposals.push(identity.close)
+      for (const [name, value] of Object.entries(identity.env)) vi.stubEnv(name, value)
+      const { url, tunnels } = await proxy()
+      const { endpoint, caBundlePath, host } = await behindTls()
+      const { account, container } = testAzureBlobSource('Logs', '')
+      const prefix = await seeded({ 'a.log': 'a' })
+
+      expect(await connects({ type: 'azureBlob', name: 'Logs', account, container, prefix, endpoint, auth: 'azureCli', caBundlePath, proxyUrl: url })).toEqual(['a.log'])
+      expect(tunnels).toContain(host)
+    })
+
+    it('signs in with a connection string through them too', async () => {
+      const { url, tunnels } = await proxy()
+      const { endpoint, caBundlePath, host } = await behindTls()
+      const settings = testAzureBlobSource('Logs', await seeded({ 'a.log': 'a' }))
+      const connectionString = settings.connectionString!.replace(/BlobEndpoint=[^;]+/, `BlobEndpoint=${endpoint}`)
+
+      expect(await connects({ ...settings, connectionString, caBundlePath, proxyUrl: url })).toEqual(['a.log'])
+      expect(tunnels).toContain(host)
+    })
   })
 
   it('needs connecting afresh after its connection string changes', async () => {

@@ -1,6 +1,6 @@
 # Sources
 
-A **Source** is one place Polyscope reads from: a folder, a folder on a server, a bucket, a Workload's files, a namespace's logs, or a Docker engine's container logs. You configure each one once, give it a name, and it stays in the sidebar, grouped by its Source Type.
+A **Source** is one place Polyscope reads from: a folder, a folder on a server, a bucket, a blob container, a Workload's files, a namespace's logs, or a Docker engine's container logs. You configure each one once, give it a name, and it stays in the sidebar, grouped by its Source Type.
 
 To add one, choose **+** next to **Sources** at the top of the sidebar, pick a **Source Type**, and fill in the rest. **Test connection** checks the settings without saving anything.
 
@@ -84,6 +84,25 @@ A bucket on AWS S3, MinIO, Ceph, or any other S3-compatible store.
 - **Proxy**: like `http://proxy.corp:3128`. Otherwise `HTTPS_PROXY` and `NO_PROXY` apply.
 
 S3 objects don't grow, so they can't be followed.
+
+## Azure Blob Storage
+
+A container in an Azure storage account, Data Lake Gen2 ones (with a hierarchical namespace) included. Blobs are shown as folders and files split on `/`, as S3 keys are.
+
+- **Sign in with**:
+  - **Connection string**: the storage account's, from its **Access keys** page in the Azure portal. It's stored encrypted by your operating system's secure storage, like an S3 secret key.
+  - **SAS**: a SAS URL or token, stored the same way. Pasting a SAS URL fills in the account and container. It needs the **List** and **Read** permissions, and the Source says so when it has expired.
+  - **Azure CLI**: signs in as you, with Azure's default credentials: your `az login`, `AZURE_*` environment variables, or a managed identity on an Azure VM. Polyscope stores nothing. Your identity needs the **Storage Blob Data Reader** role on the account or container; the Source names the role when it's missing, and tells you to run `az login` again when your sign-in has expired.
+- **Storage account** and **Container**, and an optional **Prefix** to browse only the blobs under it, like `logs/app`.
+- **Blob endpoint**, signing in with a SAS token or Azure CLI: for Azure Government (`https://<account>.blob.core.usgovcloudapi.net`), Azure in China (`https://<account>.blob.core.chinacloudapi.cn`) or the Azurite emulator (`https://127.0.0.1:10000/devstoreaccount1`). Leave it blank for Azure's own. A connection string or SAS URL says where its endpoint is itself.
+- **CA bundle**: a PEM file of extra CA certificates to trust, for TLS inspection by a private CA.
+- **Proxy**: like `http://proxy.corp:3128`. Otherwise `HTTPS_PROXY` and `NO_PROXY` apply.
+
+The proxy and CA bundle are for reaching the storage account. Signing in through Azure CLI, getting a token goes through `HTTPS_PROXY` and the CAs Node.js trusts (`NODE_EXTRA_CA_CERTS`), or Azure CLI's own settings, not these.
+
+Gzip and zstd blobs open decompressed, and a blob over the Large File threshold opens end-first, read in ranges. Blobs don't grow, so they can't be followed.
+
+In VS Code, a connection string or SAS is kept in VS Code's SecretStorage, and under Remote-SSH, WSL or Dev Containers, **Azure CLI** signs in with the remote machine's `az login` and environment, as an S3 Source uses its AWS profiles.
 
 ## Kubernetes Files
 

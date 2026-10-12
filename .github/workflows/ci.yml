@@ -172,6 +172,10 @@ jobs:
       # The File Source contract suite and the core façade tests; the build job skips them without Azurite.
       - run: npx vitest run src/main/core/azure-blob
 
+      # The Extension Copy's Azure Blob Storage tests, which the build job skips without Azurite.
+      - name: VS Code integration test
+        run: xvfb-run --auto-servernum npm run test:extension
+
       - name: Show the Azurite log
         if: failure()
         run: docker logs azurite

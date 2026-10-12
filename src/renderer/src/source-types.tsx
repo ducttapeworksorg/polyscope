@@ -280,6 +280,43 @@ function remotePath({ user, host, path: folder }: SshFilesSourceInfo, path: Sour
   return `${user ? `${user}@` : ''}${host}:${path ? `${folder === '/' ? '' : folder}/${path}` : folder}`
 }
 
+/** A PEM file of CA certificates for a Source to trust as well as the OS's own, typed or picked. */
+function CaBundleField({ value, onChange }: { value: string; onChange(path: string): void }) {
+  const id = useId()
+  const browse = async () => {
+    const picked = await window.polyscope.pickFile([
+      { name: t('network.caBundle.filter'), extensions: ['pem', 'crt', 'cer'] },
+      { name: t('network.caBundle.allFiles'), extensions: ['*'] }
+    ])
+    if (picked) onChange(picked)
+  }
+  return (
+    <div className="field">
+      <label className="field__label" htmlFor={id}>
+        {t('network.caBundle')}
+      </label>
+      <div className="field__row">
+        <input id={id} className="field__input field__input--path" value={value} onChange={(e) => onChange(e.target.value)} spellCheck={false} />
+        <button type="button" className="button button--quiet" onClick={browse}>
+          {t('network.browse')}
+        </button>
+      </div>
+      <span className="field__hint">{t('network.caBundle.hint')}</span>
+    </div>
+  )
+}
+
+/** A proxy for a Source's requests alone; blank for HTTPS_PROXY and NO_PROXY to decide. */
+function ProxyField({ value, onChange }: { value: string; onChange(proxyUrl: string): void }) {
+  return (
+    <label className="field">
+      <span className="field__label">{t('network.proxy')}</span>
+      <input className="field__input field__input--path" value={value} onChange={(e) => onChange(e.target.value)} spellCheck={false} />
+      <span className="field__hint">{t('network.proxy.hint')}</span>
+    </label>
+  )
+}
+
 type S3Settings = Extract<NewSource, { type: 's3' }>
 
 function S3Fields({ value, onChange, editing }: FieldsProps<S3Settings>) {
@@ -313,14 +350,6 @@ function S3Fields({ value, onChange, editing }: FieldsProps<S3Settings>) {
   useEffect(() => {
     void window.polyscope.secretStorageIsWeak().then(setWeakSecrets)
   }, [])
-
-  const browseCaBundle = async () => {
-    const picked = await window.polyscope.pickFile([
-      { name: t('s3Source.caBundle.filter'), extensions: ['pem', 'crt', 'cer'] },
-      { name: t('s3Source.caBundle.allFiles'), extensions: ['*'] }
-    ])
-    if (picked) onChange({ ...value, caBundlePath: picked })
-  }
 
   return (
     <>
@@ -369,26 +398,9 @@ function S3Fields({ value, onChange, editing }: FieldsProps<S3Settings>) {
         <ProfileField value={value.profile ?? ''} onChange={(profile) => onChange({ ...value, profile })} />
       )}
 
-      <div className="field">
-        <label className="field__label" htmlFor="s3-ca-bundle">
-          {t('s3Source.caBundle')}
-        </label>
-        <div className="field__row">
-          <input
-            id="s3-ca-bundle"
-            className="field__input field__input--path"
-            value={value.caBundlePath ?? ''}
-            onChange={(e) => onChange({ ...value, caBundlePath: e.target.value })}
-            spellCheck={false}
-          />
-          <button type="button" className="button button--quiet" onClick={browseCaBundle}>
-            {t('s3Source.browse')}
-          </button>
-        </div>
-        <span className="field__hint">{t('s3Source.caBundle.hint')}</span>
-      </div>
+      <CaBundleField value={value.caBundlePath ?? ''} onChange={(caBundlePath) => onChange({ ...value, caBundlePath })} />
       {check('verifyTls', 's3Source.verifyTls', 's3Source.verifyTls.hint', true)}
-      {text('proxyUrl', 's3Source.proxy', { hint: 's3Source.proxy.hint', mono: true })}
+      <ProxyField value={value.proxyUrl ?? ''} onChange={(proxyUrl) => onChange({ ...value, proxyUrl })} />
     </>
   )
 }
@@ -405,7 +417,7 @@ function AzureBlobFields({ value, onChange, editing }: FieldsProps<AzureBlobSett
     const next = { ...value, ...changes }
     onChange({ ...next, name: nameFollowing(value.name, azureBlobName(value), azureBlobName(next)) })
   }
-  const text = (key: 'account' | 'container' | 'prefix', label: MessageKey, hint?: MessageKey) => (
+  const text = (key: 'account' | 'container' | 'prefix' | 'endpoint', label: MessageKey, hint?: MessageKey) => (
     <label className="field">
       <span className="field__label">{t(label)}</span>
       <input className="field__input field__input--path" value={value[key] ?? ''} onChange={(e) => set({ [key]: e.target.value })} spellCheck={false} />
@@ -472,6 +484,10 @@ function AzureBlobFields({ value, onChange, editing }: FieldsProps<AzureBlobSett
         {text('container', 'azureBlobSource.container')}
       </div>
       {text('prefix', 'azureBlobSource.prefix', 'azureBlobSource.prefix.hint')}
+      {/* A connection string says where the account's endpoint is itself. */}
+      {auth !== 'connectionString' && text('endpoint', 'azureBlobSource.endpoint', 'azureBlobSource.endpoint.hint')}
+      <CaBundleField value={value.caBundlePath ?? ''} onChange={(caBundlePath) => onChange({ ...value, caBundlePath })} />
+      <ProxyField value={value.proxyUrl ?? ''} onChange={(proxyUrl) => onChange({ ...value, proxyUrl })} />
     </>
   )
 }
@@ -873,9 +889,21 @@ export const sourceTypeUi: SourceTypeUis = {
     label: 'sourceType.azureBlob',
     hint: 'sourceType.azureBlob.hint',
     Icon: BlobStorageIcon,
-    blank: () => ({ type: 'azureBlob', name: '', account: '', container: '', prefix: '', auth: 'connectionString', connectionString: '', sas: '' }),
+    blank: () => ({
+      type: 'azureBlob',
+      name: '',
+      account: '',
+      container: '',
+      prefix: '',
+      endpoint: '',
+      auth: 'connectionString',
+      connectionString: '',
+      sas: '',
+      caBundlePath: '',
+      proxyUrl: ''
+    }),
     // Everything but the connection string or SAS, which the renderer never has: left blank, the stored one stays.
-    settingsOf: ({ name, account, container, prefix, endpoint, auth }) => ({
+    settingsOf: ({ name, account, container, prefix, endpoint, auth, caBundlePath, proxyUrl }) => ({
       type: 'azureBlob',
       name,
       account,
@@ -884,7 +912,9 @@ export const sourceTypeUi: SourceTypeUis = {
       endpoint,
       auth,
       connectionString: '',
-      sas: ''
+      sas: '',
+      caBundlePath,
+      proxyUrl
     }),
     fullPath: blobPath,
     Fields: AzureBlobFields

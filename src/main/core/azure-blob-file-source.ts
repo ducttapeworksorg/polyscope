@@ -11,6 +11,7 @@ import { parseSas, type Sas } from '@shared/azure-sas'
 import type { CoreErrorCode } from '@shared/core-api'
 import { CoreError } from './core-error'
 import type { FileSource } from './file-source'
+import { networkAgents, type NetworkSettings } from './network-agents'
 import { certificateCodes, networkCodes } from './network-errors'
 import { createObjectStoreFileSource, type ObjectStore } from './object-store-file-source'
 
@@ -20,8 +21,8 @@ import { createObjectStoreFileSource, type ObjectStore } from './object-store-fi
  */
 export type AzureBlobSignIn = { connectionString: string } | { sas: string } | { azureCli: true }
 
-/** Where an Azure Blob Storage Source points and how it signs in, normalised and with its secret filled in. */
-export interface AzureBlobTarget {
+/** Where an Azure Blob Storage Source points and how it signs in, normalised and with its secret and CA bundle filled in. */
+export interface AzureBlobTarget extends Pick<NetworkSettings, 'caBundle' | 'proxyUrl'> {
   account: string
   container: string
   /** No leading or trailing '/'; blank for the whole container. */
@@ -137,17 +138,36 @@ export function checkSas(input: string, account: string, container: string): Sas
   return sas
 }
 
+/**
+ * The pipeline options for a client reaching `url`: its requests go out through the same agents as S3's, trusting the
+ * Source's CA bundle and going through its proxy, or else HTTPS_PROXY / NO_PROXY. The Storage SDK hands `agent` on to
+ * the Azure core pipeline, whose own proxy handling then stands aside, though its options type doesn't name it (hence
+ * the object built apart, rather than returned as a literal the type would refuse). One agent serves every request, so
+ * it's the one for the endpoint's scheme. Azure is always reached over verified TLS: the spec offers no opt-out.
+ */
+function pipelineOptionsFor(url: string, { caBundle, proxyUrl }: AzureBlobTarget): StoragePipelineOptions {
+  const { httpAgent, httpsAgent } = networkAgents({ verifyTls: true, proxyUrl, ...(caBundle && { caBundle }) })
+  const options = { ...pipelineOptions, agent: new URL(url).protocol === 'http:' ? httpAgent : httpsAgent }
+  return options
+}
+
 /** The storage account a Source reaches, signed in the way it says, without connecting yet. */
-function serviceClientOf({ account, container, endpoint, signIn }: AzureBlobTarget): BlobServiceClient {
+function serviceClientOf(target: AzureBlobTarget): BlobServiceClient {
+  const { account, container, endpoint, signIn } = target
   const azure = endpoint || `https://${account}.blob.core.windows.net`
-  if ('connectionString' in signIn) return checkConnectionString(signIn.connectionString, account)
-  if ('azureCli' in signIn) return new BlobServiceClient(azure, new DefaultAzureCredential(), pipelineOptions)
+  if ('connectionString' in signIn) {
+    // The connection string says where the account is.
+    const { url } = checkConnectionString(signIn.connectionString, account)
+    return BlobServiceClient.fromConnectionString(signIn.connectionString, pipelineOptionsFor(url, target))
+  }
+  if ('azureCli' in signIn) return new BlobServiceClient(azure, new DefaultAzureCredential(), pipelineOptionsFor(azure, target))
   const sas = checkSas(signIn.sas, account, container)
   // Only now, connecting: a Source whose SAS has expired can still be saved, renamed or given a new one.
   if (sas.expiresOn && sas.expiresOn.getTime() <= Date.now()) {
     throw new CoreError('SAS_EXPIRED', `The SAS expired on ${sas.expiresOn.toISOString()}`)
   }
-  return new BlobServiceClient(`${sas.endpoint ?? azure}?${sas.token}`, undefined, pipelineOptions)
+  const url = `${sas.endpoint ?? azure}?${sas.token}`
+  return new BlobServiceClient(url, undefined, pipelineOptionsFor(url, target))
 }
 
 /** A blob marked as a directory, as an account with a hierarchical namespace (Data Lake Gen2) lists its directories. */
