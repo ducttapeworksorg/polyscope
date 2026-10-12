@@ -9,10 +9,11 @@ import { readFile } from 'node:fs/promises'
 import { Agent as HttpAgent } from 'node:http'
 import { Agent as HttpsAgent } from 'node:https'
 import { getCACertificates } from 'node:tls'
-import type { CoreErrorCode, SourcePath } from '@shared/core-api'
+import type { CoreErrorCode } from '@shared/core-api'
 import { CoreError } from './core-error'
-import type { FileEntry, FileSource, FileStat } from './file-source'
+import type { FileSource } from './file-source'
 import { certificateCodes, networkCodes } from './network-errors'
+import { createObjectStoreFileSource, type ObjectStore } from './object-store-file-source'
 
 /** Where an S3 Source points and how it signs in, normalised and with its secret filled in. */
 export interface S3Target {
@@ -50,14 +51,6 @@ const s3Codes: Record<string, CoreErrorCode> = {
 
 // What the SDK throws when it can't come by credentials at all: a missing profile, an expired SSO session…
 const credentialErrors = new Set(['CredentialsProviderError', 'TokenProviderError'])
-
-const isWholeNumber = (n: number) => Number.isSafeInteger(n) && n >= 0
-
-/**
- * A modified time to the second: listings give milliseconds but HEAD's Last-Modified header only
- * seconds, and a file's time shouldn't change between the tree and the opened file.
- */
-const toSeconds = (date: Date) => Math.floor(date.getTime() / 1000) * 1000
 
 const nameOf = (error: unknown) => (error instanceof Error ? error.name : '')
 
@@ -110,99 +103,61 @@ export function createS3FileSource(target: S3Target, { pageSize = s3PageSize } =
     requestChecksumCalculation: 'WHEN_REQUIRED',
     responseChecksumValidation: 'WHEN_REQUIRED'
   })
-  const root = target.prefix ? `${target.prefix}/` : ''
-  const keyOf = (path: SourcePath) => root + path
-  const folderKeyOf = (path: SourcePath) => (path ? `${root}${path}/` : root)
-  const where = (path: SourcePath) => `s3://${bucket}/${keyOf(path)}`
+  const where = (key: string) => `s3://${bucket}/${key}`
 
-  const send = async <T>(path: SourcePath, run: () => Promise<T>) => {
+  const send = async <T>(key: string, run: () => Promise<T>) => {
     try {
       return await run()
     } catch (error) {
-      throw toCoreError(error, where(path))
+      throw toCoreError(error, where(key))
     }
   }
 
-  /** Whether any key lies under the folder `path` (a zero-byte `path/` marker counts). */
-  const isFolder = async (path: SourcePath) => {
-    if (!path) return true
-    const listing = await send(path, () =>
-      client.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: folderKeyOf(path), MaxKeys: 1 }))
-    )
-    return (listing.KeyCount ?? 0) > 0
-  }
-
-  /** The error for `path` not being a file: it's a folder, or nothing at all. */
-  const notAFile = async (path: SourcePath) =>
-    (await isFolder(path))
-      ? new CoreError('NOT_A_FILE', `Not a file: ${where(path)}`)
-      : new CoreError('NOT_FOUND', `No such object: ${where(path)}`)
-
-  const stat = async (path: SourcePath): Promise<FileStat> => {
-    if (!path) return { kind: 'folder' }
-    try {
-      const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: keyOf(path) }))
-      return { kind: 'file', size: head.ContentLength ?? 0, modifiedTime: head.LastModified ? toSeconds(head.LastModified) : 0 }
-    } catch (error) {
-      if (toCoreError(error, '').code !== 'NOT_FOUND') throw toCoreError(error, where(path))
-    }
-    if (await isFolder(path)) return { kind: 'folder' }
-    throw new CoreError('NOT_FOUND', `No such object: ${where(path)}`)
-  }
-
-  return {
-    async listChildren(path, cursor) {
-      const folderKey = folderKeyOf(path)
-      const page = await send(path, () =>
-        client.send(
-          new ListObjectsV2Command({ Bucket: bucket, Prefix: folderKey, Delimiter: '/', MaxKeys: pageSize, ContinuationToken: cursor })
-        )
+  const store: ObjectStore = {
+    async listPage(prefix, limit, cursor) {
+      const page = await send(prefix, () =>
+        client.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, Delimiter: '/', MaxKeys: limit, ContinuationToken: cursor }))
       )
-      const nameIn = (key: string) => key.slice(folderKey.length).replace(/\/$/, '')
-      const folders = (page.CommonPrefixes ?? []).map(({ Prefix = '' }): FileEntry => ({ kind: 'folder', name: nameIn(Prefix) }))
-      // The folder's own marker, if it has one, isn't one of its entries.
-      const objects = (page.Contents ?? []).filter(({ Key }) => Key !== folderKey)
-      const files = objects.map(
-        ({ Key = '', Size, LastModified }): FileEntry => ({
-          kind: 'file',
-          name: nameIn(Key),
+      return {
+        prefixes: (page.CommonPrefixes ?? []).map(({ Prefix = '' }) => Prefix),
+        objects: (page.Contents ?? []).map(({ Key = '', Size, LastModified }) => ({
+          key: Key,
           ...(Size !== undefined && { size: Size }),
-          ...(LastModified && { modifiedTime: toSeconds(LastModified) })
-        })
-      )
-      // Keys like `a//b` would make a folder with no name, which no path could reach.
-      const entries = [...folders, ...files].filter((e) => e.name)
-      if (path && !cursor && (page.KeyCount ?? 0) === 0) {
-        throw (await stat(path)).kind === 'file'
-          ? new CoreError('NOT_A_FOLDER', `Not a folder: ${where(path)}`)
-          : new CoreError('NOT_FOUND', `No such folder: ${where(path)}`)
+          ...(LastModified && { modifiedTime: LastModified })
+        })),
+        ...(page.IsTruncated && page.NextContinuationToken && { cursor: page.NextContinuationToken })
       }
-      return page.IsTruncated && page.NextContinuationToken ? { entries, cursor: page.NextContinuationToken } : { entries }
     },
 
-    stat,
-
-    async read(path, { offset, length }) {
-      if (!isWholeNumber(offset) || !isWholeNumber(length)) {
-        throw new CoreError('INVALID_RANGE', `Not a valid byte range: offset ${offset}, length ${length}`)
-      }
-      if (length === 0) {
-        if ((await stat(path)).kind !== 'file') throw new CoreError('NOT_A_FILE', `Not a file: ${where(path)}`)
-        return new Uint8Array()
-      }
+    async head(key) {
       try {
-        const object = await client.send(
-          new GetObjectCommand({ Bucket: bucket, Key: keyOf(path), Range: `bytes=${offset}-${offset + length - 1}` })
-        )
+        const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }))
+        return { kind: 'file', size: head.ContentLength ?? 0, modifiedTime: head.LastModified?.getTime() ?? 0 }
+      } catch (error) {
+        if (toCoreError(error, '').code === 'NOT_FOUND') return undefined
+        throw toCoreError(error, where(key))
+      }
+    },
+
+    async hasKeysUnder(prefix) {
+      const listing = await send(prefix, () => client.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, MaxKeys: 1 })))
+      return (listing.KeyCount ?? 0) > 0
+    },
+
+    async read(key, offset, length) {
+      try {
+        const object = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key, Range: `bytes=${offset}-${offset + length - 1}` }))
         const bytes = (await object.Body?.transformToByteArray()) ?? new Uint8Array()
         // A store that ignores the range sends the whole object.
         return object.ContentRange ? bytes : bytes.subarray(offset, offset + length)
       } catch (error) {
         // A range starting at the end or beyond (including any range of an empty object) holds nothing.
         if (error instanceof S3ServiceException && error.$metadata.httpStatusCode === 416) return new Uint8Array()
-        if (toCoreError(error, '').code === 'NOT_FOUND') throw await notAFile(path)
-        throw toCoreError(error, where(path))
+        throw toCoreError(error, where(key))
       }
-    }
+    },
+
+    where
   }
+  return createObjectStoreFileSource(store, { prefix: target.prefix, pageSize })
 }

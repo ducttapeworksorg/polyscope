@@ -94,6 +94,7 @@ A VS Code extension has the same split: the **extension host** is a Node.js proc
 | Editor | [Monaco](https://microsoft.github.io/monaco-editor/), the editor in VS Code, read-only | Its language workers are set up in `monaco.ts` |
 | SSH | `ssh2` | SFTP over one connection per Source; host keys checked against `known_hosts` (ADR 0006) |
 | S3 | `@aws-sdk/client-s3` | Keys, or AWS profiles including SSO |
+| Azure Blob Storage | `@azure/storage-blob` | A storage account's connection string |
 | Kubernetes | `@kubernetes/client-node` | Uses the user's kubeconfig, as `kubectl` does; exec over WebSocket for pod files |
 | Updates | `electron-updater` + GitHub Releases | Installed where possible, offered as a download elsewhere (ADR 0003) |
 | Packaging | `electron-builder` (NSIS, portable, zip, dmg, AppImage, deb, rpm); `@vscode/vsce` for the `.vsix` | `electron-builder.yml` |
@@ -188,6 +189,8 @@ flowchart TB
     Local["local-file-source<br/>node:fs"]
     SSH["ssh-file-source<br/>SFTP over ssh-connection"]
     S3["s3-file-source<br/>AWS SDK"]
+    Azure["azure-blob-file-source<br/>Azure Storage SDK"]
+    OS["object-store-file-source<br/>keys as folders, paging"]
     KF["kubernetes-file-source<br/>→ shell-file-source over pod exec"]
     KL["kubernetes-log-source<br/>Kubernetes API"]
     DL["docker-log-source<br/>Docker Engine API"]
@@ -199,7 +202,8 @@ flowchart TB
   Engines --> LS
   Facade --> FS
   Facade --> LS
-  FS --> Local & SSH & S3 & KF
+  FS --> Local & SSH & OS & KF
+  OS --> S3 & Azure
   LS --> KL
   LS --> DL
 ```
@@ -230,12 +234,15 @@ Each interface has a **contract test suite** (`file-source-contract.ts`, `log-so
 | --- | --- | --- |
 | Local Filesystem | `local-file-source.ts` | `node:fs`; on Windows, `cmd.exe dir /a:h` to find hidden files |
 | SSH Files | `ssh-file-source.ts` + `ssh-connection.ts` + `ssh-config.ts` + `ssh-agent.ts` + `host-keys.ts` | SFTP through `ssh2`, over one connection per Source opened on connect and closed on disconnect (`FileSource.close`). `ssh-connection.ts` signs in (with a key file, the SSH agent or a password) and checks the host key, going through any ProxyJump bastions first, each over a channel the one before forwards and each with its host key checked, for other Source Types that reach a host over SSH to reuse; `ssh-config.ts` reads `~/.ssh/config` and the files it `Include`s (Host patterns first-match-wins, HostName, User, Port, IdentityFile, ProxyJump; a host needing ProxyCommand fails with UNSUPPORTED_SSH_OPTION) and routes a host through its bastions, settings typed in the Source winning over the config's; `ssh-agent.ts` finds the agent: SSH_AUTH_SOCK's, and on Windows then Pageant's (through `ssh2`'s `pagent.exe`, shipped as an extra resource, and in the Extension Copy beside its bundle) and the OpenSSH agent's pipe; `host-keys.ts` reads `~/.ssh/known_hosts` (never writing it) and keeps the keys the user trusts in Polyscope in `trusted-host-keys.json`, forgetting a server's when the last Source on it is deleted |
-| S3-compatible Storage | `s3-file-source.ts` | `@aws-sdk/client-s3` (`ListObjectsV2`, `HeadObject`, ranged `GetObject`); custom CA bundles and proxies |
+| S3-compatible Storage | `s3-file-source.ts` → `object-store-file-source.ts` | `@aws-sdk/client-s3` (`ListObjectsV2`, `HeadObject`, ranged `GetObject`); custom CA bundles and proxies |
+| Azure Blob Storage | `azure-blob-file-source.ts` → `object-store-file-source.ts` | `@azure/storage-blob` (list by hierarchy, blob properties, ranged downloads) through the account's connection string; a Data Lake Gen2 account's directories (blobs marked `hdi_isfolder`) read as folders through the same Blob endpoint |
 | Kubernetes Files | `kubernetes-file-source.ts` → `shell-file-source.ts` + `kubernetes-exec.ts` | Finds the Workload's pods through the Kubernetes API, then runs small POSIX `sh` scripts (`stat`, `dd`…) in the container over the exec API, as `kubectl exec` does |
 | Kubernetes Logs | `kubernetes-log-source.ts` | Kubernetes API: lists Workloads, pods and containers; reads and streams container logs |
 | Docker Logs | `docker-log-source.ts` | Docker Engine HTTP API over the engine its Docker context reaches (`docker-contexts.ts`: a Unix socket, a named pipe, TCP with the context's TLS material, or an `ssh://` host, where `docker-ssh.ts` runs `docker system dial-stdio` on channels of an SSH connection from `ssh-connection.ts`, a few kept open for short requests and one per Follow), its version agreed from `/version`: lists every container, grouped by its Compose labels, inspecting those listed for their Container Status (`container-status.ts`) and restarts, and reads and streams its log, taking apart the frames stdout and stderr are multiplexed into unless it has a TTY. A Follow carries on across restarts, from the end of the last run; a log driver the engine can't read back gives LOG_UNAVAILABLE naming it |
 
 Supporting modules: `kubeconfig.ts` (loads `KUBECONFIG` or `~/.kube/config`), `kubernetes-api.ts` (shared API helpers and error mapping), `pod-status.ts` (Pod Status and Ready Count), `container-status.ts` (Container Status, and a Docker container's current run), `docker-contexts.ts` (the Docker CLI's contexts, and the engine a context or `DOCKER_HOST` reaches), `rbac.ts`, `aws-profiles.ts`, `proxy-env.ts`, `network-errors.ts`.
+
+`object-store-file-source.ts` is a `FileSource` built on any store keeping objects by key: it shows key prefixes up to a `/` as folders, pages listings, and lists an object and a prefix sharing a name as a file and a folder. S3 and Azure Blob Storage each adapt their SDK to its small `ObjectStore` interface.
 
 `shell-file-source.ts` is a `FileSource` built on any "run this `sh` script" function, and so isn't tied to Kubernetes. SSH Files doesn't use it: SFTP maps straight onto `FileSource` (ADR 0006).
 
@@ -456,7 +463,7 @@ The three `tsconfig.*.json` projects enforce most of this: `tsconfig.web.json` (
 | Sources and group order | Core (`registry-store`) | `sources.json` in the data folder | Yes |
 | Environments | Core (`environment-store`) | `environments.json` | Yes |
 | Settings | Core (`settings-store`) | `settings.json` | Yes |
-| Secrets (S3 secret keys, SSH key passphrases and passwords) | Core (`secret-store`) | `secrets.json`, encrypted with `safeStorage`; VS Code `SecretStorage` in the extension | Yes |
+| Secrets (S3 secret keys, Azure Blob Storage connection strings, SSH key passphrases and passwords) | Core (`secret-store`) | `secrets.json`, encrypted with `safeStorage`; VS Code `SecretStorage` in the extension | Yes |
 | Large File cache | Core (`large-file-cache`) | `large-file-cache/` in the data folder, LRU-capped by `cacheSizeCap` | Yes (reused if the file hasn't changed) |
 | App log | Host (`app-log.ts`) | `logs/` in the data folder | Yes, rotated |
 | Connections, Follows, open Large Files | Core, in memory | — | No: every Source starts Disconnected |
@@ -520,7 +527,7 @@ flowchart LR
 | Unit | Vitest | `src/**/*.test.ts` beside the code | Pure logic: `workspace.ts`, `follow-feed`, line highlighting, redaction, update decisions, pod status… |
 | Core integration | Vitest | `src/main/core/*.test.ts` | The core through `createCore()`, against a temp folder. Fake time and fake backends where needed |
 | Backend contract | Vitest | `file-source-contract.ts`, `log-source-contract.ts` | The same suite run against every `FileSource`/`LogSource` implementation |
-| Real backends | Vitest | `s3-*.test.ts`, `kubernetes-*.test.ts` | Against RustFS and kind in CI. Skipped unless `POLYSCOPE_TEST_*` variables are set |
+| Real backends | Vitest | `s3-*.test.ts`, `azure-blob-*.test.ts`, `kubernetes-*.test.ts` | Against RustFS, Azurite and kind in CI. Skipped unless `POLYSCOPE_TEST_*` variables are set |
 | Desktop end-to-end | Playwright (Electron) | `tests/smoke/` | Drives the built app |
 | Extension end-to-end | `@vscode/test-electron` | `tests/extension/` | Drives a real VS Code, in both `ownViewer` modes, and again after a simulated reload |
 

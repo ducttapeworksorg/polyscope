@@ -53,6 +53,15 @@ export const BucketIcon = () => (
   </svg>
 )
 
+/** A cloud over a stored disc, for Azure Blob Storage (never the Azure logo). */
+export const BlobStorageIcon = () => (
+  <svg {...base}>
+    <path d="M4.5 8.5a2.5 2.5 0 0 1 .3-5 3.5 3.5 0 0 1 6.6 1A2 2 0 0 1 11.5 8.5z" />
+    <ellipse cx="8" cy="10.75" rx="3.5" ry="1.25" />
+    <path d="M4.5 10.75v2.5c0 .7 1.55 1.25 3.5 1.25s3.5-.55 3.5-1.25v-2.5" />
+  </svg>
+)
+
 /**
  * The Kubernetes wheel, a heptagon round a seven-spoked helm, with an overlay in its lower right corner cut out
  * of the wheel so the two don't run together.

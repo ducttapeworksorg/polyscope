@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 import {
   sourceTypeIds,
+  type AzureBlobSourceInfo,
   type KubernetesFilesSourceInfo,
   type DockerLogsSourceInfo,
   type KubernetesLogsSourceInfo,
@@ -16,6 +17,7 @@ export type SavedSource =
   | LocalSourceInfo
   | Omit<SshFilesSourceInfo, 'passphraseSet' | 'passwordSet'>
   | Omit<S3SourceInfo, 'secretKeySet'>
+  | Omit<AzureBlobSourceInfo, 'connectionStringSet'>
   | KubernetesFilesSourceInfo
   | KubernetesLogsSourceInfo
   | DockerLogsSourceInfo
