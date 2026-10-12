@@ -48,9 +48,14 @@ export interface TestSshServer {
   close(): Promise<void>
 }
 
-/** A new key pair in OpenSSH's formats, the private key encrypted with `passphrase` if given. */
-export function generateKey(passphrase?: string) {
-  return utils.generateKeyPairSync('ed25519', passphrase ? { passphrase, cipher: 'aes256-ctr', rounds: 4 } : {})
+/**
+ * A new key pair in OpenSSH's formats, the private key encrypted with `passphrase` if given. ssh2 strips every leading
+ * zero byte off an ed25519 public key, not just the BIT STRING's unused-bits byte, so one key in 256 comes out a byte
+ * short and unreadable ("Malformed OpenSSH private key"); those are generated again.
+ */
+export function generateKey(passphrase?: string): { private: string; public: string } {
+  const keys = utils.generateKeyPairSync('ed25519', passphrase ? { passphrase, cipher: 'aes256-ctr', rounds: 4 } : {})
+  return utils.parseKey(keys.private, passphrase) instanceof Error ? generateKey(passphrase) : keys
 }
 
 /** Writes a seed tree under `root`, each folder created and each file written. */
