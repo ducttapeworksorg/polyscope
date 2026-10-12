@@ -10,6 +10,7 @@ import * as vscode from 'vscode'
 import type { FollowEvent, HostKey } from '@shared/core-api'
 import { MB } from '@shared/settings'
 import { kubeConfigFor } from '../../src/main/core/kubeconfig'
+import { startTestDockerEngine } from '../../src/main/core/docker-test-engine'
 import { execInPod } from '../../src/main/core/kubernetes-exec'
 import { startTestApiServer } from '../../src/main/core/kubernetes-test-api-server'
 import {
@@ -753,6 +754,45 @@ const firstRun: [string, () => Promise<void>][] = [
           assert.equal(await shownInTextTab(logUriOf(sourceId, counterLog.path, 'Cluster')), 'line 2\nline 3')
         })
       )
+    }
+  ],
+  [
+    'a Docker Logs Source reaches the engine where the extension runs, and a container’s log opens in a viewer tab, whose Follow gets what it logs',
+    async () => {
+      const { core, open } = await extension()
+      const engine = await startTestDockerEngine([
+        { name: 'shop-web-1', labels: { 'com.docker.compose.project': 'shop', 'com.docker.compose.service': 'web' } },
+        { name: 'redis', logs: [{ stream: 'stdout', time: '2026-10-12T10:00:00.000000000Z', text: 'Ready to accept connections' }] }
+      ])
+      // The extension host is this process, so its core reaches the engine DOCKER_HOST names, as `docker` run here would.
+      const before = process.env['DOCKER_HOST']
+      process.env['DOCKER_HOST'] = engine.host
+      const source = await core.addSource({ type: 'dockerLogs', name: 'Docker' })
+      const { lines, unsubscribe } = followedLines(core)
+
+      try {
+        assert.deepEqual((await core.connect(source.id)).map(nameOf), ['shop', '_standalone'])
+        assert.equal((await core.openLog(source.id, '_standalone/redis')).content, 'Ready to accept connections')
+
+        await open({ kind: 'log', sourceId: source.id, path: '_standalone/redis', name: 'redis', pinned: true })
+        const tab = await eventually(() => activeViewerTab('redis'))
+        // The tab follows once its page has loaded; until then, what's logged goes unseen.
+        await eventually(async () => {
+          engine.log('redis', 'Background saving started')
+          await sleep(1_000)
+          assert.ok(
+            lines.some((event) => event.kind === 'lines' && event.lines.some((line) => line.includes('Background saving started'))),
+            'The viewer tab’s Follow got what the container logged'
+          )
+        }, 30_000)
+        await vscode.window.tabGroups.close(tab)
+      } finally {
+        unsubscribe()
+        await core.deleteSource(source.id)
+        if (before === undefined) delete process.env['DOCKER_HOST']
+        else process.env['DOCKER_HOST'] = before
+        await engine.close()
+      }
     }
   ],
   [

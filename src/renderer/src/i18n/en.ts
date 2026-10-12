@@ -137,7 +137,10 @@ export const en = {
 
   'dockerSource.context': 'Context',
   'dockerSource.context.default': 'default',
-  'dockerSource.context.hint': 'The engine DOCKER_HOST names, or else the local one: its socket, or its named pipe on Windows.',
+  'dockerSource.context.hint': 'As the Docker CLI picks: the engine DOCKER_HOST names, or else the local one: its socket, or its named pipe on Windows.',
+  'dockerSource.context.default.current': 'As the Docker CLI picks: the engine DOCKER_HOST names, or else the current context, {context}.',
+  'dockerSource.context.host': 'Its engine: {host}',
+  'dockerSource.context.missing': 'Not a context the Docker CLI knows any more.',
   'dockerSource.defaultName': 'Docker',
   'dockerGroup.standalone': 'Standalone',
   'kubernetesSource.context': 'Context',

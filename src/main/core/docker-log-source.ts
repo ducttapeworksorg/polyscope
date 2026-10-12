@@ -1,14 +1,13 @@
-import { request as httpRequest, type IncomingMessage } from 'node:http'
+import { request as httpRequest, type ClientRequest, type IncomingMessage } from 'node:http'
+import { request as httpsRequest } from 'node:https'
+import { getCACertificates } from 'node:tls'
 import type { LogGroupNode, LogNode, LogStreamNode, SourcePath } from '@shared/core-api'
-import { defaultDockerContext, dockerStandaloneGroup as standalone } from '@shared/core-api'
+import { dockerStandaloneGroup as standalone } from '@shared/core-api'
 import { containerDetailsOf, containerRunOf, containerStatusOf, engineMillis, type ContainerInspect } from './container-status'
 import { CoreError } from './core-error'
+import { describeEndpoint, type DockerEndpoint } from './docker-contexts'
 import type { LogConnection, LogFollowOptions, LogReadOptions, LogSource, LogStreamInfo } from './log-source'
-
-/** Where a Docker Engine's API is served: a Unix socket, or a named pipe on Windows. */
-export interface DockerEndpoint {
-  socketPath: string
-}
+import { certificateCodes } from './network-errors'
 
 /** The newest Engine API version Polyscope speaks; an older engine is spoken to in its own. */
 const newestApiVersion = '1.47'
@@ -22,30 +21,35 @@ const composeService = 'com.docker.compose.service'
 /** A Compose project's or service's name, as one path segment: a label that isn't one leaves its container standalone. */
 const isSegment = (name: string | undefined): name is string => name !== undefined && /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(name)
 
-/**
- * The engine a Docker context reaches. The default context is DOCKER_HOST's engine, as the Docker CLI's is, or else
- * the local one: its Unix socket, or its named pipe on Windows. Only engines on this computer are reached so far.
- */
-export function dockerEndpointOf(context: string, env: NodeJS.ProcessEnv = process.env): DockerEndpoint {
-  if (context !== defaultDockerContext) throw new CoreError('CONTEXT_NOT_FOUND', `Only the default Docker context can be used so far, not ${context}`)
-  const host = env['DOCKER_HOST']?.trim()
-  if (!host) return { socketPath: process.platform === 'win32' ? '\\\\.\\pipe\\docker_engine' : '/var/run/docker.sock' }
-  if (host.startsWith('unix://')) return { socketPath: host.slice('unix://'.length) }
-  // npipe:////./pipe/docker_engine, as the Docker CLI writes it, is the pipe \\.\pipe\docker_engine.
-  if (host.startsWith('npipe://')) return { socketPath: host.slice('npipe://'.length).replaceAll('/', '\\').replace(/^\\*/, '\\\\') }
-  throw new CoreError('UNSUPPORTED_DOCKER_HOST', host)
-}
-
 /** A failure to reach the engine at all, by the code Node gives, as a CoreError. */
-function reachError(error: NodeJS.ErrnoException, { socketPath }: DockerEndpoint): CoreError {
+function reachError(error: NodeJS.ErrnoException, endpoint: DockerEndpoint): CoreError {
+  const where = describeEndpoint(endpoint)
   if (error.code === 'EACCES' || error.code === 'EPERM') {
     const group = process.platform === 'linux' ? ': add your user to the docker group, then sign in again' : ''
-    return new CoreError('PERMISSION_DENIED', `Not allowed to use the Docker socket ${socketPath}${group}`)
+    if (!('socketPath' in endpoint)) return new CoreError('PERMISSION_DENIED', `Not allowed to reach ${where}: ${error.message}`)
+    return new CoreError('PERMISSION_DENIED', `Not allowed to use the Docker socket ${where}${group}`)
   }
   if (error.code === 'ENOENT' || error.code === 'ECONNREFUSED') {
-    return new CoreError('UNREACHABLE', `Docker isn’t running, or isn’t listening at ${socketPath}`)
+    return new CoreError('UNREACHABLE', `Docker isn’t running, or isn’t listening at ${where}`)
   }
-  return new CoreError('UNREACHABLE', error.message)
+  if (error.code && certificateCodes.has(error.code)) return new CoreError('CERTIFICATE_UNTRUSTED', `${where}: ${error.message}`)
+  // The engine ended the TLS handshake, as one run with --tlsverify does for a client with no certificate it trusts.
+  if (error.code?.startsWith('ERR_SSL_')) {
+    return new CoreError('UNREACHABLE', `${where} refused the TLS connection, maybe for want of a client certificate it trusts: ${error.message}`)
+  }
+  return new CoreError('UNREACHABLE', `${where}: ${error.message}`)
+}
+
+/** What a TLS connection trusts when it names no CA: the OS's CAs and Node's, as the CLI trusts the OS's. */
+const defaultCas = () => [...new Set([...getCACertificates('default'), ...getCACertificates('system')])]
+
+/** Starts a GET of `path` from the engine: over its socket, or over TCP, with TLS if it's set up for it. */
+function requestTo(endpoint: DockerEndpoint, path: string, onResponse: (response: IncomingMessage) => void): ClientRequest {
+  if ('socketPath' in endpoint) return httpRequest({ socketPath: endpoint.socketPath, path, method: 'GET', headers: { host: 'docker' } }, onResponse)
+  const { host, port, tls } = endpoint
+  if (!tls) return httpRequest({ host, port, path, method: 'GET' }, onResponse)
+  const { ca, cert, key, verify } = tls
+  return httpsRequest({ host, port, path, method: 'GET', ca: ca ?? defaultCas(), cert, key, rejectUnauthorized: verify }, onResponse)
 }
 
 /** The whole body of a response. */
@@ -68,7 +72,7 @@ const messageOf = (body: Buffer) => {
 function get(endpoint: DockerEndpoint, path: string, query: Record<string, string> = {}): Promise<{ response: IncomingMessage; stop(): void }> {
   const search = new URLSearchParams(query).toString()
   return new Promise((resolve, reject) => {
-    const request = httpRequest({ socketPath: endpoint.socketPath, path: `${path}${search ? `?${search}` : ''}`, method: 'GET', headers: { host: 'docker' } }, (response) => {
+    const request = requestTo(endpoint, `${path}${search ? `?${search}` : ''}`, (response) => {
       const status = response.statusCode ?? 500
       if (status >= 200 && status < 300) return resolve({ response, stop: () => request.destroy() })
       void bodyOf(response).then(

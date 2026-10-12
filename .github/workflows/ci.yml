@@ -244,12 +244,14 @@ jobs:
           kubectl -n polyscope-files get all -o wide
 
   # Docker Logs against the runner's own Docker Engine, as well as the in-process stand-in the build job tests against,
-  # seeded with a Compose project and standalone containers (tests/docker/seed.sh).
+  # seeded with a Compose project and standalone containers (tests/docker/seed.sh), and through a Docker context that
+  # fronts it with TLS asking for a client certificate (tests/docker/tls.sh).
   integration-docker:
     name: integration (Docker)
     runs-on: ubuntu-latest
     env:
       POLYSCOPE_TEST_DOCKER: seeded
+      POLYSCOPE_TEST_DOCKER_TLS_CONTEXT: polyscope-test-tls
     steps:
       - uses: actions/checkout@v7
 
@@ -261,9 +263,13 @@ jobs:
       - name: Seed the engine
         run: tests/docker/seed.sh
 
+      - name: Front the engine with TLS
+        run: tests/docker/tls.sh
+
       - run: npm ci
 
-      # The Log Source contract suite and the core façade tests, against the engine as well as the stand-in.
+      # The Log Source contract suite and the core façade tests, against the engine (over its socket and over TLS) as
+      # well as the stand-in.
       - run: npx vitest run src/main/core/docker
 
       - name: Show the seeded containers

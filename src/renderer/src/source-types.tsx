@@ -637,22 +637,45 @@ const dockerName = (context: string) => (context === defaultDockerContext ? t('d
 
 function DockerLogsFields({ value, onChange }: FieldsProps<DockerLogsSettings>) {
   const context = value.context || defaultDockerContext
+  const contexts = useListing(() => core.listDockerContexts(), [])
+  const listed = contexts.items ?? []
+  // A context no longer in the CLI's config stays a choice, so opening the dialog doesn't quietly change it.
+  const choices = choicesOf(
+    listed.map((c) => c.name).filter((name) => name !== defaultDockerContext),
+    context === defaultDockerContext ? '' : context
+  )
+  const chosen = listed.find((c) => c.name === context)
+  const current = listed.find((c) => c.current)
   // A new Source is named after its context.
   useEffect(() => {
     if (!value.name.trim()) onChange({ ...value, name: dockerName(context) })
     // Named once, when the fields appear.
   }, [])
 
+  const pick = (picked: string) => onChange({ ...value, context: picked, name: nameFollowing(value.name, dockerName(context), dockerName(picked)) })
+
+  const hint =
+    contexts.problem ??
+    (context === defaultDockerContext
+      ? t(current ? 'dockerSource.context.default.current' : 'dockerSource.context.hint', { context: current?.name ?? '' })
+      : chosen
+        ? t('dockerSource.context.host', { host: chosen.host })
+        : contexts.items && t('dockerSource.context.missing'))
+
   return (
     <div className="field">
       <label className="field__label" htmlFor="docker-context">
         {t('dockerSource.context')}
       </label>
-      <select id="docker-context" className="field__input field__select" value={context} onChange={(e) => onChange({ ...value, context: e.target.value })}>
+      <select id="docker-context" className="field__input field__select" value={context} onChange={(e) => pick(e.target.value)}>
         <option value={defaultDockerContext}>{t('dockerSource.context.default')}</option>
-        {context !== defaultDockerContext && <option value={context}>{context}</option>}
+        {choices.map((name) => (
+          <option key={name} value={name}>
+            {name}
+          </option>
+        ))}
       </select>
-      <span className="field__hint">{t('dockerSource.context.hint')}</span>
+      <span className="field__hint">{hint}</span>
     </div>
   )
 }

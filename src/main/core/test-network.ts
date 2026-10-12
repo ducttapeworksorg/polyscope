@@ -1,4 +1,4 @@
-// Test support: stand-ins for what lies between Polyscope and a backend (an S3 store, a cluster) in a corporate network — a TLS front
+// Test support: stand-ins for what lies between Polyscope and a backend (an S3 store, a cluster, a Docker Engine) in a corporate network — a TLS front
 // whose certificate comes from a private CA, and a proxy. The CA and certificate are made afresh for each test run
 // and only ever held in memory, bar the CAs' certificates (no keys) in temp files for Sources to trust.
 
@@ -79,7 +79,34 @@ async function createCertificates() {
     webcrypto
   )
   const key = PemConverter.encode(await webcrypto.subtle.exportKey('pkcs8', serverKeys.privateKey), 'PRIVATE KEY')
-  return { ca: ca.toString('pem'), issuingCa: issuingCa.toString('pem'), cert: server.toString('pem'), key }
+  // A client's, as a Docker Engine run with --tlsverify asks its clients for.
+  const clientKeys = await generateKeys()
+  const client = await X509CertificateGenerator.create(
+    {
+      subject: 'CN=Polyscope Test Client',
+      issuer: issuingCa.subject,
+      publicKey: clientKeys.publicKey,
+      signingKey: issuingCaKeys.privateKey,
+      notBefore,
+      notAfter,
+      signingAlgorithm: algorithm,
+      extensions: [
+        new BasicConstraintsExtension(false),
+        new KeyUsagesExtension(KeyUsageFlags.digitalSignature, true),
+        new ExtendedKeyUsageExtension([ExtendedKeyUsage.clientAuth])
+      ]
+    },
+    webcrypto
+  )
+  const clientKey = PemConverter.encode(await webcrypto.subtle.exportKey('pkcs8', clientKeys.privateKey), 'PRIVATE KEY')
+  return {
+    ca: ca.toString('pem'),
+    issuingCa: issuingCa.toString('pem'),
+    cert: server.toString('pem'),
+    key,
+    clientCert: client.toString('pem'),
+    clientKey
+  }
 }
 
 // Made once per test run: generating keys is quick, but not free.
@@ -134,6 +161,26 @@ export async function startTlsFront(endpoint: string) {
       await listening.close()
       await rm(dir, { recursive: true, force: true })
     }
+  }
+}
+
+/**
+ * Serves the HTTP server on the Unix socket (or named pipe) `socketPath` over TLS on 127.0.0.1, as a Docker Engine run
+ * with --tlsverify serves its API: only to clients showing a certificate the private test CA issued. Gives the PEM a
+ * client needs, as a Docker context keeps it: the CA to trust (`ca`), and its certificate and key (`cert`, `key`).
+ */
+export async function startMutualTlsFront(socketPath: string) {
+  const { ca, issuingCa, cert, key, clientCert, clientKey } = await (certificates ??= createCertificates())
+  const server = createTlsServer({ cert: [cert, issuingCa].join('\n'), key, ca: [ca], requestCert: true, rejectUnauthorized: true }, (socket) =>
+    splice(socket, connect(socketPath))
+  )
+  const listening = await listen(server)
+  return {
+    port: listening.port,
+    ca,
+    cert: [clientCert, issuingCa].join('\n'),
+    key: clientKey,
+    close: listening.close
   }
 }
 
