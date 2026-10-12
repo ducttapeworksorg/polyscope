@@ -43,6 +43,8 @@ export interface TestContainer {
 export interface TestDockerEngine {
   /** What DOCKER_HOST is set to, to reach it: `unix://…`, or `npipe://…` on Windows. */
   host: string
+  /** The Unix socket, or named pipe, it listens on. */
+  socketPath: string
   /** The engine's version, as `docker version` gives it. */
   version: string
   /** Adds a container. */
@@ -245,6 +247,7 @@ export async function startTestDockerEngine(containers: TestContainer[] = []): P
 
   return {
     host: windows ? `npipe://${socket.replaceAll('\\', '/')}` : `unix://${socket}`,
+    socketPath: socket,
     version,
     add,
     log(name, text, stream = 'stdout') {

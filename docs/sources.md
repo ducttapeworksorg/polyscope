@@ -1,6 +1,6 @@
 # Sources
 
-A **Source** is one place Polyscope reads from: a folder, a folder on a server, a bucket, a Workload's files, or a namespace's logs. You configure each one once, give it a name, and it stays in the sidebar, grouped by its Source Type.
+A **Source** is one place Polyscope reads from: a folder, a folder on a server, a bucket, a Workload's files, a namespace's logs, or a Docker engine's container logs. You configure each one once, give it a name, and it stays in the sidebar, grouped by its Source Type.
 
 To add one, choose **+** next to **Sources** at the top of the sidebar, pick a **Source Type**, and fill in the rest. **Test connection** checks the settings without saving anything.
 
@@ -122,6 +122,60 @@ Right-click a Workload, pod or container for **Copy name**, to paste it into `ku
 Click a container to read its log, or turn on **Follow** to watch it live. Once a container has restarted, turn on **Previous** in its log's toolbar to read its **Previous Log**, the log of its run before the last restart, and off again to go back. See [Reading files and logs](reading.md#logs).
 
 ![A crashing container's Previous Log, switched to with Previous in the log's toolbar](images/previous-log.png)
+
+## Docker Logs
+
+Every container log on one Docker engine, running or stopped, grouped the way Docker Compose runs them. It reads the engine's API directly, so it doesn't need the `docker` command, and never starts, stops or changes a container.
+
+- **Context**: which engine to read, from the contexts the Docker CLI knows (`docker context ls`). **default** reaches the engine `docker` reaches when you don't name a context. That's the engine `DOCKER_HOST` names if it's set, or else the context `DOCKER_CONTEXT` names, or else the CLI's current context (`docker context use`), or else the local engine: its socket, or its named pipe on Windows. Pick a context by name to always use that one. The field's hint shows where the context's engine is.
+
+A new Source is named after its context (**Docker** for **default**). **Test connection** reaches the engine and tells its version, like `Docker Engine 27.3.1` or `Podman Engine 5.2.0`.
+
+### Contexts and engines
+
+Polyscope reads the contexts in the Docker CLI's config folder: `DOCKER_CONFIG`, or else `~/.docker`. Make one with `docker context create`. It can reach an engine:
+
+- **on this machine**, over a `unix://` socket or, on Windows, an `npipe://` named pipe;
+- **over TCP**, as `tcp://host:2376`. If the context has TLS material (made with `docker context create … --docker "host=tcp://…,ca=…,cert=…,key=…"`), Polyscope uses its CA, certificate and key, as `docker` does. With no CA, it trusts your operating system's CAs. With `skip-tls-verify`, it doesn't check the engine's certificate. Without TLS, it speaks plain HTTP, which anyone on the network can read, so keep that to engines on your own machine. A `DOCKER_HOST=tcp://…` with `DOCKER_TLS_VERIFY=1` uses the `ca.pem`, `cert.pem` and `key.pem` in `DOCKER_CERT_PATH`, or else in the config folder, as `docker` does.
+
+`ssh://` contexts aren't supported yet. Polyscope says so when the Source connects.
+
+**Docker Desktop** on Windows and macOS works with **default**: Docker Desktop makes its own context (`desktop-linux`) the current one, or serves the usual socket or pipe. **Colima**, **Rancher Desktop** and **OrbStack** set up a context of their own too, so picking it, or leaving **default** while it's current, works the same way.
+
+**Podman** works through its Docker-compatible socket. Start it with `systemctl --user enable --now podman.socket` on Linux (on macOS and Windows, `podman machine start` serves it). Then either make a context for it:
+
+```sh
+docker context create podman --docker "host=unix://$XDG_RUNTIME_DIR/podman/podman.sock"
+```
+
+or set `DOCKER_HOST` to that socket in the environment Polyscope starts in, and leave the Context on **default**. An app opened from the Dock, Finder or a desktop launcher doesn't get the variables your shell sets, so a context is the surer way. On macOS, `podman machine inspect` shows the socket's path. Containers made by `podman compose` are grouped by their Compose labels, as Docker's are.
+
+On Linux, using the engine's socket takes permission. If the Source says it isn't allowed to use the socket, add yourself to the `docker` group (`sudo usermod -aG docker $USER`), then sign out and back in.
+
+### The tree
+
+The tree groups containers by **Compose project**, then by **service**. Containers that Compose didn't start go under **Standalone**, after the projects. Stopped and exited containers are listed too, so you can read the log of the one that crashed.
+
+As in Kubernetes Logs, a level with only one thing in it folds into the row above. A service with one container opens that container's log when clicked, and a project with one service stands in for it. **Standalone** always expands. Choose **Refresh** on a row to pick up new or removed containers.
+
+Each container shows its **Container Status** as a coloured dot, with the status in its tooltip:
+
+- **Running**, or **Exited (code)** once it has stopped (**OOMKilled** if it ran out of memory);
+- **Restarting** while the engine restarts it, **Paused**, or **Dead**;
+- **Unhealthy** while its healthcheck fails, or **Starting** until the healthcheck first passes;
+- **Created** or **Removing** on the way in or out.
+
+A container that has restarted shows how many times, as in Kubernetes Logs. Its tooltip also gives its image and when it started, or when it exited. Right-click a row for **Copy name**, to paste into `docker logs`, say.
+
+### Reading and following
+
+Click a container to read its log, with the same toolbar as any log: **Last N lines**, **Timestamps**, **Wrap** and **Follow**. stdout and stderr show together, in the order they were written. A container with a TTY has its log shown as it was written. See [Reading files and logs](reading.md#logs).
+
+Docker keeps every run of a container in one log, so there's no **Previous** toggle. A Follow carries on when the container restarts instead: it marks the restart in the log and goes on with the next run. When the container exits for good, the Follow says so and stops. If the container is removed, its tab keeps what it showed, with a note that it's gone.
+
+### Log drivers
+
+Polyscope reads a log the way `docker logs` does, so only from engines that keep a copy of it. The `json-file`, `local` and `journald` drivers always do. Others (`syslog`, `gelf`, `fluentd`, `awslogs`, `splunk`…) send the log elsewhere, and are readable only while Docker's dual logging keeps a local copy, which is on unless it was turned off. When there's no copy, or the driver is `none`, the log says so and names the driver, so you know where the log went.
 
 ## Environments
 

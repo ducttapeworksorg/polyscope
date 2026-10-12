@@ -1,10 +1,15 @@
-import { chmod } from 'node:fs/promises'
+import { chmod, mkdtemp, writeFile } from 'node:fs/promises'
+import { connect, createServer, type AddressInfo } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FollowEvent, NewDockerLogsSource, TreeNode } from '@shared/core-api'
 import { createCore, type Core } from './core'
-import { followTiming } from './log-follow'
+import { writeDockerConfig } from './docker-test-config'
 import { startTestDockerEngine, type TestContainer, type TestDockerEngine } from './docker-test-engine'
-import { hasTestDocker, testCounter, testCrasher, testProject, testSyslog, testTicker, testUnhealthy } from './docker-test-seed'
+import { hasTestDocker, testCounter, testCrasher, testProject, testSyslog, testTicker, testTlsContext, testUnhealthy } from './docker-test-seed'
+import { followTiming } from './log-follow'
+import { startMutualTlsFront } from './test-network'
 
 const settings = (changes: Partial<NewDockerLogsSource> = {}): NewDockerLogsSource => ({ type: 'dockerLogs', name: 'Laptop', ...changes })
 
@@ -59,11 +64,159 @@ describe('adding a Docker Logs Source', () => {
 
     await expect(createCore().testConnection(settings())).rejects.toMatchObject({ code: 'PERMISSION_DENIED', message: expect.stringContaining('docker group') })
   })
+})
 
-  it('cannot reach an engine over the network yet', async () => {
-    vi.stubEnv('DOCKER_HOST', 'tcp://docker.internal:2376')
+describe('Docker contexts', () => {
+  it('lists the Docker CLI’s contexts by name, with their endpoints, marking its current one', async () => {
+    vi.stubEnv('DOCKER_CONFIG', await writeDockerConfig({
+      currentContext: 'podman',
+      contexts: [
+        { name: 'remote', host: 'tcp://docker.internal:2376', description: 'The build box' },
+        { name: 'podman', host: 'unix:///run/user/1000/podman/podman.sock' }
+      ]
+    }))
 
-    await expect(createCore().testConnection(settings())).rejects.toMatchObject({ code: 'UNSUPPORTED_DOCKER_HOST' })
+    expect(await createCore().listDockerContexts()).toEqual([
+      { name: 'podman', host: 'unix:///run/user/1000/podman/podman.sock', current: true },
+      { name: 'remote', host: 'tcp://docker.internal:2376', current: false }
+    ])
+  })
+
+  it('lists none without a Docker CLI config folder', async () => {
+    vi.stubEnv('DOCKER_CONFIG', join(tmpdir(), 'polyscope-no-docker-config'))
+
+    expect(await createCore().listDockerContexts()).toEqual([])
+  })
+
+  /** Starts a stand-in engine holding `counter`, with DOCKER_HOST unset and DOCKER_CONFIG holding `contexts`. */
+  async function engineInContexts(contexts: (host: string) => Parameters<typeof writeDockerConfig>[0]) {
+    engine = await startTestDockerEngine([{ name: 'counter' }])
+    vi.stubEnv('DOCKER_HOST', '')
+    vi.stubEnv('DOCKER_CONTEXT', '')
+    vi.stubEnv('DOCKER_CONFIG', await writeDockerConfig(contexts(engine.host)))
+    return engine
+  }
+
+  /** The standalone containers of the engine a Source reaches with `changes`: the stand-in's `counter` alone, if it's that one. */
+  async function standaloneReached(changes: Partial<NewDockerLogsSource> = {}) {
+    const core = createCore()
+    const source = await core.addSource(settings(changes))
+    await core.connect(source.id)
+    return names(await core.expand(source.id, '_standalone'))
+  }
+
+  it('reaches the engine of the context a Source names', async () => {
+    const { version } = await engineInContexts((host) => ({ contexts: [{ name: 'podman', host }] }))
+    const core = createCore()
+
+    expect(await core.testConnection(settings({ context: 'podman' }))).toEqual({ serverVersion: `Docker Engine ${version}` })
+    const source = await core.addSource(settings({ context: 'podman' }))
+    expect(names(await core.connect(source.id))).toEqual(['_standalone'])
+  })
+
+  it('follows the CLI’s current context by default', async () => {
+    await engineInContexts((host) => ({ currentContext: 'podman', contexts: [{ name: 'podman', host }] }))
+
+    expect(await standaloneReached()).toEqual(['counter'])
+  })
+
+  it('follows DOCKER_CONTEXT over the current context by default, as the CLI does', async () => {
+    await engineInContexts((host) => ({ currentContext: 'away', contexts: [{ name: 'podman', host }, { name: 'away', host: 'unix:///nowhere/docker.sock' }] }))
+    vi.stubEnv('DOCKER_CONTEXT', 'podman')
+
+    expect(await standaloneReached()).toEqual(['counter'])
+  })
+
+  it('follows DOCKER_HOST over any context by default, as the CLI does', async () => {
+    const { host } = await engineInContexts(() => ({ currentContext: 'away', contexts: [{ name: 'away', host: 'unix:///nowhere/docker.sock' }] }))
+    vi.stubEnv('DOCKER_CONTEXT', 'away')
+    vi.stubEnv('DOCKER_HOST', host)
+
+    expect(await standaloneReached()).toEqual(['counter'])
+  })
+
+  it('fails for a context the CLI doesn’t know', async () => {
+    await engineInContexts(() => ({}))
+
+    await expect(createCore().testConnection(settings({ context: 'gone' }))).rejects.toMatchObject({ code: 'CONTEXT_NOT_FOUND', message: expect.stringContaining('gone') })
+  })
+
+  describe('over TCP with TLS', () => {
+    let front: Awaited<ReturnType<typeof startMutualTlsFront>> | undefined
+
+    afterEach(async () => {
+      await front?.close()
+      front = undefined
+    })
+
+    /** The stand-in engine holding `counter` served over TLS, asking for a client certificate, as `dockerd --tlsverify` serves it. */
+    async function tlsEngine(contexts: (tls: { host: string; ca: string; cert: string; key: string }) => Parameters<typeof writeDockerConfig>[0]) {
+      engine = await startTestDockerEngine([{ name: 'counter' }])
+      front = await startMutualTlsFront(engine.socketPath)
+      const { port, ca, cert, key } = front
+      vi.stubEnv('DOCKER_HOST', '')
+      vi.stubEnv('DOCKER_CONTEXT', '')
+      vi.stubEnv('DOCKER_CONFIG', await writeDockerConfig(contexts({ host: `tcp://127.0.0.1:${port}`, ca, cert, key })))
+      return front
+    }
+
+    it('reaches a context’s engine with the context’s CA, certificate and key', async () => {
+      await tlsEngine(({ host, ca, cert, key }) => ({ contexts: [{ name: 'secure', host, tls: { ca, cert, key } }] }))
+
+      expect(await standaloneReached({ context: 'secure' })).toEqual(['counter'])
+    })
+
+    it('reaches DOCKER_HOST’s engine with DOCKER_CERT_PATH’s CA, certificate and key when DOCKER_TLS_VERIFY is set', async () => {
+      const { port, ca, cert, key } = await tlsEngine(() => ({}))
+      const certs = await mkdtemp(join(tmpdir(), 'polyscope-docker-certs-'))
+      await Promise.all(Object.entries({ ca, cert, key }).map(([name, pem]) => writeFile(join(certs, `${name}.pem`), pem)))
+      vi.stubEnv('DOCKER_HOST', `tcp://127.0.0.1:${port}`)
+      vi.stubEnv('DOCKER_TLS_VERIFY', '1')
+      vi.stubEnv('DOCKER_CERT_PATH', certs)
+
+      expect(await standaloneReached()).toEqual(['counter'])
+    })
+
+    it('fails, as the CLI does, when DOCKER_TLS_VERIFY is set and DOCKER_CERT_PATH has no CA', async () => {
+      const { port } = await tlsEngine(() => ({}))
+      vi.stubEnv('DOCKER_HOST', `tcp://127.0.0.1:${port}`)
+      vi.stubEnv('DOCKER_TLS_VERIFY', '1')
+      vi.stubEnv('DOCKER_CERT_PATH', await mkdtemp(join(tmpdir(), 'polyscope-docker-certs-')))
+
+      await expect(createCore().testConnection(settings())).rejects.toMatchObject({ code: 'CA_BUNDLE_UNREADABLE', message: expect.stringContaining('ca.pem') })
+    })
+
+    it('says the engine’s certificate isn’t trusted when the context has no CA for it', async () => {
+      await tlsEngine(({ host, cert, key }) => ({ contexts: [{ name: 'secure', host, tls: { cert, key } }] }))
+
+      await expect(createCore().testConnection(settings({ context: 'secure' }))).rejects.toMatchObject({ code: 'CERTIFICATE_UNTRUSTED' })
+    })
+
+    it('fails to reach an engine that asks for a certificate the context lacks', async () => {
+      await tlsEngine(({ host, ca }) => ({ contexts: [{ name: 'secure', host, tls: { ca } }] }))
+
+      await expect(createCore().testConnection(settings({ context: 'secure' }))).rejects.toMatchObject({ code: 'UNREACHABLE', message: expect.stringContaining('client certificate') })
+    })
+  })
+
+  it('reaches an engine over TCP without TLS when the context has none', async () => {
+    engine = await startTestDockerEngine([{ name: 'counter' }])
+    const server = createServer((socket) => socket.pipe(connect(engine!.socketPath)).pipe(socket))
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    vi.stubEnv('DOCKER_CONTEXT', '')
+    vi.stubEnv('DOCKER_HOST', `tcp://127.0.0.1:${(server.address() as AddressInfo).port}`)
+
+    try {
+      expect(await standaloneReached()).toEqual(['counter'])
+    } finally {
+      server.close()
+    }
+  })
+
+  it('cannot reach an engine over SSH yet', async () => {
+    await engineInContexts(() => ({ contexts: [{ name: 'box', host: 'ssh://me@box.internal' }] }))
+
+    await expect(createCore().testConnection(settings({ context: 'box' }))).rejects.toMatchObject({ code: 'UNSUPPORTED_DOCKER_HOST', message: expect.stringContaining('ssh://') })
   })
 })
 
@@ -489,5 +642,18 @@ describe.skipIf(!hasTestDocker)('Docker Logs against the test engine', () => {
     await vi.waitFor(() => expect(updates.of(followed.followId)).toContain(`tick ${tick + 2}`), { timeout: 10_000 })
     expect(updates.of(followed.followId).slice(0, 2)).toEqual([`tick ${tick + 1}`, `tick ${tick + 2}`])
     updates.unsubscribe()
+  })
+})
+
+describe.skipIf(!hasTestDocker || !testTlsContext)('Docker Logs against the test engine through a TLS context', () => {
+  it('tests a connection and reads a log through the context’s TLS front', async () => {
+    const core = createCore()
+    const tls = settings({ context: testTlsContext })
+    expect(await core.testConnection(tls)).toEqual({ serverVersion: expect.stringMatching(/^Docker Engine \d+\.\d+/) })
+    const { id } = await core.addSource(tls)
+    await core.connect(id)
+
+    expect((await core.openLog(id, testCounter, { lastNLines: 1 })).content).toBe('line 100')
+    await core.disconnect(id)
   })
 })

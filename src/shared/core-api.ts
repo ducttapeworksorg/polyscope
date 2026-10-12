@@ -94,13 +94,16 @@ export interface NewKubernetesLogsSource {
   environmentId?: string
 }
 
-/** The context a Docker Logs Source uses when it names none: DOCKER_HOST, or else the local engine. */
+/** The context a Docker Logs Source uses when it names none: the engine the Docker CLI reaches when told none. */
 export const defaultDockerContext = 'default'
 
 export interface NewDockerLogsSource {
   type: 'dockerLogs'
   name: string
-  /** The Docker context whose engine the Source reads: `default`, DOCKER_HOST or else the local engine, when blank or left out. */
+  /**
+   * The Docker context whose engine the Source reads. `default`, when blank or left out, follows the Docker CLI:
+   * DOCKER_HOST's engine, or else DOCKER_CONTEXT's or the CLI's current context's, or else the local one.
+   */
   context?: string
   /** The Environment the Source is labelled with; unlabelled when left out. */
   environmentId?: string
@@ -245,6 +248,15 @@ export interface KubeContext {
   /** The namespace the context defaults to, if it names one. */
   namespace?: string
   /** Whether it's the kubeconfig's current context. */
+  current: boolean
+}
+
+/** A context the Docker CLI knows, from its config folder, as offered when adding a Docker Logs Source. */
+export interface DockerContext {
+  name: string
+  /** Where its engine is, e.g. `tcp://build.internal:2376` or `unix:///run/podman/podman.sock`. */
+  host: string
+  /** Whether the CLI uses it when told none: DOCKER_CONTEXT's, or else its config's current context. */
   current: boolean
 }
 
@@ -837,7 +849,7 @@ export type CoreErrorCode =
   | 'SFTP_UNAVAILABLE'
   /** A host whose `~/.ssh/config` needs an option Polyscope doesn't support, like ProxyCommand; the message names it. */
   | 'UNSUPPORTED_SSH_OPTION'
-  /** A DOCKER_HOST Polyscope can't reach an engine through yet, like a `tcp://` or `ssh://` one; the message names it. */
+  /** A Docker host (DOCKER_HOST's, or a context's) Polyscope can't reach an engine through yet, like an `ssh://` one; the message names it. */
   | 'UNSUPPORTED_DOCKER_HOST'
   | 'UNKNOWN'
 
@@ -962,6 +974,8 @@ export interface CoreApi {
    * Kinds that can't be listed, say for lack of permission, are left out; fails only if none can be.
    */
   listKubeWorkloads(context: string, namespace: string): Promise<KubeWorkload[]>
+  /** The contexts in the Docker CLI's config folder (DOCKER_CONFIG, or ~/.docker), by name; none if there are none. */
+  listDockerContexts(): Promise<DockerContext[]>
   getSettings(): Promise<Settings>
   /** Changes the given settings, keeping the rest; all of them together must still be valid. */
   updateSettings(changes: Partial<Settings>): Promise<Settings>
@@ -1023,6 +1037,7 @@ export const coreMethods: readonly CoreMethod[] = [
   'listKubeContexts',
   'listKubeNamespaces',
   'listKubeWorkloads',
+  'listDockerContexts',
   'getSettings',
   'updateSettings'
 ]

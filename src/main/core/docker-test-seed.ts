@@ -21,3 +21,9 @@ export const testUnhealthy = '_standalone/polyscope-unhealthy'
 
 /** The seed's standalone `polyscope-syslog`, which logs to syslog with no copy for the engine to read back. */
 export const testSyslog = '_standalone/polyscope-syslog'
+
+/**
+ * The Docker context reaching the seeded engine through a TLS front that asks for a client certificate, as
+ * tests/docker/tls.sh sets it up and POLYSCOPE_TEST_DOCKER_TLS_CONTEXT names it; the tests through it are skipped without it.
+ */
+export const testTlsContext = process.env['POLYSCOPE_TEST_DOCKER_TLS_CONTEXT'] || undefined

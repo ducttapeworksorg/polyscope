@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test'
+import { writeDockerConfig } from '../../src/main/core/docker-test-config'
 import { startTestDockerEngine, type TestDockerEngine } from '../../src/main/core/docker-test-engine'
 
 let dir: string
@@ -16,7 +17,18 @@ test.beforeEach(async () => {
   ])
   app = await electron.launch({
     args: [join(__dirname, '..', '..', 'out', 'main', 'index.js'), `--user-data-dir=${join(dir, 'user-data')}`],
-    env: { ...process.env, DOCKER_HOST: engine.host }
+    env: {
+      ...process.env,
+      DOCKER_HOST: engine.host,
+      DOCKER_CONTEXT: '',
+      DOCKER_CONFIG: await writeDockerConfig({
+        currentContext: 'podman',
+        contexts: [
+          { name: 'podman', host: engine.host },
+          { name: 'build-box', host: 'tcp://build.internal:2376' }
+        ]
+      })
+    }
   })
 })
 
@@ -54,4 +66,18 @@ test('a Docker Logs Source groups its containers by Compose project, the rest un
 
   await expect(window.getByRole('treeitem', { name: 'shop' })).toBeVisible()
   await expect(window.getByRole('treeitem', { name: 'Standalone' })).toBeVisible()
+})
+
+test('a Docker Logs Source offers the Docker CLI’s contexts, and is named after the one picked', async () => {
+  const window = await app.firstWindow()
+  const dialog = await openAddDockerSource(window)
+  const context = dialog.getByLabel('Context', { exact: true })
+
+  await expect(context.locator('option')).toHaveText(['default', 'build-box', 'podman'])
+  await expect(dialog.getByText('the current context, podman')).toBeVisible()
+
+  await context.selectOption('build-box')
+
+  await expect(dialog.getByLabel('Name', { exact: true })).toHaveValue('build-box')
+  await expect(dialog.getByText('Its engine: tcp://build.internal:2376')).toBeVisible()
 })

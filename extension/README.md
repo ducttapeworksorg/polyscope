@@ -1,6 +1,6 @@
 # Polyscope for VS Code
 
-**Read files and logs wherever they live, without leaving VS Code.** Browse a local folder, a folder on a server, an S3 bucket, the files inside a Kubernetes pod, or every container log in a namespace, all from one sidebar and all read the same way.
+**Read files and logs wherever they live, without leaving VS Code.** Browse a local folder, a folder on a server, an S3 bucket, the files inside a Kubernetes pod, every container log in a namespace, or every container log on a Docker engine, all from one sidebar and all read the same way.
 
 Chasing a problem across systems usually means a terminal per place: `tail -f` for a server's files, `aws s3 cp` for archived logs, `kubectl logs` and `kubectl exec … cat` for a cluster. Polyscope puts them in one tree, opens them in the editor you already know, and never writes to any of them.
 
@@ -8,7 +8,7 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 
 ## Features
 
-- **Every place in one sidebar.** Local folders, folders on servers over SSH, S3-compatible buckets, files inside pods, and pod logs, each configured once as a **Source**.
+- **Every place in one sidebar.** Local folders, folders on servers over SSH, S3-compatible buckets, files inside pods, pod logs and Docker container logs, each configured once as a **Source**.
 - **Logs that keep up.** Follow a container's log, or a growing file, live. Pause to read, and pick up where you left off. A crashed container's **Previous Log** is a toggle away, in the same tab.
 - **Files of any size.** A multi-gigabyte file opens end-first in a paged viewer, without downloading all of it. Compressed files (`.gz`, `.zst`) open decompressed.
 - **Always know where you are.** Label Sources with an **Environment** like *prod* or *staging*. Its colour tints every tab from that Source, so a file from prod stands out.
@@ -26,6 +26,7 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 | **S3-compatible Storage** | A bucket, or the keys under a prefix, on AWS S3, MinIO, Ceph and others | Access keys, or an AWS profile (SSO included) |
 | **Kubernetes Files** | A folder inside every pod of one Deployment, StatefulSet or DaemonSet | Your kubeconfig, as `kubectl` does |
 | **Kubernetes Logs** | The logs of every container in a namespace, grouped by Workload, with pod health and restarts | Your kubeconfig, as `kubectl` does |
+| **Docker Logs** | The logs of every container on a Docker engine, or Podman, grouped by Compose project and service, with container health and restarts | Your Docker contexts, as `docker` does (local socket, or TCP with TLS) |
 
 ## Getting started
 
@@ -37,13 +38,13 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 
 ## Viewer tabs
 
-Followed files, Kubernetes Log Streams and Large Files open in a Polyscope viewer tab, which appends live lines and pages through a multi-gigabyte file. Turn off the `polyscope.ownViewer` setting to open everything in VS Code's editor instead: Log Streams as a snapshot of their Last N lines, with no way to switch to a container's Previous Log, Large Files only up to the "open anyway" limit in Polyscope's Settings, and no Follow.
+Followed files, container logs (Kubernetes and Docker) and Large Files open in a Polyscope viewer tab, which appends live lines and pages through a multi-gigabyte file. Turn off the `polyscope.ownViewer` setting to open everything in VS Code's editor instead: Log Streams as a snapshot of their Last N lines, with no way to switch to a container's Previous Log, Large Files only up to the "open anyway" limit in Polyscope's Settings, and no Follow.
 
 ![A Large File in a Polyscope viewer tab, listing every line matching a search](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vvscode-large-file.png)
 
 ## Remote development
 
-Under Remote-SSH, WSL and Dev Containers, Polyscope runs on the remote machine. A Local Filesystem Source browses the remote's disk, SSH Files Sources use the remote's `~/.ssh/config`, `known_hosts` and SSH agent, and Kubernetes Sources use the remote's kubeconfig, with its auth plugins.
+Under Remote-SSH, WSL and Dev Containers, Polyscope runs on the remote machine. A Local Filesystem Source browses the remote's disk, SSH Files Sources use the remote's `~/.ssh/config`, `known_hosts` and SSH agent, Kubernetes Sources use the remote's kubeconfig, with its auth plugins, and Docker Logs Sources the remote's Docker engine and contexts.
 
 ## UNC shares on Windows
 

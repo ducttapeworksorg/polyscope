@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe } from 'vitest'
-import { connectDockerEngine, dockerEndpointOf } from './docker-log-source'
+import { dockerEndpointOf } from './docker-contexts'
+import { connectDockerEngine } from './docker-log-source'
 import { startTestDockerEngine, type TestDockerEngine } from './docker-test-engine'
-import { hasTestDocker, testCounter } from './docker-test-seed'
+import { hasTestDocker, testCounter, testTlsContext } from './docker-test-seed'
 import { describeLogSourceContract } from './log-source-contract'
 
 const capabilities = { previousLog: false, restarts: true, status: true }
@@ -28,14 +29,21 @@ describe('Docker Logs against a stand-in engine', () => {
   afterAll(() => engine.close())
 
   describeLogSourceContract('Docker Logs', capabilities, async () => ({
-    logSource: (await connectDockerEngine(dockerEndpointOf('default', { DOCKER_HOST: engine.host }))).logSource,
+    logSource: (await connectDockerEngine(await dockerEndpointOf('default', { DOCKER_HOST: engine.host }))).logSource,
     counter: '_standalone/counter'
   }))
 })
 
 describe.skipIf(!hasTestDocker)('Docker Logs against the test engine', () => {
   describeLogSourceContract('Docker Logs', capabilities, async () => ({
-    logSource: (await connectDockerEngine(dockerEndpointOf('default'))).logSource,
+    logSource: (await connectDockerEngine(await dockerEndpointOf('default'))).logSource,
+    counter: testCounter
+  }))
+})
+
+describe.skipIf(!hasTestDocker || !testTlsContext)('Docker Logs against the test engine, through a context fronting it with TLS', () => {
+  describeLogSourceContract('Docker Logs over TLS', capabilities, async () => ({
+    logSource: (await connectDockerEngine(await dockerEndpointOf(testTlsContext!))).logSource,
     counter: testCounter
   }))
 })

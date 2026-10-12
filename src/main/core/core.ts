@@ -50,7 +50,8 @@ import { searchRegExp } from '@shared/search'
 import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings } from '@shared/settings'
 import { listAwsProfiles } from './aws-profiles'
 import { CoreError } from './core-error'
-import { connectDockerEngine, dockerEndpointOf } from './docker-log-source'
+import { dockerEndpointOf, listDockerContexts } from './docker-contexts'
+import { connectDockerEngine } from './docker-log-source'
 import { createEnvironmentStore, defaultEnvironments, isColor } from './environment-store'
 import {
   binarySniffLength,
@@ -972,7 +973,7 @@ export function createCore(options: CoreOptions = {}): Core {
   }
 
   /** Opens a Docker Logs Source's engine, once it has answered: its Log Source, and what the engine says it is. */
-  const reachDocker = ({ context }: Extract<Target, { type: 'dockerLogs' }>) => connectDockerEngine(dockerEndpointOf(context))
+  const reachDocker = async ({ context }: Extract<Target, { type: 'dockerLogs' }>) => connectDockerEngine(await dockerEndpointOf(context))
 
   /**
    * Opens a Source's File or Log Source and lists its root: what connecting, or testing a connection, has to get through.
@@ -1449,6 +1450,8 @@ export function createCore(options: CoreOptions = {}): Core {
       const cluster = clusterOf({ context, namespace })
       return listWorkloads(kubeConfigFor(cluster.context), cluster.namespace)
     },
+
+    listDockerContexts: () => listDockerContexts(),
 
     async getSettings() {
       await settingsLoaded
