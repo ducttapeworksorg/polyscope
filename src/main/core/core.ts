@@ -51,7 +51,7 @@ import { defaultDockerContext, filesWorkloadKinds, followableSourceTypes, worklo
 import { searchRegExp } from '@shared/search'
 import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings } from '@shared/settings'
 import { listAwsProfiles } from './aws-profiles'
-import { createAzureBlobFileSource, serviceClientOf } from './azure-blob-file-source'
+import { checkConnectionString, checkSas, createAzureBlobFileSource, type AzureBlobTarget } from './azure-blob-file-source'
 import { CoreError } from './core-error'
 import { dockerEndpointOf, listDockerContexts } from './docker-contexts'
 import { connectDockerEngine } from './docker-log-source'
@@ -131,6 +131,8 @@ function withDefaults(saved: SavedSource): SavedSource {
       // Before ssh:// contexts, a Docker Logs Source had no way of signing in.
       return { ...source, auth: source.auth ?? 'agent', keyFile: source.keyFile ?? '' }
     case 'azureBlob':
+      // Before SAS and Azure CLI sign-in, every Azure Blob Storage Source signed in with a connection string.
+      return { ...source, auth: source.auth ?? 'connectionString', endpoint: source.endpoint ?? '' }
     case 'kubernetesFiles':
     case 'kubernetesLogs':
       return source
@@ -145,20 +147,24 @@ type Target =
   | Pick<LocalSourceInfo, 'type' | 'rootPath' | 'showHidden'>
   | Pick<SshFilesSourceInfo, 'type' | 'host' | 'user' | 'port' | 'path' | 'auth' | 'keyFile'>
   | Omit<S3SourceInfo, 'id' | 'name' | 'environmentId' | 'lastNLines' | 'secretKeySet'>
-  | Pick<AzureBlobSourceInfo, 'type' | 'account' | 'container' | 'prefix'>
+  | Pick<AzureBlobSourceInfo, 'type' | 'account' | 'container' | 'prefix' | 'endpoint' | 'auth'>
   | Pick<KubernetesFilesSourceInfo, 'type' | 'context' | 'namespace' | 'workloadKind' | 'workloadName' | 'path'>
   | Pick<KubernetesLogsSourceInfo, 'type' | 'context' | 'namespace'>
   | Pick<DockerLogsSourceInfo, 'type' | 'context' | 'auth' | 'keyFile'>
 
 type S3Settings = Extract<Target, { type: 's3' }>
+type AzureBlobSettings = Extract<Target, { type: 'azureBlob' }>
 
 /**
  * The name a Source's one secret is stored under, when its settings have a use for one: an S3 Source's secret key
- * when it signs in with keys, an Azure Blob Storage Source's connection string, an SSH Files Source's (or a Docker Logs Source's, for an ssh:// host) key file passphrase or password.
+ * when it signs in with keys, an Azure Blob Storage Source's connection string or SAS, an SSH Files Source's (or a Docker Logs Source's, for an ssh:// host) key file passphrase or password.
  */
 function secretNameOf(settings: { type: SourceTypeId; auth?: string }) {
   if (settings.type === 's3') return (settings.auth ?? 'keys') === 'keys' ? 'secretKey' : undefined
-  if (settings.type === 'azureBlob') return 'connectionString'
+  if (settings.type === 'azureBlob') {
+    const auth = settings.auth ?? 'connectionString'
+    return auth === 'azureCli' ? undefined : auth
+  }
   if (settings.type !== 'sshFiles' && settings.type !== 'dockerLogs') return undefined
   const auth = settings.auth ?? (settings.type === 'sshFiles' ? 'keyFile' : 'agent')
   return auth === 'keyFile' ? 'passphrase' : auth === 'password' ? 'password' : undefined
@@ -304,12 +310,32 @@ function targetOf(input: NewSource): Target {
 const normalisePrefix = (prefix: string | undefined) => (prefix ?? '').trim().replace(/^\/+|\/+$/g, '')
 
 /** An Azure Blob Storage Source's settings, checked and trimmed. */
-function azureBlobTargetOf(input: NewAzureBlobSource): Extract<Target, { type: 'azureBlob' }> {
+function azureBlobTargetOf(input: NewAzureBlobSource): AzureBlobSettings {
   const account = input.account?.trim() ?? ''
   if (!account) throw new CoreError('ACCOUNT_REQUIRED', 'An Azure Blob Storage Source needs a storage account')
   const container = input.container?.trim() ?? ''
   if (!container) throw new CoreError('CONTAINER_REQUIRED', 'An Azure Blob Storage Source needs a container')
-  return { type: 'azureBlob', account, container, prefix: normalisePrefix(input.prefix) }
+  const auth = input.auth ?? 'connectionString'
+  const endpoint = normaliseUrl(input.endpoint ?? '', 'https', 'INVALID_HOST').replace(/\/+$/, '')
+  return { type: 'azureBlob', account, container, prefix: normalisePrefix(input.prefix), endpoint, auth }
+}
+
+/**
+ * What an Azure Blob Storage File Source needs to reach its container: the settings, with the connection string or SAS
+ * (when signing in with one) checked and filled in.
+ */
+function azureBlobTargetWith(settings: AzureBlobSettings, secret: string | undefined): AzureBlobTarget {
+  const { account, container, prefix, endpoint } = settings
+  const target = (signIn: AzureBlobTarget['signIn']) => ({ account, container, prefix, endpoint, signIn })
+  if (settings.auth === 'azureCli') return target({ azureCli: true })
+  if (settings.auth === 'sas') {
+    if (secret === undefined) throw new CoreError('SAS_REQUIRED', 'An Azure Blob Storage Source signing in with a SAS needs one')
+    checkSas(secret, account, container)
+    return target({ sas: secret })
+  }
+  if (secret === undefined) throw new CoreError('CONNECTION_STRING_REQUIRED', 'An Azure Blob Storage Source needs a connection string')
+  checkConnectionString(secret, account)
+  return target({ connectionString: secret })
 }
 
 /** What an S3 File Source needs to reach its store: the settings, with the secret key (when signing in with keys) and CA bundle read in. */
@@ -490,9 +516,9 @@ export function createCore(options: CoreOptions = {}): Core {
       saved.environmentId === undefined || environments.some((e) => e.id === saved.environmentId) ? { ...saved } : unlabelled(saved)
     // Only whether there is a secret: the secret itself stays in the core.
     if (source.type === 's3') return { ...source, secretKeySet: (await secrets.get(source.id, 'secretKey')) !== undefined }
-    if (source.type === 'azureBlob') return { ...source, connectionStringSet: (await secrets.get(source.id, 'connectionString')) !== undefined }
+    const stored = async (name: string) => secretNameOf(source) === name && (await secrets.get(source.id, name)) !== undefined
+    if (source.type === 'azureBlob') return { ...source, connectionStringSet: await stored('connectionString'), sasSet: await stored('sas') }
     if (source.type === 'sshFiles' || source.type === 'dockerLogs') {
-      const stored = async (name: string) => secretNameOf(source) === name && (await secrets.get(source.id, name)) !== undefined
       return { ...source, passphraseSet: await stored('passphrase'), passwordSet: await stored('password') }
     }
     return source
@@ -1029,7 +1055,7 @@ export function createCore(options: CoreOptions = {}): Core {
 
   /**
    * Opens a Source's File or Log Source and lists its root: what connecting, or testing a connection, has to get through.
-   * An S3 Source signing in with keys needs its `secret` key, and an Azure Blob Storage Source its connection string, as
+   * An S3 Source signing in with keys needs its `secret` key, and an Azure Blob Storage Source its connection string or SAS, as
    * an SSH Files Source with an encrypted key file needs its passphrase; S3 and Azure Blob Storage Sources prove they can
    * sign in by listing.
    */
@@ -1039,10 +1065,7 @@ export function createCore(options: CoreOptions = {}): Core {
     if (target.type === 'local') backend = { kind: 'files', fileSource: await reachLocal(target) }
     else if (target.type === 'sshFiles') backend = { kind: 'files', fileSource: await reachSsh(target, secret) }
     else if (target.type === 's3') backend = { kind: 'files', fileSource: createS3FileSource(await s3TargetOf(target, secret)) }
-    else if (target.type === 'azureBlob') {
-      if (secret === undefined) throw new CoreError('CONNECTION_STRING_REQUIRED', 'No connection string is stored for this Source')
-      backend = { kind: 'files', fileSource: createAzureBlobFileSource({ ...target, connectionString: secret }) }
-    }
+    else if (target.type === 'azureBlob') backend = { kind: 'files', fileSource: createAzureBlobFileSource(azureBlobTargetWith(target, secret)) }
     else if (target.type === 'kubernetesFiles') backend = { kind: 'files', fileSource: await reachKubernetesFiles(target) }
     else if (target.type === 'dockerLogs') {
       const engine = await reachDocker(target, secret)
@@ -1068,7 +1091,9 @@ export function createCore(options: CoreOptions = {}): Core {
       input.type === 's3'
         ? input.secretAccessKey
         : input.type === 'azureBlob'
-          ? input.connectionString
+          ? name === 'sas'
+            ? input.sas
+            : input.connectionString
           : input.type === 'sshFiles' || input.type === 'dockerLogs'
           ? name === 'password'
             ? input.password
@@ -1101,11 +1126,10 @@ export function createCore(options: CoreOptions = {}): Core {
     if (target.type === 's3' && target.auth === 'keys' && typed === undefined && (await secretFor(input, editing)) === undefined) {
       throw new CoreError('SECRET_KEY_REQUIRED', 'An S3 Source needs a secret key')
     }
-    if (target.type === 'azureBlob') {
-      const connectionString = typed ?? (await secretFor(input, editing))
-      if (connectionString === undefined) throw new CoreError('CONNECTION_STRING_REQUIRED', 'An Azure Blob Storage Source needs a connection string')
-      // Without connecting: one for another account is refused, whether typed now or stored and the account changed.
-      serviceClientOf(connectionString, target.account)
+    if (target.type === 'azureBlob' && target.auth !== 'azureCli') {
+      // Without connecting: one for another account (or a SAS URL for another container) is refused, whether typed now
+      // or stored and the account changed.
+      azureBlobTargetWith(target, typed ?? (await secretFor(input, editing)))
     }
     if (target.type === 'sshFiles') {
       await sshRouteOf(target).catch((error: unknown) => {

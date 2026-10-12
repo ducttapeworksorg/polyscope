@@ -17,7 +17,7 @@ export type SavedSource =
   | LocalSourceInfo
   | Omit<SshFilesSourceInfo, 'passphraseSet' | 'passwordSet'>
   | Omit<S3SourceInfo, 'secretKeySet'>
-  | Omit<AzureBlobSourceInfo, 'connectionStringSet'>
+  | Omit<AzureBlobSourceInfo, 'connectionStringSet' | 'sasSet'>
   | KubernetesFilesSourceInfo
   | KubernetesLogsSourceInfo
   | DockerLogsSourceInfo

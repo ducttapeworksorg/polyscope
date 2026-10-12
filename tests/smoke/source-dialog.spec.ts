@@ -218,7 +218,25 @@ test('a new Azure Blob Storage Source is named after its account and container, 
   await expect(result).toHaveText('Enter the storage account’s connection string.')
 
   // An account whose endpoint answers nothing: the test gets as far as trying to list the container.
-  await dialog.getByLabel('Connection string').fill('DefaultEndpointsProtocol=http;AccountName=contosologs;AccountKey=a2V5;BlobEndpoint=http://127.0.0.1:1/contosologs;')
+  // The field, not the sign-in choice of the same name.
+  await dialog.getByLabel('Connection string').and(dialog.locator('input[type="password"]')).fill('DefaultEndpointsProtocol=http;AccountName=contosologs;AccountKey=a2V5;BlobEndpoint=http://127.0.0.1:1/contosologs;')
   await dialog.getByRole('button', { name: 'Test connection' }).click()
   await expect(result).toContainText('The server can’t be reached', { timeout: 30_000 })
+})
+
+test('a SAS URL pasted into a new Azure Blob Storage Source fills in its account and container', async () => {
+  const window = await app.firstWindow()
+  const dialog = await openAddSource(window, 'azureBlob')
+
+  // Clicking the option as a user would: the radio itself is hidden beneath.
+  await dialog.locator('label.segmented__option', { hasText: 'SAS' }).click()
+  await dialog.getByLabel('SAS URL or token').fill('https://contosologs.blob.core.windows.net/app?sv=2025-01-05&se=2099-01-01T00%3A00%3A00Z&sr=c&sp=rl&sig=c2ln')
+
+  await expect(dialog.getByLabel('Storage account', { exact: true })).toHaveValue('contosologs')
+  await expect(dialog.getByLabel('Container', { exact: true })).toHaveValue('app')
+  await expect(dialog.getByLabel('Name', { exact: true })).toHaveValue('contosologs/app')
+
+  await dialog.locator('label.segmented__option', { hasText: 'Azure CLI' }).click()
+  await expect(dialog.getByText(/Storage Blob Data Reader/)).toBeVisible()
+  await expect(dialog.locator('input[type="password"]')).toHaveCount(0)
 })

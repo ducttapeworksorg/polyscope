@@ -60,10 +60,23 @@ export interface NewAzureBlobSource {
   /** The blob name prefix the Source is rooted at, e.g. `logs/app`; the whole container when blank or left out. */
   prefix?: string
   /**
-   * The storage account's connection string, which says where its blob endpoint is and holds its key: goes into the OS
-   * keychain and never comes back out of the core. Blank or left out when editing keeps the stored one.
+   * The account's blob endpoint, for signing in with a SAS token or as yourself, e.g. `https://127.0.0.1:10000/devstoreaccount1`
+   * for Azurite; Azure's own (`https://<account>.blob.core.windows.net`) when blank or left out. A connection string or
+   * SAS URL says where its endpoint is itself.
+   */
+  endpoint?: string
+  /** How the Source signs in: a connection string, a SAS, or as yourself through Azure CLI. A connection string unless given. */
+  auth?: AzureBlobAuth
+  /**
+   * Signing in with a connection string: the storage account's, which says where its blob endpoint is and holds its key.
+   * Goes into the OS keychain and never comes back out of the core. Blank or left out when editing keeps the stored one.
    */
   connectionString?: string
+  /**
+   * Signing in with a SAS: a SAS URL, or the token alone, kept like a connection string. A URL must be for the Source's
+   * account and container, when it names them.
+   */
+  sas?: string
   /** The Environment the Source is labelled with; unlabelled when left out. */
   environmentId?: string
 }
@@ -169,6 +182,12 @@ export interface NewKubernetesFilesSource {
 export type S3Auth = 'keys' | 'profile'
 
 /**
+ * How an Azure Blob Storage Source signs in: a connection string or a SAS, both kept in the OS keychain, or as yourself
+ * through Azure's default credentials (`az login`, `AZURE_*` variables, a managed identity), with nothing stored.
+ */
+export type AzureBlobAuth = 'connectionString' | 'sas' | 'azureCli'
+
+/**
  * How an SSH Files Source signs in: with a key in the user's SSH agent (Pageant or OpenSSH's on Windows,
  * SSH_AUTH_SOCK's elsewhere), a private key file, or a password.
  */
@@ -234,8 +253,13 @@ export interface AzureBlobSourceInfo extends SourceIdentity {
   container: string
   /** Normalised: no leading or trailing '/', blank for the whole container. */
   prefix: string
-  /** Whether a connection string is stored for the Source; the connection string itself never leaves the core. */
+  /** Blank for Azure's own. */
+  endpoint: string
+  auth: AzureBlobAuth
+  /** Whether a connection string is stored for the Source; the connection string itself never leaves the core. Always false unless signing in with one. */
   connectionStringSet: boolean
+  /** Whether a SAS is stored for the Source, likewise. */
+  sasSet: boolean
 }
 
 export interface SshFilesSourceInfo extends SourceIdentity {
@@ -840,6 +864,12 @@ export type CoreErrorCode =
   | 'CONNECTION_STRING_REQUIRED'
   | 'INVALID_CONNECTION_STRING'
   | 'CONTAINER_NOT_FOUND'
+  | 'SAS_REQUIRED'
+  | 'INVALID_SAS'
+  | 'SAS_EXPIRED'
+  | 'ACCOUNT_NOT_FOUND'
+  | 'ROLE_REQUIRED'
+  | 'AZURE_LOGIN_REQUIRED'
   | 'AUTH_FAILED'
   | 'CREDENTIALS_UNAVAILABLE'
   | 'INVALID_PROXY'

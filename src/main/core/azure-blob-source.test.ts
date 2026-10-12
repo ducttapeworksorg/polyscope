@@ -1,13 +1,18 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { getCACertificates, setDefaultCACertificates } from 'node:tls'
 import { gzipSync, zstdCompressSync } from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LargeFileSearchEvent, NewAzureBlobSource, TreeNode } from '@shared/core-api'
 import { MB } from '@shared/settings'
-import { hasTestAccount, seedPrefix, testAzureBlobSource } from './azure-blob-test-store'
+import { hasTestAccount, seedPrefix, takesTokens, testAzureBlobSource, testEndpoint, testSasUrl } from './azure-blob-test-store'
+import { expiredAzureCli, startManagedIdentity } from './azure-test-identity'
 import { createCore } from './core'
 import { createSecretStore } from './secret-store'
+import { startTlsFront } from './test-network'
 
 let dir: string
 
@@ -16,6 +21,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.unstubAllEnvs()
   await rm(dir, { recursive: true, force: true })
 })
 
@@ -33,6 +39,18 @@ const offline = (changes: Partial<NewAzureBlobSource> = {}): NewAzureBlobSource 
   ...changes
 })
 
+/** A SAS URL for the offline account's `logs` container that needn't work: nothing here connects with it. */
+const offlineSasUrl = 'https://contosologs.blob.core.windows.net/logs?sv=2025-01-05&se=2099-01-01T00%3A00%3A00Z&sr=c&sp=rl&sig=c2lnbmF0dXJl'
+
+/** Settings signing in to the offline account with a SAS. */
+const offlineSas = (changes: Partial<NewAzureBlobSource> = {}) => offline({ auth: 'sas', connectionString: undefined, sas: offlineSasUrl, ...changes })
+
+/** A cipher that keeps secrets out of plain sight, without a keyring. */
+const reversed = {
+  encrypt: (plain: string) => Buffer.from([...plain].reverse().join('')),
+  decrypt: (encrypted: Buffer) => [...encrypted.toString()].reverse().join('')
+}
+
 const names = (nodes: TreeNode[]) => nodes.map((node) => (node.kind === 'more' ? '…more' : node.kind === 'error' ? node.code : node.name))
 
 describe('adding an Azure Blob Storage Source', () => {
@@ -41,7 +59,18 @@ describe('adding an Azure Blob Storage Source', () => {
 
     const added = await core.addSource(offline({ account: ' contosologs ', container: ' logs ', prefix: '/app/logs/' }))
 
-    const expected = { id: added.id, type: 'azureBlob', name: 'Logs', account: 'contosologs', container: 'logs', prefix: 'app/logs', connectionStringSet: true }
+    const expected = {
+      id: added.id,
+      type: 'azureBlob',
+      name: 'Logs',
+      account: 'contosologs',
+      container: 'logs',
+      prefix: 'app/logs',
+      endpoint: '',
+      auth: 'connectionString',
+      connectionStringSet: true,
+      sasSet: false
+    }
     expect(added).toEqual(expected)
     expect(await core.listSources()).toEqual([expected])
   })
@@ -54,12 +83,48 @@ describe('an Azure Blob Storage Source’s settings', () => {
     ['CONNECTION_STRING_REQUIRED', { connectionString: ' ' }],
     ['CONNECTION_STRING_REQUIRED', { connectionString: undefined }],
     ['INVALID_CONNECTION_STRING', { connectionString: 'not a connection string' }],
-    ['INVALID_CONNECTION_STRING', { account: 'otheraccount' }]
+    ['INVALID_CONNECTION_STRING', { account: 'otheraccount' }],
+    ['INVALID_HOST', { auth: 'azureCli', endpoint: 'ftp://contosologs' }]
   ] as const)('are refused with %s: %o', async (code, changes) => {
     const core = createCore()
 
     await expect(core.addSource(offline(changes))).rejects.toMatchObject({ code })
     expect(await core.listSources()).toEqual([])
+  })
+
+  it.each([
+    ['SAS_REQUIRED', { sas: ' ' }],
+    ['SAS_REQUIRED', { sas: undefined, connectionString: offlineConnectionString }],
+    ['INVALID_SAS', { sas: 'sv=2025-01-05&sp=rl' }],
+    ['INVALID_SAS', { sas: 'not a SAS' }],
+    ['INVALID_SAS', { account: 'otheraccount' }],
+    ['INVALID_SAS', { container: 'other' }]
+  ] as const)('signing in with a SAS are refused with %s: %o', async (code, changes) => {
+    const core = createCore()
+
+    await expect(core.addSource(offlineSas(changes))).rejects.toMatchObject({ code })
+    expect(await core.listSources()).toEqual([])
+  })
+
+  it('take a SAS token alone, or an account SAS URL, for any container', async () => {
+    const core = createCore()
+    const token = new URL(offlineSasUrl).search
+
+    await core.addSource(offlineSas({ sas: token }))
+    await core.addSource(offlineSas({ sas: token.slice(1) }))
+    await core.addSource(offlineSas({ container: 'other', sas: offlineSasUrl.replace('/logs?', '/?') }))
+
+    expect(await core.listSources()).toHaveLength(3)
+  })
+
+  it('signing in through Azure CLI need nothing more, and keep no secret', async () => {
+    const secrets = createSecretStore({ cipher: reversed })
+    const core = createCore({ secrets })
+
+    const source = await core.addSource(offline({ auth: 'azureCli', endpoint: 'https://contosologs.blob.core.usgovcloudapi.net/' }))
+
+    expect(source).toMatchObject({ auth: 'azureCli', endpoint: 'https://contosologs.blob.core.usgovcloudapi.net', connectionStringSet: false, sasSet: false })
+    expect(await secrets.get(source.id, 'connectionString')).toBeUndefined()
   })
 
   it('are saved without waiting for the account to be reachable', async () => {
@@ -72,10 +137,6 @@ describe('an Azure Blob Storage Source’s settings', () => {
 })
 
 describe('an Azure Blob Storage Source’s connection string', () => {
-  const reversed = {
-    encrypt: (plain: string) => Buffer.from([...plain].reverse().join('')),
-    decrypt: (encrypted: Buffer) => [...encrypted.toString()].reverse().join('')
-  }
   const dataDir = () => join(dir, 'user-data')
 
   it('goes to the secret store, never into the saved registry', async () => {
@@ -163,6 +224,61 @@ describe('an Azure Blob Storage Source’s connection string', () => {
   })
 })
 
+describe('an Azure Blob Storage Source’s SAS', () => {
+  it('goes to the secret store, and is kept when an edit leaves it blank', async () => {
+    const secrets = createSecretStore({ cipher: reversed })
+    const core = createCore({ secrets })
+    const source = await core.addSource(offlineSas())
+
+    const edited = await core.editSource(source.id, offlineSas({ name: 'Renamed', sas: '' }))
+
+    expect(edited).toMatchObject({ name: 'Renamed', auth: 'sas', sasSet: true, connectionStringSet: false })
+    expect(await secrets.get(source.id, 'sas')).toBe(offlineSasUrl)
+  })
+
+  it('replaces a connection string when an edit switches to it, which is forgotten', async () => {
+    const secrets = createSecretStore({ cipher: reversed })
+    const core = createCore({ secrets })
+    const source = await core.addSource(offline())
+
+    await core.editSource(source.id, offlineSas())
+
+    expect(await secrets.get(source.id, 'connectionString')).toBeUndefined()
+    expect(await secrets.get(source.id, 'sas')).toBe(offlineSasUrl)
+  })
+
+  it('is forgotten when an edit switches to signing in through Azure CLI', async () => {
+    const secrets = createSecretStore({ cipher: reversed })
+    const core = createCore({ secrets })
+    const source = await core.addSource(offlineSas())
+
+    const edited = await core.editSource(source.id, offline({ auth: 'azureCli', connectionString: undefined }))
+
+    expect(edited).toMatchObject({ auth: 'azureCli', sasSet: false })
+    expect(await secrets.get(source.id, 'sas')).toBeUndefined()
+  })
+
+  it('goes along with a duplicate, and is forgotten when the Source is deleted', async () => {
+    const secrets = createSecretStore({ cipher: reversed })
+    const core = createCore({ secrets })
+    const source = await core.addSource(offlineSas())
+
+    const copy = await core.duplicateSource(source.id)
+    await core.deleteSource(source.id)
+
+    expect(await secrets.get(copy.id, 'sas')).toBe(offlineSasUrl)
+    expect(await secrets.get(source.id, 'sas')).toBeUndefined()
+  })
+
+  it('that has expired is reported on connecting, saying when', async () => {
+    const core = createCore()
+    const source = await core.addSource(offlineSas({ sas: offlineSasUrl.replace('se=2099', 'se=2020') }))
+
+    await expect(core.connect(source.id)).rejects.toMatchObject({ code: 'SAS_EXPIRED', message: expect.stringContaining('2020-01-01') })
+    expect(await core.connectionState(source.id)).toMatchObject({ state: 'error', code: 'SAS_EXPIRED' })
+  })
+})
+
 describe('an Azure Blob Storage Source whose account can’t be reached', () => {
   it('goes into the Error state on connecting', async () => {
     const core = createCore()
@@ -174,6 +290,57 @@ describe('an Azure Blob Storage Source whose account can’t be reached', () => 
 
   it('fails a connection test', async () => {
     await expect(createCore().testConnection(offline())).rejects.toMatchObject({ code: 'UNREACHABLE' })
+  })
+
+  it('is reported as an account that doesn’t exist when nothing has its name', async () => {
+    // .invalid names never resolve (RFC 6761), as an account's name on Azure doesn't once there's no such account.
+    const settings = offlineSas({ endpoint: 'http://contosologs.blob.core.invalid', sas: new URL(offlineSasUrl).search })
+
+    await expect(createCore().testConnection(settings)).rejects.toMatchObject({ code: 'ACCOUNT_NOT_FOUND' })
+  })
+})
+
+describe('an Azure Blob Storage Source signing in through Azure CLI', () => {
+  const disposals: (() => Promise<void>)[] = []
+  afterEach(async () => {
+    await Promise.all(disposals.splice(0).map((dispose) => dispose()))
+  })
+
+  it('whose sign-in has expired says to run az login again', async () => {
+    const az = await expiredAzureCli()
+    disposals.push(az.dispose)
+    for (const [name, value] of Object.entries(az.env)) vi.stubEnv(name, value)
+    const core = createCore()
+    const source = await core.addSource(offline({ auth: 'azureCli', connectionString: undefined }))
+
+    await expect(core.connect(source.id)).rejects.toMatchObject({ code: 'AZURE_LOGIN_REQUIRED', message: expect.stringContaining('az login') })
+    expect(await core.connectionState(source.id)).toMatchObject({ state: 'error', code: 'AZURE_LOGIN_REQUIRED' })
+  }, 30_000)
+
+  it('without a role that reads blobs names the role it needs', async () => {
+    const identity = await startManagedIdentity()
+    disposals.push(identity.close)
+    for (const [name, value] of Object.entries(identity.env)) vi.stubEnv(name, value)
+    // Azure, refusing an identity that has no data role on the account: Azurite gives every identity every role.
+    const azure = createServer((_request, response) => {
+      response.writeHead(403, { 'content-type': 'application/xml', 'x-ms-error-code': 'AuthorizationPermissionMismatch' })
+      response.end(
+        '<?xml version="1.0" encoding="utf-8"?><Error><Code>AuthorizationPermissionMismatch</Code>' +
+          '<Message>This request is not authorized to perform this operation using this permission.</Message></Error>'
+      )
+    })
+    await new Promise<void>((resolve) => azure.listen(0, '127.0.0.1', resolve))
+    disposals.push(() => new Promise((resolve) => azure.close(() => resolve())))
+    const front = await startTlsFront(`http://127.0.0.1:${(azure.address() as AddressInfo).port}`)
+    disposals.push(front.close)
+    // As though the private CA were the public one Azure's certificates come from.
+    const trusted = getCACertificates('default')
+    setDefaultCACertificates([...trusted, await readFile(front.caPath, 'utf8')])
+    disposals.push(async () => setDefaultCACertificates(trusted))
+
+    await expect(
+      createCore().testConnection(offline({ auth: 'azureCli', connectionString: undefined, endpoint: `${front.url}/contosologs` }))
+    ).rejects.toMatchObject({ code: 'ROLE_REQUIRED', message: expect.stringContaining('Storage Blob Data Reader') })
   })
 })
 
@@ -335,6 +502,51 @@ describe.skipIf(!hasTestAccount)('an Azure Blob Storage Source against the test 
     await expect(core.testConnection({ ...settings, container: 'no-such-container-polyscope', connectionString: '' }, source.id)).rejects.toMatchObject({
       code: 'CONTAINER_NOT_FOUND'
     })
+  })
+
+  it('signs in with a SAS URL, which reaches the account it names', async () => {
+    const { account, container, prefix } = testAzureBlobSource('Logs', await seeded({ 'app/a.log': 'a' }))
+    const core = createCore()
+
+    const source = await core.addSource({ type: 'azureBlob', name: 'Logs', account, container, prefix, auth: 'sas', sas: await testSasUrl() })
+
+    expect(source).toMatchObject({ auth: 'sas', sasSet: true, connectionStringSet: false })
+    expect(names(await core.connect(source.id))).toEqual(['app'])
+    expect(await core.openFile(source.id, 'app/a.log')).toMatchObject({ content: 'a' })
+  })
+
+  it('signs in with a SAS token alone, at the endpoint it’s given', async () => {
+    const { account, container, prefix } = testAzureBlobSource('Logs', await seeded({ 'a.log': 'a' }))
+    const url = new URL(await testSasUrl())
+    const endpoint = `${url.origin}/${account}`
+
+    await createCore().testConnection({ type: 'azureBlob', name: 'Logs', account, container, prefix, endpoint, auth: 'sas', sas: url.search })
+  })
+
+  it.each([
+    ['AUTH_FAILED', 'a wrong signature', (sas: string) => sas.replace(/sig=[^&]+/, 'sig=d3Jvbmc%3D')],
+    ['PERMISSION_DENIED', 'no permission to list', (sas: string) => sas]
+  ] as const)('reports %s for a SAS with %s', async (code, _, change) => {
+    const { account, container, prefix } = testAzureBlobSource('Logs', await seeded({ 'a.log': 'a' }))
+    const sas = change(await testSasUrl({ permissions: code === 'PERMISSION_DENIED' ? 'r' : 'rl' }))
+
+    await expect(createCore().testConnection({ type: 'azureBlob', name: 'Logs', account, container, prefix, auth: 'sas', sas })).rejects.toMatchObject({ code })
+  })
+
+  it.skipIf(!takesTokens)('signs in through Azure’s default credentials, a managed identity here, storing nothing', async () => {
+    const identity = await startManagedIdentity()
+    disposals.push(identity.close)
+    for (const [name, value] of Object.entries(identity.env)) vi.stubEnv(name, value)
+    const { account, container, prefix } = testAzureBlobSource('Logs', await seeded({ 'app/a.log': 'a' }))
+    const secrets = createSecretStore({ cipher: reversed })
+    const core = createCore({ secrets })
+
+    const source = await core.addSource({ type: 'azureBlob', name: 'Logs', account, container, prefix, endpoint: testEndpoint, auth: 'azureCli' })
+
+    expect(names(await core.connect(source.id))).toEqual(['app'])
+    expect(await core.openFile(source.id, 'app/a.log')).toMatchObject({ content: 'a' })
+    expect(await secrets.get(source.id, 'connectionString')).toBeUndefined()
+    expect(await secrets.get(source.id, 'sas')).toBeUndefined()
   })
 
   it('needs connecting afresh after its connection string changes', async () => {
