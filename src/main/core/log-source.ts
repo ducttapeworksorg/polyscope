@@ -86,6 +86,16 @@ export interface LogSource {
    * Log Stream's. Fails with NOT_FOUND once it's gone. Only, and always, from a Source Type with restarts.
    */
   currentRun?(path: SourcePath): Promise<LogStreamRun>
+  /**
+   * Lets go of what the Log Source holds open (a Docker Logs Source's SSH connection to its engine's host) once it's no
+   * longer used. Left out by Source Types that hold nothing open.
+   */
+  close?(): void
+  /**
+   * Calls `listener` once what the Log Source holds open drops by itself, after which it can't be used: straight away if
+   * it already has. Left out by Source Types that hold nothing open.
+   */
+  onDropped?(listener: () => void): void
 }
 
 /** A Log Source's way to look at a Log Stream's current run; undefined unless its Source Type has restarts. */

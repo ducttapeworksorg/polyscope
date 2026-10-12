@@ -29,12 +29,12 @@ afterEach(async () => {
 })
 
 describe('adding a Docker Logs Source', () => {
-  it('is listed with the default context unless it names one', async () => {
+  it('is listed with the default context unless it names one, signing in to an ssh:// one with the SSH agent unless told', async () => {
     const core = createCore()
 
     const added = await core.addSource(settings())
 
-    const expected = { id: added.id, type: 'dockerLogs', name: 'Laptop', context: 'default' }
+    const expected = { id: added.id, type: 'dockerLogs', name: 'Laptop', context: 'default', auth: 'agent', keyFile: '', passphraseSet: false, passwordSet: false }
     expect(added).toEqual(expected)
     expect(await core.listSources()).toEqual([expected])
   })
@@ -213,10 +213,10 @@ describe('Docker contexts', () => {
     }
   })
 
-  it('cannot reach an engine over SSH yet', async () => {
-    await engineInContexts(() => ({ contexts: [{ name: 'box', host: 'ssh://me@box.internal' }] }))
+  it('cannot reach an engine through a host it doesn’t know how to reach', async () => {
+    await engineInContexts(() => ({ contexts: [{ name: 'systemd', host: 'fd://' }] }))
 
-    await expect(createCore().testConnection(settings({ context: 'box' }))).rejects.toMatchObject({ code: 'UNSUPPORTED_DOCKER_HOST', message: expect.stringContaining('ssh://') })
+    await expect(createCore().testConnection(settings({ context: 'systemd' }))).rejects.toMatchObject({ code: 'UNSUPPORTED_DOCKER_HOST', message: 'fd://' })
   })
 })
 

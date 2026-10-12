@@ -8,7 +8,7 @@ import { lstat, mkdir, mkdtemp, open, readdir, realpath, rm, stat, writeFile, ty
 import { connect, createServer, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, sep } from 'node:path'
-import ssh2, { type AuthenticationType, type Connection, type ParsedKey, type SFTPWrapper } from 'ssh2'
+import ssh2, { type AuthenticationType, type Connection, type ParsedKey, type SFTPWrapper, type ServerChannel } from 'ssh2'
 import type { SeedTree } from './file-source-contract'
 
 const { AgentProtocol, Server, utils } = ssh2
@@ -23,7 +23,15 @@ export interface TestServerOptions {
   clientKey?: { private: string; public: string }
   /** A password that signs in too; none unless given. */
   password?: string
+  /**
+   * What running a command does: piping its stdin and stdout to a socket (as `docker system dial-stdio` does to a
+   * Docker Engine's), or exiting with a code and what it wrote to stderr. A command it gives nothing for isn't found.
+   */
+  exec?(command: string): TestCommand | undefined
 }
+
+/** What a command run on the test server does. */
+export type TestCommand = { socketPath: string } | { exitCode: number; stderr?: string }
 
 export interface TestSshServer {
   host: string
@@ -172,6 +180,30 @@ function serveSftp(sftp: SFTPWrapper, root: string, denied: ReadonlySet<string>)
   })
 }
 
+/** What a shell says of a command it can't find. */
+const notFound = (command: string): TestCommand => ({ exitCode: 127, stderr: `sh: 1: ${command.split(' ')[0]}: not found\n` })
+
+/** Runs a command on a session's channel: its stdin and stdout piped to a socket, or its exit with what it wrote to stderr. */
+function runCommand(channel: ServerChannel, command: TestCommand) {
+  if ('socketPath' in command) {
+    const socket = connect(command.socketPath)
+    const exit = (code: number) => {
+      channel.exit(code)
+      channel.end()
+    }
+    socket.on('error', () => exit(1))
+    channel.on('error', () => socket.destroy())
+    // Once the client closes its end, so does the socket's; once the socket ends, the command exits.
+    socket.on('end', () => exit(0))
+    channel.pipe(socket)
+    socket.on('data', (data: Buffer) => channel.write(data))
+    return
+  }
+  if (command.stderr) channel.stderr.write(command.stderr)
+  channel.exit(command.exitCode)
+  channel.end()
+}
+
 /** Whether a client's public key is `allowed`, and, when it signs, that it really holds the private key. */
 function acceptsKey(allowed: ParsedKey, offered: { algo: string; data: Buffer }, signed?: { blob: Buffer; signature: Buffer; hashAlgo?: string }) {
   const expected = allowed.getPublicSSH()
@@ -184,7 +216,8 @@ export async function startTestSshServer({
   sftp: offersSftp = true,
   port: listenOn = 0,
   clientKey: clientKeys = generateKey(),
-  password
+  password,
+  exec
 }: TestServerOptions = {}): Promise<TestSshServer> {
   const root = await mkdtemp(join(tmpdir(), 'polyscope-ssh-'))
   // The one user who may sign in.
@@ -223,6 +256,7 @@ export async function startTestSshServer({
         if (!offersSftp) return reject()
         serveSftp(acceptSftp(), root, denied)
       })
+      session.on('exec', (acceptExec, _reject, { command }) => runCommand(acceptExec(), exec?.(command) ?? notFound(command)))
     })
   })
   await new Promise<void>((resolve) => server.listen(listenOn, '127.0.0.1', resolve))

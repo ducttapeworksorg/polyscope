@@ -3,7 +3,7 @@
 
 import { createHash } from 'node:crypto'
 import type { Duplex } from 'node:stream'
-import ssh2, { type AnyAuthMethod, type BaseAgent, type ParsedKey, type SFTPWrapper } from 'ssh2'
+import ssh2, { type AnyAuthMethod, type BaseAgent, type ClientChannel, type ParsedKey, type SFTPWrapper } from 'ssh2'
 import type { HostKey } from '@shared/core-api'
 import { CoreError } from './core-error'
 import { networkCodes } from './network-errors'
@@ -48,6 +48,11 @@ export interface SshConnection {
   readonly user: string
   /** The connection's SFTP session, started the first time it's asked for. SFTP_UNAVAILABLE if the server has none. */
   sftp(): Promise<SFTPWrapper>
+  /**
+   * Runs a command on the server, as the user signed in, resolving with its channel: its stdin and stdout, with its
+   * stderr and exit beside them. UNREACHABLE if the connection has closed, or the server won't open another channel.
+   */
+  exec(command: string): Promise<ClientChannel>
   /** Whether the connection has closed, by close() or because it dropped. */
   readonly closed: boolean
   /** Calls `listener` once the connection drops, closing other than by close(); straight away if it already has. */
@@ -242,6 +247,20 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions, 
           )
         })
       })),
+    exec: (command) =>
+      new Promise<ClientChannel>((resolveExec, rejectExec) => {
+        const closed = () => rejectExec(new CoreError('UNREACHABLE', `${address}: the connection closed`))
+        if (signedIn.closed) return closed()
+        try {
+          client.exec(command, (error, channel) => {
+            if (!error) return resolveExec(channel)
+            rejectExec(new CoreError('UNREACHABLE', `${address} wouldn't run ${command}: ${error.message}`))
+          })
+        } catch {
+          // ssh2 throws once the connection's socket is gone, before it tells it closed.
+          closed()
+        }
+      }),
     get closed() {
       return signedIn.closed
     },

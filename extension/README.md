@@ -26,7 +26,7 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 | **S3-compatible Storage** | A bucket, or the keys under a prefix, on AWS S3, MinIO, Ceph and others | Access keys, or an AWS profile (SSO included) |
 | **Kubernetes Files** | A folder inside every pod of one Deployment, StatefulSet or DaemonSet | Your kubeconfig, as `kubectl` does |
 | **Kubernetes Logs** | The logs of every container in a namespace, grouped by Workload, with pod health and restarts | Your kubeconfig, as `kubectl` does |
-| **Docker Logs** | The logs of every container on a Docker engine, or Podman, grouped by Compose project and service, with container health and restarts | Your Docker contexts, as `docker` does (local socket, or TCP with TLS) |
+| **Docker Logs** | The logs of every container on a Docker engine, or Podman, grouped by Compose project and service, with container health and restarts | Your Docker contexts, as `docker` does (local socket, TCP with TLS, or SSH) |
 
 ## Getting started
 
