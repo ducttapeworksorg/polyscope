@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
+import type { AgentOptions } from 'node:https'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { getCACertificates } from 'node:tls'
@@ -68,6 +70,29 @@ const caDataFor = (cluster: Cluster) => {
   return Buffer.from(cas.filter(Boolean).join('\n')).toString('base64')
 }
 
+type CreateDispatcher = (cluster: Cluster | null, agentOptions: AgentOptions) => unknown
+
+/**
+ * Has `config` make one dispatcher and reuse it while its TLS settings stay the same. The client makes one per call,
+ * and so a TLS context of every CA a cluster is trusted by, some 150ms of CPU each, and never reuses a connection. An
+ * exec plugin may hand over a new client certificate, which then gets a dispatcher of its own.
+ */
+function reuseDispatcher(config: KubeConfig) {
+  const internals = config as unknown as { createDispatcher: CreateDispatcher }
+  const create = internals.createDispatcher.bind(config)
+  let reused: { key: string; dispatcher: unknown } | undefined
+  internals.createDispatcher = (cluster, agentOptions) => {
+    const { ca, cert, key, pfx, passphrase, servername, rejectUnauthorized } = agentOptions
+    const hash = createHash('sha256')
+    for (const part of [cluster?.server, cluster?.proxyUrl, ca, cert, key, pfx, passphrase, servername, rejectUnauthorized]) {
+      hash.update(JSON.stringify(Buffer.isBuffer(part) ? part.toString('base64') : (part ?? null)))
+    }
+    const digest = hash.digest('hex')
+    if (reused?.key !== digest) reused = { key: digest, dispatcher: create(cluster, agentOptions) }
+    return reused.dispatcher
+  }
+}
+
 /**
  * The user's kubeconfig set to `context`; fails if it has no such context. Its cluster goes through its own
  * `proxy-url`, or else the proxy HTTPS_PROXY / NO_PROXY give it, as they are now; and trusts the OS's CAs and Node's
@@ -85,5 +110,6 @@ export function kubeConfigFor(context: string): KubeConfig {
     const { caFile: _, ...rest } = cluster
     return { ...rest, ...(proxyUrl && { proxyUrl }), ...(!cluster.skipTLSVerify && { caData: caDataFor(cluster) }) }
   })
+  reuseDispatcher(config)
   return config
 }
