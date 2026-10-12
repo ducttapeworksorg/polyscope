@@ -532,7 +532,9 @@ describe('following a file on an SSH Files Source', () => {
 
     // SFTP tells no inode, so it's what the new file holds where the old one ended that gives it away.
     await rename(file, `${file}.1`)
-    await writeFile(file, `${numbered(11, 19)}rotated in\n`)
+    // Written whole and then moved in, so no look catches it part-written, and so shorter, as if cut short.
+    await writeFile(`${file}.new`, `${numbered(11, 19)}rotated in\n`)
+    await rename(`${file}.new`, file)
     // A look between the two finds no file, which is marked as failing for a moment.
     const rotation = () => updates().filter((u) => u !== '<failed>' && u !== '<recovered>')
     await eventually(() => expect(rotation()).toEqual(['<rotated>', ...numbered(11, 19).trimEnd().split('\n'), 'rotated in']))
