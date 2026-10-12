@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import type { LastNLines } from '@shared/core-api'
 import { t } from '../i18n'
-import { canShowPrevious, isLog, type OpenTab } from '../workspace'
+import { canShowPrevious, isLog, offersPrevious, type OpenTab } from '../workspace'
 import { LastNLinesControl } from './LastNLinesControl'
 
 interface Props {
@@ -33,8 +33,8 @@ export function Toggle({ pressed, disabled, tooltip, onToggle, children }: Toggl
 
 /**
  * The controls at the top of every log view: its "Last N lines", Follow (with pause and resume) for a
- * container's current log or a file, switching a container's log to its Previous Log and back, timestamps
- * in local time or UTC for a container's log, and wrapping.
+ * Log Stream's current log or a file, switching a Log Stream to its Previous Log and back if its Source Type has
+ * them, timestamps in local time or UTC for a Log Stream, and wrapping.
  */
 export function LogToolbar({ tab, onChangeLastNLines, onToggleFollow, onTogglePause, onTogglePrevious, onToggleTimestamps, onToggleUtc, onToggleWrap }: Props) {
   const { file, follow } = tab
@@ -61,7 +61,7 @@ export function LogToolbar({ tab, onChangeLastNLines, onToggleFollow, onTogglePa
         <Toggle pressed={follow?.paused ?? false} disabled={!follow} tooltip={t('logView.pause.tooltip')} onToggle={onTogglePause}>
           {t(follow?.paused ? 'logView.resume' : 'logView.pause')}
         </Toggle>
-        {!ofFile && (
+        {offersPrevious(tab) && (
           <Toggle
             pressed={previous}
             disabled={!canShowPrevious(tab)}

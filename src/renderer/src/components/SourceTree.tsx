@@ -11,15 +11,14 @@ import {
 } from 'react'
 import type {
   ConnectionState,
-  ContainerNode,
   ContainerRole,
   EntryNode,
   Environment,
   FoldedNode,
   HostKey,
   LogNode,
-  PodNode,
-  PodStatus,
+  LogStreamNode,
+  NodeStatus,
   ReadyCount,
   SourceInfo,
   SourcePath,
@@ -57,8 +56,8 @@ interface Props {
   onSelect(key: string): void
   /** Opens a file in the preview tab, or in a tab of its own when pinned. */
   onOpenFile(source: SourceInfo, node: EntryNode, options?: { pinned: boolean }): void
-  /** Opens a container's Log Stream in the preview tab, or in a tab of its own when pinned. */
-  onOpenLog(source: SourceInfo, node: ContainerNode, options?: { pinned: boolean }): void
+  /** Opens a Log Stream in the preview tab, or in a tab of its own when pinned. */
+  onOpenLog(source: SourceInfo, node: LogStreamNode, options?: { pinned: boolean }): void
   /** Follows a file of a Local, Kubernetes Files or SSH Files Source in a log view; without it, files offer no Follow. */
   onFollowFile?(source: SourceInfo, node: EntryNode): void
   /** Extra attributes for the Source's own row, e.g. for dragging it. */
@@ -87,20 +86,23 @@ type More =
   | { cursor: string; state: 'loading' }
   | { cursor: string; state: 'failed'; message: string }
 
-/** What a tree shows as a row: a File Source's folders and files, or a Log Source's groups, Workloads, pods and containers. */
+/** What a tree shows as a row: a File Source's folders and files, or a Log Source's groups and Log Streams. */
 type ShownNode = EntryNode | LogNode
 
 const isLogNode = (node: ShownNode): node is LogNode => node.kind !== 'folder' && node.kind !== 'file'
+
+/** Whether a Log Source's node opens its log rather than expanding: a Log Stream without children. */
+const opensLog = (node: LogNode): node is LogStreamNode => node.kind === 'logStream' && !node.hasChildren
+
+/** Whether a Log Source's node may fold its only child into it: a group, unless it never folds (Kubernetes' groups of Workloads). */
+const canFold = (node: LogNode) => node.kind === 'group' && !node.unfoldable
 
 /** A Log Source level's only child, if its listing has loaded with just the one. */
 const onlyChild = (listing: Listing | undefined) =>
   listing?.state === 'loaded' && !listing.more && listing.nodes.length === 1 ? listing.nodes[0] : undefined
 
 /** The level a Log Source's node carries folded in, as it was listed: a CronJob's only Job, a Workload's only pod, a pod's only container. */
-const carriedFold = (node: LogNode): LogNode | undefined =>
-  node.kind === 'workload' ? (node.job ?? node.pod)
-  : node.kind === 'pod' ? node.container
-  : undefined
+const carriedFold = (node: LogNode): LogNode | undefined => (node.kind === 'group' ? node.folded : undefined)
 
 /** A listing once loaded, or once it failed, keeps the level folded into its node, if any (see FoldedNode). */
 type Listing =
@@ -217,9 +219,9 @@ export function SourceTree(props: Props) {
               if (folded) return [n.path, ...outdated(folded)]
               // Folding nothing in, a level keeps its own listing (an open folder's children), unless that says it does.
               const own = prev.get(n.path)
-              return (n.kind === 'workload' || n.kind === 'pod') && own?.state === 'loaded' && onlyChild(own) ? [n.path] : []
+              return canFold(n) && own?.state === 'loaded' && onlyChild(own) ? [n.path] : []
             }
-            const stale = new Set(nodes.flatMap((n) => (n.kind === 'workload' || n.kind === 'pod' ? outdated(n) : [])))
+            const stale = new Set(nodes.flatMap((n) => (n.kind === 'group' || n.kind === 'logStream' ? outdated(n) : [])))
             return stale.size > 0 ? new Map([...prev].filter(([listed]) => !stale.has(listed))) : prev
           })
         }
@@ -280,7 +282,7 @@ export function SourceTree(props: Props) {
     const listing = listings.get(node.path)
     const only = onlyChild(listing)
     const next =
-      node.kind === 'group' ? undefined
+      !canFold(node) ? undefined
       : !listing || listing.state === 'loading' ? carriedFold(node)
       : only && isLogNode(only) ? only
       : undefined
@@ -291,13 +293,13 @@ export function SourceTree(props: Props) {
   const isEmpty = (level: LogNode) => {
     const listing = listings.get(level.path)
     if (listing?.state === 'loaded') return listing.nodes.length === 0 && !listing.more
-    return listing?.state !== 'failed' && level.kind === 'workload' && Boolean(level.empty)
+    return listing?.state !== 'failed' && Boolean(level.empty)
   }
 
   /** Re-lists a Log Source's row: its own level, which may now fold differently, and each level folded into it. */
   const refreshLogRow = (chain: LogNode[]) => {
-    if (chain.at(-1)!.kind !== 'container') setExpanded((prev) => new Set(prev).add(chain[0]!.path))
-    for (const level of chain) if (level.kind !== 'container') load(level.path)
+    if (!opensLog(chain.at(-1)!)) setExpanded((prev) => new Set(prev).add(chain[0]!.path))
+    for (const level of chain) if (!opensLog(level)) load(level.path)
   }
 
   // A Source that isn't Connected connects on expanding; after a failure, expanding again retries.
@@ -381,20 +383,20 @@ export function SourceTree(props: Props) {
       </span>
     )
 
-  /** Where the entry really is and, when known, exactly when it was last modified; for a pod, how it's doing. */
+  /** Where the entry really is and, when known, exactly when it was last modified; for a node with a status (a pod), how it's doing. */
   const tooltip = (node: ShownNode) => {
     const where = uiFor(source.type).fullPath(source, node.path)
-    if (node.kind === 'pod') return podTooltip(node.path, node.status)
-    if ('kubernetes' in node && node.kubernetes?.kind === 'pod') return podTooltip(node.path, node.kubernetes.status)
+    if (isLogNode(node) && node.status) return statusTooltip(node.path, node.status)
+    if (!isLogNode(node) && node.kubernetes?.kind === 'pod') return statusTooltip(node.path, node.kubernetes.status)
     if (!('modifiedTime' in node) || node.modifiedTime === undefined) return where
     return `${where}\n${t('tree.modified', { time: formatDateTime(node.modifiedTime) })}`
   }
 
-  /** Where a pod's folder or node is, and how the pod is doing. */
-  const podTooltip = (path: SourcePath, status: PodStatus) => [uiFor(source.type).fullPath(source, path), ...podStatusLines(status)].join('\n')
+  /** Where a node (a pod's folder or node, say) is, and how it's doing. */
+  const statusTooltip = (path: SourcePath, status: NodeStatus) => [uiFor(source.type).fullPath(source, path), ...statusLines(status)].join('\n')
 
-  /** A pod's status, and when and why it last restarted if it has. */
-  const podStatusLines = ({ reason, restarts, lastRestart, lastTerminationReason }: PodStatus) => [
+  /** A node's status, and when and why what it runs last restarted if it has. */
+  const statusLines = ({ reason, restarts, lastRestart, lastTerminationReason }: NodeStatus) => [
     t('pod.status', { reason }),
     ...(restarts > 0 ? [t('pod.restarts', { count: restarts })] : []),
     ...(lastRestart !== undefined ? [t('pod.lastRestart', { time: formatDateTime(lastRestart) })] : []),
@@ -411,11 +413,16 @@ export function SourceTree(props: Props) {
     )
   }
 
-  /** A pod's status dot, coloured by its health, after its restart badge if it has one container and that has restarted. */
-  const podIndicators = (status: PodStatus, oneContainer: boolean) => (
+  /** A node's status dot (a pod's), coloured by its health. */
+  const statusDot = ({ health, reason }: NodeStatus) => (
+    <span className={`pod-status pod-status--${health}`} role="img" aria-label={t('pod.status', { reason })} />
+  )
+
+  /** A node's status dot, after its restart badge if it has one Log Stream and that has restarted. */
+  const statusIndicators = (status: NodeStatus, oneContainer: boolean) => (
     <>
       {oneContainer && status.restarts > 0 && restartBadge(status.restarts)}
-      <span className={`pod-status pod-status--${status.health}`} role="img" aria-label={t('pod.status', { reason: status.reason })} />
+      {statusDot(status)}
     </>
   )
 
@@ -429,22 +436,26 @@ export function SourceTree(props: Props) {
   /** What a row shows after its name about how it's doing: restarts, health, Ready Count. */
   const indicators = (content: ReactNode) => <span className="tree-row__indicators">{content}</span>
 
-  /** Whether the pod a container is in has other containers, going by the containers listed under the pod. */
-  const inSeveralContainers = (container: SourcePath) => {
-    const listing = listings.get(container.slice(0, container.lastIndexOf('/')))
+  /** Whether a Log Stream's parent (a container's pod) has other children, going by those listed under it. */
+  const amongSeveral = (logStream: SourcePath) => {
+    const listing = listings.get(logStream.slice(0, logStream.lastIndexOf('/')))
     return listing?.state === 'loaded' && listing.nodes.length > 1
   }
 
   /** What a folded container adds to the tooltip of the row standing in for it: its name, and its role if it has one. */
-  const containerLine = ({ name, role }: ContainerNode) =>
+  const containerLine = (name: string, role: ContainerRole | undefined) =>
     role ? t('pod.containerWithRole', { name, role: t(`containerRole.${role}`) }) : t('pod.container', { name })
 
-  /** What a level folded into a row adds to its tooltip: which Job, pod or container the row stands in for, and how a pod is doing. */
-  const foldedLines = (level: LogNode): string[] =>
-    level.kind === 'workload' ? [t('workload.job', { name: level.name })]
-    : level.kind === 'pod' ? [t('workload.pod', { name: level.name }), ...podStatusLines(level.status)]
-    : level.kind === 'container' ? [containerLine(level)]
-    : []
+  /** What a level folded into a row adds to its tooltip: which Job, pod, container or other node the row stands in for, and how it's doing. */
+  const foldedLines = (level: LogNode): string[] => {
+    const status = level.status ? statusLines(level.status) : []
+    const line =
+      level.kind === 'logStream' ? (level.kubernetes ? containerLine(level.name, level.kubernetes.role) : level.name)
+      : level.kubernetes?.kind === 'workload' ? t('workload.job', { name: level.name })
+      : level.kubernetes?.kind === 'pod' ? t('workload.pod', { name: level.name })
+      : level.name
+    return [line, ...status]
+  }
 
   /** A container's role, labelled after its name. */
   const roleBadge = (role: ContainerRole | undefined) =>
@@ -459,76 +470,101 @@ export function SourceTree(props: Props) {
 
   /** A row's Copy items: its own name, then that of each level folded into it, for pasting into kubectl, say. */
   const copyItems = (chain: LogNode[]): MenuItem[] =>
-    chain.flatMap((level, i) =>
-      level.kind === 'group' ? []
-      : level.kind === 'pod' ? [copyItem(t('tree.copyPodName'), level.name)]
-      : level.kind === 'container' ? [copyItem(t('tree.copyContainerName'), level.name)]
-      : [copyItem(i === 0 ? t('tree.copyName') : t('tree.copyJobName'), level.name)]
-    )
+    chain.flatMap((level, i) => {
+      const kind = level.kubernetes?.kind
+      return (
+        kind === 'workloads' ? []
+        : kind === 'pod' ? [copyItem(t('tree.copyPodName'), level.name)]
+        : kind === 'container' ? [copyItem(t('tree.copyContainerName'), level.name)]
+        : [copyItem(kind === 'workload' && i > 0 ? t('tree.copyJobName') : t('tree.copyName'), level.name)]
+      )
+    })
+
+  /** A Log Source's node's icon: what it is in Kubernetes, or else a folder or a log. */
+  const logIcon = (node: LogNode) => {
+    const { kubernetes } = node
+    if (kubernetes?.kind === 'container') return <KubernetesIcon container role={kubernetes.role} />
+    if (kubernetes?.kind === 'pod') return <KubernetesIcon workloadKind="Pod" />
+    if (kubernetes) return <KubernetesIcon workloadKind={kubernetes.workloadKind} />
+    if (node.kind === 'logStream') return <MaterialIcon icon="log" theme={theme} />
+    return <MaterialIcon icon="folder" theme={theme} open={expanded.has(node.path)} />
+  }
+
+  /** Opens a Log Stream's log, from its row or a row standing in for it. */
+  const openLogItems = (logStream: LogStreamNode) => ({
+    onActivate: () => onOpenLog(source, logStream),
+    onDoubleActivate: () => onOpenLog(source, logStream, { pinned: true })
+  })
 
   /**
-   * A Log Source's node: groups, Workloads and pods expand like folders; a container opens its Log Stream. A row with
-   * levels folded into it stands in for the last: it opens that one's Log Stream, or expands to its children. A
-   * Workload with no pods (a CronJob, no Jobs) has nothing to expand.
+   * A Log Source's node: groups expand like folders; a Log Stream opens its log, or, if it has children, expands like
+   * a folder, its menu opening its log. A row with levels folded into it stands in for the last: it opens that one's
+   * Log Stream, or expands to its children. A group with nothing under it (a CronJob, no Jobs) has nothing to expand.
    */
   const logRow = (node: LogNode, depth: number) => {
-    if (node.kind === 'container') {
-      const role = roleBadge(node.role)
+    if (opensLog(node)) {
+      const role = roleBadge(node.kubernetes?.role)
       // A pod with one container carries its restarts itself; with several, each container carries its own.
-      const restarts = node.restarts && inSeveralContainers(node.path) ? node.restarts : 0
+      const restarts = node.restarts && amongSeveral(node.path) ? node.restarts : 0
       return row({
         path: node.path,
         depth,
         extra: { title: tooltip(node) },
         label: node.name,
         folder: false,
-        icon: <KubernetesIcon container role={node.role} />,
-        onActivate: () => onOpenLog(source, node),
-        onDoubleActivate: () => onOpenLog(source, node, { pinned: true }),
+        icon: logIcon(node),
+        ...openLogItems(node),
         menuItems: copyItems([node]),
         badge: role,
-        status: restarts > 0 ? indicators(restartBadge(restarts)) : undefined
+        status:
+          restarts > 0 || node.status ?
+            indicators(
+              <>
+                {restarts > 0 && restartBadge(restarts)}
+                {node.status && statusDot(node.status)}
+              </>
+            )
+          : undefined
       })
     }
     const chain = foldedChain(node)
     const shown = chain.at(-1)!
     const refresh = { label: t('sourceActions.refresh'), onSelect: () => refreshLogRow(chain) }
+    // A Log Stream with children of its own expands, and opens its log from its menu.
+    const openLog = shown.kind === 'logStream' && !opensLog(shown) ? [{ label: t('tree.openLog'), onSelect: () => onOpenLog(source, shown) }] : []
     // The folded pod's Pod Status, and restarts if it's down to one container, go after the Workload's Ready Count.
-    const pod = chain.find((level): level is PodNode => level.kind === 'pod')
-    const ready = node.kind === 'workload' && node.readyCount
-    const empty = shown.kind !== 'container' && isEmpty(shown)
+    const withStatus = chain.find((level) => level.status)
+    const ready = node.kubernetes?.kind === 'workload' && node.kubernetes.readyCount
+    const empty = !opensLog(shown) && isEmpty(shown)
     const common = {
       path: node.path,
       depth,
-      label: node.kind === 'group' ? t(`workloadGroup.${node.workloadKind}`) : node.name,
-      icon: <KubernetesIcon workloadKind={node.kind === 'pod' ? 'Pod' : node.workloadKind} />,
-      menuItems: [refresh, ...copyItems(chain)],
+      label: node.kubernetes?.kind === 'workloads' ? t(`workloadGroup.${node.kubernetes.workloadKind}`) : node.name,
+      icon: logIcon(node),
+      menuItems: [refresh, ...openLog, ...copyItems(chain)],
       status:
-        ready || pod ?
+        ready || withStatus?.status ?
           indicators(
             <>
               {ready && readyCount(ready)}
-              {pod && podIndicators(pod.status, shown.kind === 'container')}
+              {withStatus?.status && statusIndicators(withStatus.status, opensLog(shown))}
             </>
           )
         : undefined,
       extra: { title: [tooltip(node), ...chain.slice(1).flatMap(foldedLines), ...(empty ? [emptyLine(shown)] : [])].join('\n') }
     }
-    if (shown.kind === 'container') {
-      // Folded down to one container, the row opens its Log Stream, as that container's row would; Refresh can unfold it.
-      return row({
-        ...common,
-        folder: false,
-        onActivate: () => onOpenLog(source, shown),
-        onDoubleActivate: () => onOpenLog(source, shown, { pinned: true })
-      })
+    if (opensLog(shown)) {
+      // Folded down to one Log Stream, the row opens it, as that Log Stream's row would; Refresh can unfold it.
+      return row({ ...common, folder: false, ...openLogItems(shown) })
     }
     if (empty) return row({ ...common, folder: false, onActivate: () => undefined })
     return row({ ...common, folder: true, onActivate: () => toggle(node.path, shown.path) })
   }
 
-  /** What an empty Workload's tooltip adds: that it has no pods, or a CronJob no Jobs. */
-  const emptyLine = (level: LogNode) => t(level.kind === 'workload' && level.workloadKind === 'CronJob' ? 'workload.noJobs' : 'workload.noPods')
+  /** What an empty node's tooltip adds: that a Workload has no pods, or a CronJob no Jobs; for anything else, that it's empty. */
+  const emptyLine = (level: LogNode) =>
+    level.kubernetes?.kind !== 'workload' ? t('tree.emptyLogNode')
+    : t(level.kubernetes.workloadKind === 'CronJob' ? 'workload.noJobs' : 'workload.noPods')
 
   /** What an empty listing says: a namespace or node of a Log Source has no folders to be empty. */
   const emptyNote = (path: SourcePath) =>
@@ -564,8 +600,8 @@ export function SourceTree(props: Props) {
       if (isLogNode(node)) {
         const self = logRow(node, depth)
         // A row standing in for levels folded into it shows the children of the last.
-        const shown = node.kind === 'container' ? node : foldedChain(node).at(-1)!
-        if (shown.kind === 'container' || isEmpty(shown) || !expanded.has(node.path)) return [self]
+        const shown = foldedChain(node).at(-1)!
+        if (opensLog(shown) || isEmpty(shown) || !expanded.has(node.path)) return [self]
         if (!listings.has(shown.path)) unlisted.push(shown.path)
         return [self, ...renderChildren(shown.path, depth + 1)]
       }
@@ -598,7 +634,7 @@ export function SourceTree(props: Props) {
           : kubernetes?.kind === 'container' ? <KubernetesIcon container role={kubernetes.role} />
           : <MaterialIcon icon={node.icon} theme={theme} open={isFolder && expanded.has(node.path)} />,
         badge: kubernetes?.kind === 'container' ? roleBadge(kubernetes.role) : undefined,
-        status: kubernetes?.kind === 'pod' ? indicators(podIndicators(kubernetes.status, kubernetes.containerCount === 1)) : undefined,
+        status: kubernetes?.kind === 'pod' ? indicators(statusIndicators(kubernetes.status, kubernetes.containerCount === 1)) : undefined,
         onActivate: () => (isFolder ? toggle(node.path) : onOpenFile(source, node)),
         onDoubleActivate: isFolder ? undefined : () => onOpenFile(source, node, { pinned: true }),
         menuItems:
@@ -697,7 +733,7 @@ export function SourceTree(props: Props) {
     for (const path of unlisted) load(path)
   })
   // A level folded into the root, like a Workload's one pod, has no row: the Source's tooltip tells of it instead.
-  const foldedTooltip = connected && rootFolded?.kubernetes?.kind === 'pod' ? podTooltip(rootFolded.path, rootFolded.kubernetes.status) : undefined
+  const foldedTooltip = connected && rootFolded?.kubernetes?.kind === 'pod' ? statusTooltip(rootFolded.path, rootFolded.kubernetes.status) : undefined
 
   return (
     <div {...treeProps} role="tree" aria-label={source.name} className={`source-tree ${treeProps?.className ?? ''}`}>

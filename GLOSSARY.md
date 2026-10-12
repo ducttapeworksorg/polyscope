@@ -28,7 +28,7 @@ An **Environment** flagged as needing extra care (e.g. prod).
 A **Source** whose content is a browsable hierarchy of folders and files.
 
 **Log Source**:
-A **Source** whose content is a hierarchy of groups ending in **Log Streams**. What the groups are depends on its **Source Type**.
+A **Source** whose content is a hierarchy of groups ending in **Log Streams**; a **Log Stream** may have children of its own too (a CloudWatch log group). What the groups are depends on its **Source Type**.
 
 **Log Stream**:
 The log output of one thing that logs (a container, a systemd unit, a CloudWatch log stream), viewable as a snapshot or live-followed.
@@ -88,6 +88,7 @@ _Avoid_: plugin
 - Kubernetes Files and Kubernetes Logs are separate **Source Types**, even though both point at a cluster
 - In Kubernetes Logs, a **Log Stream** belongs to one container of one pod of one **Workload**
 - **Previous Log**, **Pod Status** and **Ready Count** belong to Kubernetes Logs; other **Log Source** types needn't have them
+- A **Log Source** type declares which of **Previous Log**, restarts and per-node status (**Pod Status**, **Container Status**) it offers; the log view and the tree show only those
 
 ## Flagged ambiguities
 

@@ -197,6 +197,7 @@ export const en = {
   'tree.retry': 'Retry',
   'tree.menuLabel': 'Actions for {name}',
   'tree.follow': 'Follow',
+  'tree.openLog': 'Open log',
   'tree.copyName': 'Copy name',
   'tree.copyJobName': 'Copy Job name',
   'tree.copyPodName': 'Copy pod name',

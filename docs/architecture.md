@@ -216,11 +216,11 @@ flowchart TB
 Every Source Type implements one of two small interfaces, and the façade and engines only ever talk to those interfaces:
 
 - **`FileSource`** (`file-source.ts`): `listChildren(path, cursor?)` (paged), `stat(path)`, `read(path, { offset, length })`, and optionally `foldedChild(path)`. Byte-range reads are the key design choice: they let the core read a file's last lines, sniff its encoding, or page through a multi-gigabyte file without downloading all of it, on every backend.
-- **`LogSource`** (`log-source.ts`): `listChildren` (groups → Workloads → pods → containers), `logStreamAt`, `readLog` (tail lines, timestamps, Previous Log), `followLog` (a live connection), `containerInstance` (to notice restarts).
+- **`LogSource`** (`log-source.ts`): `listChildren` (groups and Log Streams, which may have children of their own; in Kubernetes Logs, groups → Workloads → pods → containers), `logStreamAt`, `readLog` (tail lines, timestamps, Previous Log), `followLog` (a live connection), and `currentRun` (to notice restarts). A Log Source Type declares its `capabilities` (Previous Log, restarts, per-node status) and is only asked for what it declares: the façade refuses a Previous Log it doesn't have and drops status and restarts it doesn't offer, a Follow without restarts ends with its stream, and the log view and sidebar show only what it offers (ADR 0007).
 
 Paths are Source-relative and `/`-separated, with `''` for the root, whatever the backend. Backends throw `CoreError` with a code, never raw SDK errors.
 
-Each interface has a **contract test suite** (`file-source-contract.ts`, `log-source-contract.ts`) that each implementation runs against its own backend, so they all behave alike.
+Each interface has a **contract test suite** (`file-source-contract.ts`, `log-source-contract.ts`) that each implementation runs against its own backend, so they all behave alike. The Log Source suite takes the capabilities the Source Type declares and checks only those; it also runs against an in-memory fake (`fake-log-source.ts`), which the façade's tests stand in for a cluster.
 
 #### Source Type implementations
 
@@ -242,7 +242,7 @@ These do the heavy lifting on top of the contracts, so every backend gets them f
 
 - **`file-content.ts`**: decides how to show bytes: detects text encodings and binary files, decompresses gzip and zstd as a stream, makes hex dumps.
 - **Large Files** (`large-file.ts`, `large-file-cache.ts`, `line-index.ts`, `large-file-search.ts`): a file over the threshold (50 MB by default) opens end-first. The core reads its last lines straight away, then copies the whole file into a size-capped LRU disk cache in the background (local, uncompressed files are read in place instead), building a sparse index of line offsets as it goes. After that, `readLargeFileLines` can jump to any line, and `searchLargeFile` runs a regex over the cached file, streaming matches back as events.
-- **Follows** (`log-follow.ts`, `file-follow.ts`): keep a view up to date. A Log Stream Follow holds a streaming connection to the Kubernetes API, reconnecting with backoff and carrying on across container restarts. A file Follow polls `stat` and reads what was added, noticing when the file is truncated or rotated: by its identity (device and inode) where the File Source tells one, and otherwise, as over SFTP, by the bytes just before where it had read up to changing. Both can pause, holding back at most the view's "Last N lines" until resumed.
+- **Follows** (`log-follow.ts`, `file-follow.ts`): keep a view up to date. A Log Stream Follow holds a streaming connection to its backend (the Kubernetes API), reconnecting with backoff and, for a Source Type with restarts, carrying on across them. A file Follow polls `stat` and reads what was added, noticing when the file is truncated or rotated: by its identity (device and inode) where the File Source tells one, and otherwise, as over SFTP, by the bytes just before where it had read up to changing. Both can pause, holding back at most the view's "Last N lines" until resumed.
 
 #### Persistence and secrets
 
