@@ -383,10 +383,10 @@ export function SourceTree(props: Props) {
       </span>
     )
 
-  /** Where the entry really is and, when known, exactly when it was last modified; for a node with a status (a pod), how it's doing. */
+  /** Where the entry really is and, when known, exactly when it was last modified; for a node with a status (a pod, a Docker container), how it's doing. */
   const tooltip = (node: ShownNode) => {
     const where = uiFor(source.type).fullPath(source, node.path)
-    if (isLogNode(node) && node.status) return statusTooltip(node.path, node.status)
+    if (isLogNode(node) && node.status) return [statusTooltip(node.path, node.status), ...dockerLines(node)].join('\n')
     if (!isLogNode(node) && node.kubernetes?.kind === 'pod') return statusTooltip(node.path, node.kubernetes.status)
     if (!('modifiedTime' in node) || node.modifiedTime === undefined) return where
     return `${where}\n${t('tree.modified', { time: formatDateTime(node.modifiedTime) })}`
@@ -403,6 +403,18 @@ export function SourceTree(props: Props) {
     ...(lastTerminationReason ? [t('pod.lastTermination', { reason: lastTerminationReason })] : [])
   ]
 
+  /** A Docker container's image, and when it started, or exited if it isn't running. */
+  const dockerLines = ({ docker }: LogNode): string[] => {
+    if (docker?.kind !== 'container') return []
+    const { image, startedAt, finishedAt } = docker
+    return [
+      ...(image ? [t('container.image', { image })] : []),
+      ...(finishedAt !== undefined ? [t('container.exited', { time: formatDateTime(finishedAt) })]
+      : startedAt !== undefined ? [t('container.started', { time: formatDateTime(startedAt) })]
+      : [])
+    ]
+  }
+
   /** ↻ N, for a pod or container that has restarted N times. */
   const restartBadge = (restarts: number) => {
     const label = t('pod.restarts', { count: restarts })
@@ -413,7 +425,7 @@ export function SourceTree(props: Props) {
     )
   }
 
-  /** A node's status dot (a pod's), coloured by its health. */
+  /** A node's status dot (a pod's, a Docker container's), coloured by its health. */
   const statusDot = ({ health, reason }: NodeStatus) => (
     <span className={`pod-status pod-status--${health}`} role="img" aria-label={t('pod.status', { reason })} />
   )
@@ -454,7 +466,7 @@ export function SourceTree(props: Props) {
       : level.kubernetes?.kind === 'workload' ? t('workload.job', { name: level.name })
       : level.kubernetes?.kind === 'pod' ? t('workload.pod', { name: level.name })
       : level.name
-    return [line, ...status]
+    return [line, ...status, ...dockerLines(level)]
   }
 
   /** A container's role, labelled after its name. */
@@ -505,8 +517,9 @@ export function SourceTree(props: Props) {
   const logRow = (node: LogNode, depth: number) => {
     if (opensLog(node)) {
       const role = roleBadge(node.kubernetes?.role)
-      // A pod with one container carries its restarts itself; with several, each container carries its own.
-      const restarts = node.restarts && amongSeveral(node.path) ? node.restarts : 0
+      // A pod with one container carries its restarts itself; with several, each container carries its own. A Log Stream
+      // with a status of its own (a Docker container's) always does.
+      const restarts = node.restarts && (node.status || amongSeveral(node.path)) ? node.restarts : 0
       return row({
         path: node.path,
         depth,

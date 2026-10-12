@@ -9,6 +9,8 @@ import {
   closeTab,
   cycleTab,
   emptyWorkspace,
+  endFollow,
+  markLogStreamGone,
   markPodGone,
   noteRestart,
   offersPrevious,
@@ -246,6 +248,31 @@ describe('offering to Follow a tab’s file', () => {
   it('doesn’t for a Log Stream, which has its own Follow', () => {
     const log = { view: 'log', of: 'logStream', path: 'p', name: 'c', offersPreviousLog: true, previous: false, restarted: false, lastNLines: 10, timestamps: false, content: '' } as const
     expect(canFollowFile({ source, file: log })).toBe(false)
+  })
+})
+
+describe('a log tab whose Log Stream is gone', () => {
+  const log = { view: 'log', of: 'logStream', path: 'p/c', name: 'c', offersPreviousLog: false, previous: false, restarted: false, lastNLines: 10, timestamps: false, content: 'last read' } as const
+  const followed = () => openTab(emptyWorkspace, { key: 'c', source, file: { ...log, followId: 'f' } })
+
+  it('keeps what it showed, marked as gone, when its Follow ends as the Log Stream went away', () => {
+    const ws = endFollow(followed(), 'f', 'gone')
+
+    expect(ws.tabs[0]).toMatchObject({ logStreamGone: true, file: { content: 'last read' } })
+    expect(ws.tabs[0]?.follow).toBeUndefined()
+  })
+
+  it('isn’t marked when its Follow ends otherwise', () => {
+    expect(endFollow(followed(), 'f', 'exited').tabs[0]).not.toHaveProperty('logStreamGone')
+    expect(endFollow(followed(), 'f', 'disconnected').tabs[0]).not.toHaveProperty('logStreamGone')
+  })
+
+  it('is marked when reading it again finds it gone', () => {
+    expect(markLogStreamGone(followed(), 'c').tabs[0]).toMatchObject({ logStreamGone: true, file: { content: 'last read' } })
+  })
+
+  it('loses the mark once it is read again', () => {
+    expect(reopenLogTab(endFollow(followed(), 'f', 'gone'), 'c', log).tabs[0]).not.toHaveProperty('logStreamGone')
   })
 })
 

@@ -2,8 +2,9 @@ import { chmod } from 'node:fs/promises'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FollowEvent, NewDockerLogsSource, TreeNode } from '@shared/core-api'
 import { createCore, type Core } from './core'
+import { followTiming } from './log-follow'
 import { startTestDockerEngine, type TestContainer, type TestDockerEngine } from './docker-test-engine'
-import { hasTestDocker, testCounter, testProject, testTicker } from './docker-test-seed'
+import { hasTestDocker, testCounter, testCrasher, testProject, testSyslog, testTicker, testUnhealthy } from './docker-test-seed'
 
 const settings = (changes: Partial<NewDockerLogsSource> = {}): NewDockerLogsSource => ({ type: 'dockerLogs', name: 'Laptop', ...changes })
 
@@ -109,9 +110,9 @@ describe('the tree of a Docker Logs Source', () => {
     const { core, sourceId } = await connected(shop)
 
     expect((await core.expand(sourceId, 'shop')).map((node) => node.path)).toEqual(['shop/web', 'shop/worker'])
-    expect(await core.expand(sourceId, 'shop/worker')).toEqual([
-      { kind: 'logStream', name: 'shop-worker-1', path: 'shop/worker/shop-worker-1', docker: { kind: 'container' } },
-      { kind: 'logStream', name: 'shop-worker-2', path: 'shop/worker/shop-worker-2', docker: { kind: 'container' } }
+    expect(await core.expand(sourceId, 'shop/worker')).toMatchObject([
+      { kind: 'logStream', name: 'shop-worker-1', path: 'shop/worker/shop-worker-1', status: { reason: 'Running' }, docker: { kind: 'container' } },
+      { kind: 'logStream', name: 'shop-worker-2', path: 'shop/worker/shop-worker-2', status: { reason: 'Exited (0)' }, docker: { kind: 'container' } }
     ])
     expect(names(await core.expand(sourceId, '_standalone'))).toEqual(['redis', 'scratch'])
   })
@@ -119,7 +120,7 @@ describe('the tree of a Docker Logs Source', () => {
   it('folds a service’s only container into it, and a project’s only service, the paths kept whole', async () => {
     const { core, sourceId, root } = await connected(shop)
 
-    const container = { kind: 'logStream', name: 'blog-app-1', path: 'blog/app/blog-app-1', docker: { kind: 'container' } }
+    const container = { kind: 'logStream', name: 'blog-app-1', path: 'blog/app/blog-app-1', status: expect.anything(), docker: expect.objectContaining({ kind: 'container' }) }
     expect(root[0]).toEqual({
       kind: 'group',
       name: 'blog',
@@ -151,6 +152,55 @@ describe('the tree of a Docker Logs Source', () => {
     const { root } = await connected([])
 
     expect(root).toEqual([])
+  })
+})
+
+describe('Container Status in the tree', () => {
+  it('shows how each container is doing, its restarts once it has restarted, its image, and when it started or exited', async () => {
+    const { core, sourceId } = await connected([
+      { name: 'api', image: 'nginx:1.27', startedAt: at(1) },
+      { name: 'crasher', state: 'restarting', exitCode: 1, restartCount: 3, startedAt: at(2), finishedAt: at(3) },
+      { name: 'done', state: 'exited', exitCode: 2, startedAt: at(1), finishedAt: at(4) },
+      { name: 'sick', health: 'unhealthy', startedAt: at(1) }
+    ])
+
+    expect(await core.expand(sourceId, '_standalone')).toEqual([
+      {
+        kind: 'logStream',
+        name: 'api',
+        path: '_standalone/api',
+        status: { reason: 'Running', health: 'healthy', restarts: 0 },
+        docker: { kind: 'container', image: 'nginx:1.27', startedAt: Date.parse(at(1)) }
+      },
+      {
+        kind: 'logStream',
+        name: 'crasher',
+        path: '_standalone/crasher',
+        restarts: 3,
+        status: { reason: 'Restarting', health: 'failing', restarts: 3, lastRestart: Date.parse(at(3)) },
+        docker: { kind: 'container', image: 'busybox:1.36', startedAt: Date.parse(at(2)) }
+      },
+      {
+        kind: 'logStream',
+        name: 'done',
+        path: '_standalone/done',
+        status: { reason: 'Exited (2)', health: 'failing', restarts: 0 },
+        docker: { kind: 'container', image: 'busybox:1.36', startedAt: Date.parse(at(1)), finishedAt: Date.parse(at(4)) }
+      },
+      {
+        kind: 'logStream',
+        name: 'sick',
+        path: '_standalone/sick',
+        status: { reason: 'Unhealthy', health: 'failing', restarts: 0 },
+        docker: { kind: 'container', image: 'busybox:1.36', startedAt: Date.parse(at(1)) }
+      }
+    ])
+  })
+
+  it('carries a folded container’s Container Status into the row standing in for it', async () => {
+    const { root } = await connected([{ name: 'blog-app-1', labels: compose('blog', 'app'), state: 'exited', exitCode: 1 }])
+
+    expect(root[0]).toMatchObject({ folded: { folded: { name: 'blog-app-1', status: { reason: 'Exited (1)', health: 'failing' } } } })
   })
 })
 
@@ -214,6 +264,14 @@ describe('opening a container’s log', () => {
     await expect(core.openLog(sourceId, '_standalone/app', { previous: true })).rejects.toMatchObject({ code: 'LOG_UNAVAILABLE' })
   })
 
+  it('says the log can’t be read back when its log driver sends it elsewhere, naming the driver', async () => {
+    const { core, sourceId } = await connected([{ ...app, name: 'shipped', logDriver: 'syslog' }])
+
+    const unavailable = { code: 'LOG_UNAVAILABLE', message: expect.stringContaining('syslog') }
+    await expect(core.openLog(sourceId, '_standalone/shipped')).rejects.toMatchObject(unavailable)
+    await expect(core.followLog(sourceId, '_standalone/shipped')).rejects.toMatchObject(unavailable)
+  })
+
   it('reports a container removed since it was listed', async () => {
     const { core, sourceId } = await connected([app])
 
@@ -230,6 +288,11 @@ function followUpdates(core: Core) {
 }
 
 describe('following a container’s log', () => {
+  // Looks at a container between runs often, so a restart or exit is noticed at once.
+  const { pollInterval } = followTiming
+  beforeEach(() => void (followTiming.pollInterval = 20))
+  afterEach(() => void (followTiming.pollInterval = pollInterval))
+
   const app: TestContainer = { name: 'app', logs: [1, 2, 3].map((i) => ({ stream: 'stdout' as const, time: at(i), text: `line ${i}` })) }
 
   it('starts from the last N lines, then adds lines as they are written, stdout and stderr alike', async () => {
@@ -272,6 +335,66 @@ describe('following a container’s log', () => {
 
     await vi.waitFor(() => expect(updates.of(followed.followId)).toEqual(['bye', 'ended']))
     expect(updates.events.at(-1)).toMatchObject({ kind: 'ended', reason: 'exited' })
+    updates.unsubscribe()
+  })
+
+  it('marks a restart, then follows the new run from its start', async () => {
+    const { core, sourceId } = await connected([app])
+    const updates = followUpdates(core)
+    const followed = await core.followLog(sourceId, '_standalone/app', { lastNLines: 1 })
+
+    engine!.log('app', 'last words')
+    await vi.waitFor(() => expect(updates.of(followed.followId)).toEqual(['last words']))
+    engine!.restart('app')
+    engine!.log('app', 'back up')
+
+    await vi.waitFor(() => expect(updates.of(followed.followId)).toEqual(['last words', 'restarted', 'back up']))
+    await core.disconnect(sourceId)
+    updates.unsubscribe()
+  })
+
+  it('waits while the engine restarts a crashed container, then follows its next run', async () => {
+    const { core, sourceId } = await connected([app])
+    const updates = followUpdates(core)
+    const followed = await core.followLog(sourceId, '_standalone/app', { lastNLines: 1 })
+
+    engine!.log('app', 'last words')
+    await vi.waitFor(() => expect(updates.of(followed.followId)).toEqual(['last words']))
+    engine!.crash('app')
+    await vi.waitFor(() => expect(updates.of(followed.followId)).toEqual(['last words', 'restarted']))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    engine!.start('app')
+    engine!.log('app', 'back up')
+
+    await vi.waitFor(() => expect(updates.of(followed.followId)).toEqual(['last words', 'restarted', 'back up']))
+    await core.disconnect(sourceId)
+    updates.unsubscribe()
+  })
+
+  it('marks no restart from before it was followed, and ends when the container exits for good', async () => {
+    const { core, sourceId } = await connected([{ ...app, restartCount: 2 }])
+    const updates = followUpdates(core)
+    const followed = await core.followLog(sourceId, '_standalone/app', { lastNLines: 1 })
+
+    engine!.stop('app', 1)
+
+    await vi.waitFor(() => expect(updates.of(followed.followId)).toEqual(['ended']))
+    expect(followed).toMatchObject({ offersPreviousLog: false, restarted: false })
+    updates.unsubscribe()
+  })
+
+  it('ends, saying the container is gone, when it is removed', async () => {
+    const { core, sourceId } = await connected([app])
+    const updates = followUpdates(core)
+    const followed = await core.followLog(sourceId, '_standalone/app', { lastNLines: 1 })
+
+    engine!.log('app', 'bye')
+    await vi.waitFor(() => expect(updates.of(followed.followId)).toEqual(['bye']))
+    engine!.remove('app')
+
+    await vi.waitFor(() => expect(updates.of(followed.followId)).toEqual(['bye', 'ended']))
+    expect(updates.events.at(-1)).toMatchObject({ kind: 'ended', reason: 'gone' })
+    await expect(core.openLog(sourceId, '_standalone/app')).rejects.toMatchObject({ code: 'NOT_FOUND' })
     updates.unsubscribe()
   })
 
@@ -334,6 +457,29 @@ describe.skipIf(!hasTestDocker)('Docker Logs against the test engine', () => {
 
     expect(log.content).toMatch(/^\S+Z line 99\n\S+Z line 100$/)
   })
+
+  it('shows each container’s Container Status: an exited one’s exit code, a failing healthcheck, a crash loop’s restarts', async () => {
+    const containers = await core.expand(sourceId, '_standalone')
+    const statusOf = (path: string) => containers.find((node) => node.path === path)
+
+    expect(statusOf('_standalone/polyscope-done')).toMatchObject({ status: { reason: 'Exited (0)' }, docker: { image: 'busybox:1.36', finishedAt: expect.any(Number) } })
+    expect(statusOf(testUnhealthy)).toMatchObject({ status: { reason: 'Unhealthy', health: 'failing' } })
+    expect(statusOf(testCounter)).toMatchObject({ status: { reason: 'Running', health: 'healthy', restarts: 0 }, docker: { startedAt: expect.any(Number) } })
+    expect(statusOf(testCounter)).not.toHaveProperty('restarts')
+    expect(statusOf(testCrasher)).toMatchObject({ restarts: expect.any(Number), status: { reason: expect.stringMatching(/^(Running|Restarting)$/) } })
+  })
+
+  it('says the log can’t be read back from a container logging to syslog', async () => {
+    await expect(core.openLog(sourceId, testSyslog)).rejects.toMatchObject({ code: 'LOG_UNAVAILABLE', message: expect.stringContaining('syslog') })
+  })
+
+  it('marks a crash-looping container’s restart, then follows its next run', async () => {
+    const updates = followUpdates(core)
+    const followed = await core.followLog(sourceId, testCrasher, { lastNLines: 1 })
+
+    await vi.waitFor(() => expect(updates.of(followed.followId).join('\n')).toMatch(/restarted\n(.*\n)*run started/), { timeout: 40_000, interval: 500 })
+    updates.unsubscribe()
+  }, 45_000)
 
   it('follows a log as lines are written', async () => {
     const updates = followUpdates(core)
