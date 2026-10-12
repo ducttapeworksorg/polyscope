@@ -41,6 +41,7 @@
   --type-local: #7fb8a4;
   --type-ssh-files: #e39ac0;
   --type-s3: #d4b483;
+  --type-azure-blob: #5ec4d6;
   --type-kubernetes-files: #8ab4f8;
   --type-kubernetes-logs: #b4a3e8;
   --type-docker-logs: #7fb3d5;
@@ -93,6 +94,7 @@
   --type-local: #2f7d63;
   --type-ssh-files: #a8457a;
   --type-s3: #8a6a2e;
+  --type-azure-blob: #13798a;
   --type-kubernetes-files: #1a5fb4;
   --type-kubernetes-logs: #6a52b8;
   --type-docker-logs: #2f78a8;
@@ -980,6 +982,10 @@ body.is-resizing {
 
 .source-group--s3 {
   --group-hue: var(--type-s3);
+}
+
+.source-group--azureBlob {
+  --group-hue: var(--type-azure-blob);
 }
 
 .source-group--kubernetesFiles {

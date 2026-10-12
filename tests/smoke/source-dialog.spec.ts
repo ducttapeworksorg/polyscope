@@ -202,3 +202,23 @@ test('warn that secret keys are only obfuscated when no keyring is running', asy
   if (process.platform === 'linux') await expect(dialog.getByText(weak)).toBeVisible()
   else await expect(dialog.getByText(weak)).toHaveCount(0)
 })
+
+test('a new Azure Blob Storage Source is named after its account and container, and tested with its connection string', async () => {
+  const window = await app.firstWindow()
+  const dialog = await openAddSource(window, 'azureBlob')
+  const name = dialog.getByLabel('Name', { exact: true })
+  const result = dialog.getByRole('status')
+
+  await dialog.getByLabel('Storage account', { exact: true }).pressSequentially('contosologs')
+  await dialog.getByLabel('Container', { exact: true }).pressSequentially('app')
+  await expect(name).toHaveValue('contosologs/app')
+  await expect(dialog.getByLabel(/^Prefix/)).toBeVisible()
+
+  await dialog.getByRole('button', { name: 'Test connection' }).click()
+  await expect(result).toHaveText('Enter the storage account’s connection string.')
+
+  // An account whose endpoint answers nothing: the test gets as far as trying to list the container.
+  await dialog.getByLabel('Connection string').fill('DefaultEndpointsProtocol=http;AccountName=contosologs;AccountKey=a2V5;BlobEndpoint=http://127.0.0.1:1/contosologs;')
+  await dialog.getByRole('button', { name: 'Test connection' }).click()
+  await expect(result).toContainText('The server can’t be reached', { timeout: 30_000 })
+})

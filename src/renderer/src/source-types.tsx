@@ -3,6 +3,7 @@ import {
   defaultDockerContext,
   dockerStandaloneGroup,
   filesWorkloadKinds,
+  type AzureBlobSourceInfo,
   type DockerLogsSourceInfo,
   type FilesWorkloadKind,
   type KubeContext,
@@ -17,7 +18,7 @@ import {
   type SshFilesSourceInfo
 } from '@shared/core-api'
 import { ComboBox } from './components/ComboBox'
-import { BucketIcon, DockerLogsIcon, HardDriveIcon, KubernetesFilesIcon, KubernetesLogsIcon, TerminalIcon } from './components/icons'
+import { BlobStorageIcon, BucketIcon, DockerLogsIcon, HardDriveIcon, KubernetesFilesIcon, KubernetesLogsIcon, TerminalIcon } from './components/icons'
 import { core, describeError } from './core-client'
 import { t, type MessageKey } from './i18n'
 
@@ -390,6 +391,65 @@ function S3Fields({ value, onChange, editing }: FieldsProps<S3Settings>) {
   )
 }
 
+type AzureBlobSettings = Extract<NewSource, { type: 'azureBlob' }>
+
+/** The name an Azure Blob Storage Source is given from its account and container, like `contosologs/app`. */
+const azureBlobName = ({ account, container }: Pick<AzureBlobSettings, 'account' | 'container'>) =>
+  [account.trim(), container.trim()].filter(Boolean).join('/')
+
+function AzureBlobFields({ value, onChange, editing }: FieldsProps<AzureBlobSettings>) {
+  // A new Source is named after its account and container.
+  const set = (changes: Partial<AzureBlobSettings>) => {
+    const next = { ...value, ...changes }
+    onChange({ ...next, name: nameFollowing(value.name, azureBlobName(value), azureBlobName(next)) })
+  }
+  const text = (key: 'account' | 'container' | 'prefix', label: MessageKey, hint?: MessageKey) => (
+    <label className="field">
+      <span className="field__label">{t(label)}</span>
+      <input className="field__input field__input--path" value={value[key] ?? ''} onChange={(e) => set({ [key]: e.target.value })} spellCheck={false} />
+      {hint && <span className="field__hint">{t(hint)}</span>}
+    </label>
+  )
+  const stored = editing?.type === 'azureBlob' ? editing.connectionStringSet : undefined
+  const [weakSecrets, setWeakSecrets] = useState(false)
+
+  useEffect(() => {
+    void window.polyscope.secretStorageIsWeak().then(setWeakSecrets)
+  }, [])
+
+  return (
+    <>
+      <div className="field-pair">
+        {text('account', 'azureBlobSource.account')}
+        {text('container', 'azureBlobSource.container')}
+      </div>
+      {text('prefix', 'azureBlobSource.prefix', 'azureBlobSource.prefix.hint')}
+      <label className="field">
+        <span className="field__label">{t('azureBlobSource.connectionString')}</span>
+        {/* Typed in, sent to the core once, and never shown again: the core only says whether one is stored. */}
+        <input
+          type="password"
+          className="field__input field__input--path"
+          value={value.connectionString ?? ''}
+          onChange={(e) => onChange({ ...value, connectionString: e.target.value })}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <span className="field__hint">
+          {t(
+            stored === undefined
+              ? 'azureBlobSource.connectionString.hint'
+              : stored
+                ? 'azureBlobSource.connectionString.stored'
+                : 'azureBlobSource.connectionString.missing'
+          )}
+        </span>
+        {weakSecrets && <span className="field__problem">{t('azureBlobSource.connectionString.weak')}</span>}
+      </label>
+    </>
+  )
+}
+
 /** Picks one of the local AWS profiles, or the default credential chain. */
 function ProfileField({ value, onChange }: { value: string; onChange(profile: string): void }) {
   const [profiles, setProfiles] = useState<string[]>([])
@@ -711,6 +771,11 @@ function objectUrl({ bucket, prefix }: S3SourceInfo, path: SourcePath) {
   return `s3://${bucket}/${[prefix, path].filter(Boolean).join('/')}`
 }
 
+/** Where a Source path is: its account and container, then the blob's name. */
+function blobPath({ account, container, prefix }: AzureBlobSourceInfo, path: SourcePath) {
+  return [account, container, prefix, path].filter(Boolean).join('/')
+}
+
 /**
  * Where a Kubernetes Files entry is: its pod, then the rest of its path under the Source's folder. (With several
  * containers, the first segment after the pod is the container's name; the path alone doesn't say which it is.)
@@ -777,6 +842,16 @@ export const sourceTypeUi: SourceTypeUis = {
     settingsOf: ({ id: _, environmentId: __, secretKeySet: ___, ...settings }) => ({ ...settings, secretAccessKey: '' }),
     fullPath: objectUrl,
     Fields: S3Fields
+  },
+  azureBlob: {
+    label: 'sourceType.azureBlob',
+    hint: 'sourceType.azureBlob.hint',
+    Icon: BlobStorageIcon,
+    blank: () => ({ type: 'azureBlob', name: '', account: '', container: '', prefix: '', connectionString: '' }),
+    // Everything but the connection string, which the renderer never has: left blank, the stored one stays.
+    settingsOf: ({ name, account, container, prefix }) => ({ type: 'azureBlob', name, account, container, prefix, connectionString: '' }),
+    fullPath: blobPath,
+    Fields: AzureBlobFields
   },
   kubernetesFiles: {
     label: 'sourceType.kubernetesFiles',

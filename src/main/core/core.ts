@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
+  AzureBlobSourceInfo,
   Compression,
   ConnectionEvent,
   ConnectionState,
@@ -27,6 +28,7 @@ import type {
   LogCapabilities,
   LogNode,
   LogSnapshot,
+  NewAzureBlobSource,
   NewEnvironment,
   NewS3Source,
   NewSource,
@@ -49,6 +51,7 @@ import { defaultDockerContext, filesWorkloadKinds, followableSourceTypes, worklo
 import { searchRegExp } from '@shared/search'
 import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings } from '@shared/settings'
 import { listAwsProfiles } from './aws-profiles'
+import { createAzureBlobFileSource, serviceClientOf } from './azure-blob-file-source'
 import { CoreError } from './core-error'
 import { dockerEndpointOf, listDockerContexts } from './docker-contexts'
 import { connectDockerEngine } from './docker-log-source'
@@ -127,6 +130,7 @@ function withDefaults(saved: SavedSource): SavedSource {
     case 'dockerLogs':
       // Before ssh:// contexts, a Docker Logs Source had no way of signing in.
       return { ...source, auth: source.auth ?? 'agent', keyFile: source.keyFile ?? '' }
+    case 'azureBlob':
     case 'kubernetesFiles':
     case 'kubernetesLogs':
       return source
@@ -141,6 +145,7 @@ type Target =
   | Pick<LocalSourceInfo, 'type' | 'rootPath' | 'showHidden'>
   | Pick<SshFilesSourceInfo, 'type' | 'host' | 'user' | 'port' | 'path' | 'auth' | 'keyFile'>
   | Omit<S3SourceInfo, 'id' | 'name' | 'environmentId' | 'lastNLines' | 'secretKeySet'>
+  | Pick<AzureBlobSourceInfo, 'type' | 'account' | 'container' | 'prefix'>
   | Pick<KubernetesFilesSourceInfo, 'type' | 'context' | 'namespace' | 'workloadKind' | 'workloadName' | 'path'>
   | Pick<KubernetesLogsSourceInfo, 'type' | 'context' | 'namespace'>
   | Pick<DockerLogsSourceInfo, 'type' | 'context' | 'auth' | 'keyFile'>
@@ -149,10 +154,11 @@ type S3Settings = Extract<Target, { type: 's3' }>
 
 /**
  * The name a Source's one secret is stored under, when its settings have a use for one: an S3 Source's secret key
- * when it signs in with keys, an SSH Files Source's (or a Docker Logs Source's, for an ssh:// host) key file passphrase or password.
+ * when it signs in with keys, an Azure Blob Storage Source's connection string, an SSH Files Source's (or a Docker Logs Source's, for an ssh:// host) key file passphrase or password.
  */
 function secretNameOf(settings: { type: SourceTypeId; auth?: string }) {
   if (settings.type === 's3') return (settings.auth ?? 'keys') === 'keys' ? 'secretKey' : undefined
+  if (settings.type === 'azureBlob') return 'connectionString'
   if (settings.type !== 'sshFiles' && settings.type !== 'dockerLogs') return undefined
   const auth = settings.auth ?? (settings.type === 'sshFiles' ? 'keyFile' : 'agent')
   return auth === 'keyFile' ? 'passphrase' : auth === 'password' ? 'password' : undefined
@@ -268,6 +274,7 @@ function targetOf(input: NewSource): Target {
     return { type: 'kubernetesFiles', ...cluster, workloadKind, workloadName, path: normaliseAbsolutePath(input.path ?? '', 'INVALID_CONTAINER_PATH') }
   }
   if (input.type === 'sshFiles') return sshTargetOf(input)
+  if (input.type === 'azureBlob') return azureBlobTargetOf(input)
   const s3: NewS3Source = input
   // Blank for AWS itself; a store is most likely https, a proxy http.
   const host = normaliseUrl(s3.host ?? '', 'https', 'INVALID_HOST')
@@ -281,7 +288,7 @@ function targetOf(input: NewSource): Target {
     type: 's3',
     host,
     bucket,
-    prefix: (s3.prefix ?? '').trim().replace(/^\/+|\/+$/g, ''),
+    prefix: normalisePrefix(s3.prefix),
     region: s3.region?.trim() || 'us-east-1',
     pathStyle: s3.pathStyle ?? false,
     auth,
@@ -291,6 +298,18 @@ function targetOf(input: NewSource): Target {
     caBundlePath: s3.caBundlePath?.trim() ?? '',
     proxyUrl: normaliseUrl(s3.proxyUrl ?? '', 'http', 'INVALID_PROXY')
   }
+}
+
+/** A key prefix as a Source is rooted at it: no leading or trailing '/', blank for everything. */
+const normalisePrefix = (prefix: string | undefined) => (prefix ?? '').trim().replace(/^\/+|\/+$/g, '')
+
+/** An Azure Blob Storage Source's settings, checked and trimmed. */
+function azureBlobTargetOf(input: NewAzureBlobSource): Extract<Target, { type: 'azureBlob' }> {
+  const account = input.account?.trim() ?? ''
+  if (!account) throw new CoreError('ACCOUNT_REQUIRED', 'An Azure Blob Storage Source needs a storage account')
+  const container = input.container?.trim() ?? ''
+  if (!container) throw new CoreError('CONTAINER_REQUIRED', 'An Azure Blob Storage Source needs a container')
+  return { type: 'azureBlob', account, container, prefix: normalisePrefix(input.prefix) }
 }
 
 /** What an S3 File Source needs to reach its store: the settings, with the secret key (when signing in with keys) and CA bundle read in. */
@@ -471,6 +490,7 @@ export function createCore(options: CoreOptions = {}): Core {
       saved.environmentId === undefined || environments.some((e) => e.id === saved.environmentId) ? { ...saved } : unlabelled(saved)
     // Only whether there is a secret: the secret itself stays in the core.
     if (source.type === 's3') return { ...source, secretKeySet: (await secrets.get(source.id, 'secretKey')) !== undefined }
+    if (source.type === 'azureBlob') return { ...source, connectionStringSet: (await secrets.get(source.id, 'connectionString')) !== undefined }
     if (source.type === 'sshFiles' || source.type === 'dockerLogs') {
       const stored = async (name: string) => secretNameOf(source) === name && (await secrets.get(source.id, name)) !== undefined
       return { ...source, passphraseSet: await stored('passphrase'), passwordSet: await stored('password') }
@@ -1009,8 +1029,9 @@ export function createCore(options: CoreOptions = {}): Core {
 
   /**
    * Opens a Source's File or Log Source and lists its root: what connecting, or testing a connection, has to get through.
-   * An S3 Source signing in with keys needs its `secret` key, as an SSH Files Source with an encrypted key file needs its
-   * passphrase; an S3 Source proves it can sign in by listing.
+   * An S3 Source signing in with keys needs its `secret` key, and an Azure Blob Storage Source its connection string, as
+   * an SSH Files Source with an encrypted key file needs its passphrase; S3 and Azure Blob Storage Sources prove they can
+   * sign in by listing.
    */
   const open = async (target: Target, secret?: string) => {
     let backend: Backend
@@ -1018,6 +1039,10 @@ export function createCore(options: CoreOptions = {}): Core {
     if (target.type === 'local') backend = { kind: 'files', fileSource: await reachLocal(target) }
     else if (target.type === 'sshFiles') backend = { kind: 'files', fileSource: await reachSsh(target, secret) }
     else if (target.type === 's3') backend = { kind: 'files', fileSource: createS3FileSource(await s3TargetOf(target, secret)) }
+    else if (target.type === 'azureBlob') {
+      if (secret === undefined) throw new CoreError('CONNECTION_STRING_REQUIRED', 'No connection string is stored for this Source')
+      backend = { kind: 'files', fileSource: createAzureBlobFileSource({ ...target, connectionString: secret }) }
+    }
     else if (target.type === 'kubernetesFiles') backend = { kind: 'files', fileSource: await reachKubernetesFiles(target) }
     else if (target.type === 'dockerLogs') {
       const engine = await reachDocker(target, secret)
@@ -1042,7 +1067,9 @@ export function createCore(options: CoreOptions = {}): Core {
     const typed =
       input.type === 's3'
         ? input.secretAccessKey
-        : input.type === 'sshFiles' || input.type === 'dockerLogs'
+        : input.type === 'azureBlob'
+          ? input.connectionString
+          : input.type === 'sshFiles' || input.type === 'dockerLogs'
           ? name === 'password'
             ? input.password
             : input.passphrase
@@ -1073,6 +1100,12 @@ export function createCore(options: CoreOptions = {}): Core {
     const typed = await secretFor(input)
     if (target.type === 's3' && target.auth === 'keys' && typed === undefined && (await secretFor(input, editing)) === undefined) {
       throw new CoreError('SECRET_KEY_REQUIRED', 'An S3 Source needs a secret key')
+    }
+    if (target.type === 'azureBlob') {
+      const connectionString = typed ?? (await secretFor(input, editing))
+      if (connectionString === undefined) throw new CoreError('CONNECTION_STRING_REQUIRED', 'An Azure Blob Storage Source needs a connection string')
+      // Without connecting: one for another account is refused, whether typed now or stored and the account changed.
+      serviceClientOf(connectionString, target.account)
     }
     if (target.type === 'sshFiles') {
       await sshRouteOf(target).catch((error: unknown) => {

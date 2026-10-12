@@ -3,10 +3,10 @@
 
 import type { Settings } from './settings'
 
-export type SourceTypeId = 'local' | 'sshFiles' | 's3' | 'kubernetesFiles' | 'kubernetesLogs' | 'dockerLogs'
+export type SourceTypeId = 'local' | 'sshFiles' | 's3' | 'azureBlob' | 'kubernetesFiles' | 'kubernetesLogs' | 'dockerLogs'
 
 /** Every Source Type, in the default order of its sidebar group. */
-export const sourceTypeIds: readonly SourceTypeId[] = ['local', 'sshFiles', 's3', 'kubernetesFiles', 'kubernetesLogs', 'dockerLogs']
+export const sourceTypeIds: readonly SourceTypeId[] = ['local', 'sshFiles', 's3', 'azureBlob', 'kubernetesFiles', 'kubernetesLogs', 'dockerLogs']
 
 export interface NewLocalSource {
   type: 'local'
@@ -47,6 +47,23 @@ export interface NewS3Source {
   caBundlePath?: string
   /** A proxy for this Source alone, e.g. `http://proxy.corp:3128`; when blank or left out, HTTPS_PROXY / NO_PROXY decide. */
   proxyUrl?: string
+  /** The Environment the Source is labelled with; unlabelled when left out. */
+  environmentId?: string
+}
+
+export interface NewAzureBlobSource {
+  type: 'azureBlob'
+  name: string
+  /** The storage account's name, e.g. `contosologs`. */
+  account: string
+  container: string
+  /** The blob name prefix the Source is rooted at, e.g. `logs/app`; the whole container when blank or left out. */
+  prefix?: string
+  /**
+   * The storage account's connection string, which says where its blob endpoint is and holds its key: goes into the OS
+   * keychain and never comes back out of the core. Blank or left out when editing keeps the stored one.
+   */
+  connectionString?: string
   /** The Environment the Source is labelled with; unlabelled when left out. */
   environmentId?: string
 }
@@ -158,7 +175,14 @@ export type S3Auth = 'keys' | 'profile'
 export type SshAuth = 'agent' | 'keyFile' | 'password'
 
 /** The user-editable settings of a Source; its Source Type decides which fields exist. */
-export type NewSource = NewLocalSource | NewSshFilesSource | NewS3Source | NewKubernetesFilesSource | NewKubernetesLogsSource | NewDockerLogsSource
+export type NewSource =
+  | NewLocalSource
+  | NewSshFilesSource
+  | NewS3Source
+  | NewAzureBlobSource
+  | NewKubernetesFilesSource
+  | NewKubernetesLogsSource
+  | NewDockerLogsSource
 
 /** How many of a log's last lines a log view fetches and keeps: a number of lines, or all of them. */
 export type LastNLines = number | 'all'
@@ -202,6 +226,16 @@ export interface S3SourceInfo extends SourceIdentity {
   caBundlePath: string
   /** Normalised: a URL with its scheme; blank to follow HTTPS_PROXY / NO_PROXY. */
   proxyUrl: string
+}
+
+export interface AzureBlobSourceInfo extends SourceIdentity {
+  type: 'azureBlob'
+  account: string
+  container: string
+  /** Normalised: no leading or trailing '/', blank for the whole container. */
+  prefix: string
+  /** Whether a connection string is stored for the Source; the connection string itself never leaves the core. */
+  connectionStringSet: boolean
 }
 
 export interface SshFilesSourceInfo extends SourceIdentity {
@@ -257,6 +291,7 @@ export type SourceInfo =
   | LocalSourceInfo
   | SshFilesSourceInfo
   | S3SourceInfo
+  | AzureBlobSourceInfo
   | KubernetesFilesSourceInfo
   | KubernetesLogsSourceInfo
   | DockerLogsSourceInfo
@@ -758,7 +793,7 @@ export interface FileLog {
 /** What a log view's lines are of: a container's Log Stream, or a file. */
 export type LogOf = LogSnapshot['of'] | FileLog['of']
 
-/** The Source Types whose files grow, so can be Followed: S3 objects don't. */
+/** The Source Types whose files grow, so can be Followed: S3 and Azure Blob objects don't. */
 export const followableSourceTypes: readonly SourceTypeId[] = ['local', 'kubernetesFiles', 'sshFiles']
 
 /** How many of a file's last lines to show; see OpenLogOptions. */
@@ -800,6 +835,11 @@ export type CoreErrorCode =
   | 'ACCESS_KEY_REQUIRED'
   | 'SECRET_KEY_REQUIRED'
   | 'BUCKET_NOT_FOUND'
+  | 'ACCOUNT_REQUIRED'
+  | 'CONTAINER_REQUIRED'
+  | 'CONNECTION_STRING_REQUIRED'
+  | 'INVALID_CONNECTION_STRING'
+  | 'CONTAINER_NOT_FOUND'
   | 'AUTH_FAILED'
   | 'CREDENTIALS_UNAVAILABLE'
   | 'INVALID_PROXY'
@@ -970,7 +1010,7 @@ export interface CoreApi {
    * from there: its new lines arrive as FollowEvents with the returned `followId`, with a mark when the
    * file is cut short (`truncated`) or replaced by another (`rotated`), each then followed from its start.
    * The Follow ends when the file's pod is gone, its Source is disconnected, or the connection it goes over
-   * drops (`connectionLost`). Only Local, Kubernetes Files and SSH Files Sources' files grow: an S3 object
+   * drops (`connectionLost`). Only Local, Kubernetes Files and SSH Files Sources' files grow: an S3 or Azure Blob object
    * can't be followed, NOT_FOLLOWABLE.
    */
   followFile(sourceId: string, path: SourcePath, options?: FileLogOptions): Promise<FollowedFile>

@@ -304,6 +304,19 @@ describe.skipIf(!hasTestStore)('an S3 Source against the test store', () => {
     })
     expect(await core.readLargeFileLines(file.largeFileId, 123_455, 2)).toEqual({ firstLine: 123_455, lines: ['line 123456', 'line 123457'] })
     await core.closeLargeFile(file.largeFileId)
+  }, 60_000)
+
+  it('lists an object and a key prefix sharing a name as a file and a folder, opening one and expanding the other', async () => {
+    const prefix = await seeded({ app: 'the object', 'app/server.log': 'inside' })
+    const core = createCore()
+    const source = await core.addSource(testS3Source('Bucket', prefix))
+
+    expect(await core.connect(source.id)).toMatchObject([
+      { kind: 'folder', name: 'app', path: 'app' },
+      { kind: 'file', name: 'app', path: 'app' }
+    ])
+    expect(await core.expand(source.id, 'app')).toMatchObject([{ kind: 'file', path: 'app/server.log' }])
+    expect(await core.openFile(source.id, 'app')).toMatchObject({ content: 'the object' })
   })
 
   it('reports a key that’s gone as an error node when expanding', async () => {
