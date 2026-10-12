@@ -1,6 +1,6 @@
 # Sources
 
-A **Source** is one place Polyscope reads from: a folder, a bucket, a Workload's files, or a namespace's logs. You configure each one once, give it a name, and it stays in the sidebar, grouped by its Source Type.
+A **Source** is one place Polyscope reads from: a folder, a folder on a server, a bucket, a Workload's files, or a namespace's logs. You configure each one once, give it a name, and it stays in the sidebar, grouped by its Source Type.
 
 To add one, choose **+** next to **Sources** at the top of the sidebar, pick a **Source Type**, and fill in the rest. **Test connection** checks the settings without saving anything.
 
@@ -26,6 +26,48 @@ A folder on this machine or, on Windows, a UNC share (`\\server\share\logs`).
 In VS Code, a UNC share's server has to be in the `security.allowedUNCHosts` setting (as `"server"`, without backslashes), or VS Code blocks it. Restart VS Code after adding it. Setting `security.restrictUNCAccess` to `false` allows every server, but turns off that VS Code protection.
 
 Files that are still growing can be **followed** live. Polyscope notices when a followed file is truncated or rotated and carries on from the new file's start.
+
+## SSH Files
+
+A folder on a server, read over SFTP: an app's logs under `/var/log` or `/opt/app/logs` on a VM, say. Polyscope uses its own SSH client, not your `ssh` command, and needs nothing on the server but its SFTP subsystem, which OpenSSH's `sshd` turns on by default.
+
+- **Host**: the server's host name or address, or a `Host` alias from your `~/.ssh/config`. The field suggests the aliases there.
+- **Port**: 22 unless you or your SSH config say otherwise.
+- **User**: who to sign in as. Leave it blank to use the `User` from your SSH config.
+- **Path**: the absolute path of the folder to browse, like `/var/log`.
+- **Sign in with**:
+  - **SSH agent**: the keys in your SSH agent. Polyscope asks the agent at `SSH_AUTH_SOCK`, and on Windows also Pageant and then the OpenSSH Authentication Agent (whose pipe 1Password's agent answers on too). Your private keys never leave the agent.
+  - **Key file**: a private key file, chosen with **Browse…**. Leave it blank to use the `IdentityFile` from your SSH config. If the key is encrypted, enter its **Passphrase**.
+  - **Password**: for servers that allow only passwords.
+
+  Passphrases and passwords are stored encrypted by your operating system's secure storage (see [Privacy](privacy.md) for Linux without a keyring). **Edit…** keeps a stored one unless you type a new one, and **Duplicate** copies it.
+
+Each Source keeps one SSH connection open while it's connected, shared by all its tabs and Follows. If the connection drops, say while your laptop slept, the next thing you browse or read reconnects it. **Disconnect** closes it.
+
+### What Polyscope reads from your SSH config
+
+Polyscope reads `~/.ssh/config`, and the files it `Include`s, the way `ssh` does: the first value found for a host wins, and `Host` patterns can use `*`, `?` and `!`. It uses only these options:
+
+- `HostName`, `User`, `Port` and `IdentityFile`;
+- `ProxyJump`, to reach a server through one or more bastions. Each bastion is signed in to the same way as the server, and its host key is checked too.
+
+It ignores every other option, and skips `Match` blocks (other than `Match all`) along with everything in them. A host that needs `ProxyCommand` gets an error naming it, as Polyscope can't run one. Polyscope never writes to your SSH config or anything else in `~/.ssh`.
+
+### Host keys
+
+Polyscope checks every server's host key before signing in, as `ssh` does:
+
+- A key in your `~/.ssh/known_hosts` (hashed entries included) is trusted without asking, so servers you already use just work.
+- A server Polyscope hasn't seen before shows its key's type and SHA-256 fingerprint. **Test connection** offers **Trust and test again**; expanding the Source offers **Trust host key…**. Check the fingerprint with the server's administrator before you trust it.
+- A server whose key isn't the one known for it is refused, with no way to carry on: someone may be impersonating it. If the key changed for a good reason, say the server was rebuilt, remove its old key from `known_hosts` (`ssh-keygen -R host`).
+
+The keys you trust in Polyscope are kept in Polyscope's own data folder, never added to your `known_hosts`. Deleting the last Source on a server forgets the key you trusted for it; keys trusted for bastions are kept.
+
+### Following and permissions
+
+Files on an SSH Files Source open, page and search like a Local Filesystem Source's, Large Files included: a multi-gigabyte log shows its end straight away, then is cached on this computer in the background for paging and search (see [Large Files](reading.md#large-files)). Growing files can be **followed**, and a followed file that's truncated or rotated is picked up from the new file's start. If the connection drops while following, the tab says so and the Follow stops.
+
+Polyscope reads files as the user it signs in as, without `sudo`. Most logs under `/var/log` are readable only by `root` and the `adm` group, so a file you can't read says so. Adding your SSH user to `adm` (`sudo usermod -aG adm <user>`, then **Disconnect** the Source and expand it again, so it signs in afresh) lets it read most of them.
 
 ## S3-compatible Storage
 
