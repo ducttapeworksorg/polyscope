@@ -185,6 +185,10 @@ export interface NewCloudWatchLogsSource {
    * own (or AWS_ENDPOINT_URL_CLOUDWATCH_LOGS's) when blank or left out. https is assumed without a scheme.
    */
   endpoint?: string
+  /** A PEM file of CA certificates to trust as well as the OS's, for TLS inspection by a private CA; none when blank or left out. */
+  caBundlePath?: string
+  /** A proxy for every request, e.g. `http://proxy.corp:3128`; HTTPS_PROXY / NO_PROXY decide when blank or left out. */
+  proxyUrl?: string
   /** The Environment the Source is labelled with; unlabelled when left out. */
   environmentId?: string
 }
@@ -362,6 +366,10 @@ export interface CloudWatchLogsSourceInfo extends SourceIdentity {
   profile: string
   /** Normalised: a URL with its scheme, or blank for the region's own. */
   endpoint: string
+  /** Blank for none. */
+  caBundlePath: string
+  /** Normalised: a URL with its scheme; blank to follow HTTPS_PROXY / NO_PROXY. */
+  proxyUrl: string
 }
 
 export interface KubernetesFilesSourceInfo extends SourceIdentity {
@@ -961,7 +969,10 @@ export type CoreErrorCode =
   | 'PERMISSION_DENIED'
   /** A UNC share whose server VS Code hasn't been allowed to reach (its `security.allowedUNCHosts` setting). */
   | 'UNC_HOST_NOT_ALLOWED'
-  /** A Kubernetes RBAC denial; the message says what's missing, e.g. `get pods/log in namespace shop`. */
+  /**
+   * A Kubernetes RBAC or AWS IAM denial; the message says what's missing, e.g. `get pods/log in namespace shop`, or
+   * `logs:FilterLogEvents on /aws/lambda/orders`.
+   */
   | 'MISSING_PERMISSION'
   | 'SYMLINK_LOOP'
   | 'INVALID_RANGE'
@@ -994,6 +1005,8 @@ export type CoreErrorCode =
   | 'ACCOUNT_NOT_FOUND'
   | 'ROLE_REQUIRED'
   | 'AZURE_LOGIN_REQUIRED'
+  /** An AWS SSO profile whose session has ended, or was never started: the message names the `aws sso login` to run. */
+  | 'AWS_SSO_LOGIN_REQUIRED'
   | 'AUTH_FAILED'
   | 'CREDENTIALS_UNAVAILABLE'
   | 'INVALID_PROXY'

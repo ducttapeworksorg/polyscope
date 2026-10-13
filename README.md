@@ -1,16 +1,16 @@
 # Polyscope
 
-**One desktop app for reading files and logs, wherever they live.** Browse a folder on your machine or on a server, an S3 bucket, an Azure blob container, the files inside a Kubernetes pod, every container log in a namespace, or every container log on a Docker engine, side by side in one editor-like window.
+**One desktop app for reading files and logs, wherever they live.** Browse a folder on your machine or on a server, an S3 bucket, an Azure blob container, the files inside a Kubernetes pod, every container log in a namespace or on a Docker engine, or the CloudWatch logs of an AWS region, side by side in one editor-like window.
 
 ![Polyscope following a container's log in a Kubernetes namespace](docs/images/kubernetes-logs.png)
 
 ## Why Polyscope
 
-Chasing a problem across systems usually means a terminal per place, each with its own tool: `tail -f` for a server's files, the AWS console or `aws s3 cp` for archived logs, `kubectl logs` and `kubectl exec … cat` for a cluster, `docker logs` per container for a Compose stack. Each shows you text in a different way, loses your place when you switch, and makes it easy to lose track of which environment you're looking at.
+Chasing a problem across systems usually means a terminal per place, each with its own tool: `tail -f` for a server's files, the AWS console or `aws s3 cp` for archived logs, `kubectl logs` and `kubectl exec … cat` for a cluster, `docker logs` per container for a Compose stack, the CloudWatch console one log stream at a time. Each shows you text in a different way, loses your place when you switch, and makes it easy to lose track of which environment you're looking at.
 
 Polyscope puts them all in one tree, read the same way:
 
-- **Every place in one sidebar.** Local folders, folders on servers over SSH, S3-compatible buckets, Azure blob containers, files inside pods, pod logs and Docker container logs, each configured once as a **Source**.
+- **Every place in one sidebar.** Local folders, folders on servers over SSH, S3-compatible buckets, Azure blob containers, files inside pods, pod logs, Docker container logs and CloudWatch logs, each configured once as a **Source**.
 - **A real viewer.** Tabs, syntax and log-level highlighting, search, a minimap, line wrapping, and gzip and zstd files shown decompressed. It's the editor that powers VS Code, opened read-only.
 - **Logs that keep up.** Follow a container's log, or a growing file, live. Pause to read, and pick up where you left off. A crashed container's **Previous Log** is a toggle away, in the same tab.
 - **Files of any size.** Files over 50 MB open end-first in a paged viewer that can jump to any line and search the whole file with a regular expression, without loading it all into memory.
@@ -30,6 +30,7 @@ It runs on Windows, macOS and Linux, and [inside VS Code](#in-vs-code). Find out
 | **Kubernetes Files** | A folder inside every pod of one Deployment, StatefulSet or DaemonSet | Your kubeconfig, as `kubectl` does |
 | **Kubernetes Logs** | The logs of every container in a namespace, grouped by Workload, with pod health and restarts | Your kubeconfig, as `kubectl` does |
 | **Docker Logs** | The logs of every container on a Docker engine, or Podman, grouped by Compose project and service, with container health and restarts | Your Docker contexts, as `docker` does (local socket, TCP with TLS, or SSH) |
+| **CloudWatch Logs** | The log groups of an AWS region, each opening as one log of all its streams, or stream by stream, without calling any API billed per use | An AWS profile (SSO included), or access keys |
 
 ## Quick start
 

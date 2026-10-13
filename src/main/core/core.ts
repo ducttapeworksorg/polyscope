@@ -138,9 +138,11 @@ function withDefaults(saved: SavedSource): SavedSource {
     case 'azureBlob':
       // Before SAS and Azure CLI sign-in, every Azure Blob Storage Source signed in with a connection string.
       return { ...source, auth: source.auth ?? 'connectionString', endpoint: source.endpoint ?? '', caBundlePath: source.caBundlePath ?? '', proxyUrl: source.proxyUrl ?? '' }
+    case 'cloudwatchLogs':
+      // Before CA bundles and proxies, every CloudWatch Logs Source went straight to its endpoint.
+      return { ...source, caBundlePath: source.caBundlePath ?? '', proxyUrl: source.proxyUrl ?? '' }
     case 'kubernetesFiles':
     case 'kubernetesLogs':
-    case 'cloudwatchLogs':
       return source
   }
 }
@@ -334,7 +336,9 @@ function cloudWatchTargetOf(input: NewCloudWatchLogsSource): CloudWatchSettings 
     // A log group's name may start with '/', and the prefix is only the start of a name, so it's kept as typed.
     prefix: input.prefix?.trim() ?? '',
     ...awsSignInOf(input, 'A CloudWatch Logs Source'),
-    endpoint: normaliseUrl(input.endpoint ?? '', 'https', 'INVALID_HOST')
+    endpoint: normaliseUrl(input.endpoint ?? '', 'https', 'INVALID_HOST'),
+    caBundlePath: input.caBundlePath?.trim() ?? '',
+    proxyUrl: normaliseUrl(input.proxyUrl ?? '', 'http', 'INVALID_PROXY')
   }
 }
 
@@ -372,11 +376,12 @@ function azureBlobTargetWith(settings: AzureBlobSettings, secret: string | undef
   return target({ connectionString: secret })
 }
 
+/** A Source's CA bundle, read in, as its target holds it: nothing when it names none. */
+const caBundleOf = async ({ caBundlePath }: { caBundlePath: string }) => (caBundlePath ? { caBundle: await readCaBundle(caBundlePath) } : {})
+
 /** What an Azure Blob Storage File Source needs to reach its container: azureBlobTargetWith's, with the CA bundle read in. */
 async function azureBlobTargetReadIn(settings: AzureBlobSettings, secret: string | undefined): Promise<AzureBlobTarget> {
-  const target = azureBlobTargetWith(settings, secret)
-  const caBundle = settings.caBundlePath ? await readCaBundle(settings.caBundlePath) : undefined
-  return { ...target, ...(caBundle && { caBundle }) }
+  return { ...azureBlobTargetWith(settings, secret), ...(await caBundleOf(settings)) }
 }
 
 /** What a Source on AWS signs in with: its profile, or its keys, with the secret key filled in. */
@@ -386,18 +391,21 @@ function awsCredentialsOf(settings: S3Settings | CloudWatchSettings, secretKey?:
   return { accessKeyId: settings.accessKeyId, secretAccessKey: secretKey }
 }
 
-/** What a CloudWatch Logs Log Source needs to reach the region: the settings, with the secret key (when signing in with keys) filled in. */
-function cloudWatchTargetWith(settings: CloudWatchSettings, secretKey?: string): CloudWatchTarget {
-  const { region, prefix, endpoint } = settings
-  return { region, prefix, endpoint, credentials: awsCredentialsOf(settings, secretKey), verifyTls: true, proxyUrl: '' }
+/**
+ * What a CloudWatch Logs Log Source needs to reach the region: the settings, with the secret key (when signing in with
+ * keys) and CA bundle read in. CloudWatch is always reached over verified TLS, as AWS is.
+ */
+async function cloudWatchTargetReadIn(settings: CloudWatchSettings, secretKey?: string): Promise<CloudWatchTarget> {
+  const { region, prefix, endpoint, proxyUrl } = settings
+  const credentials = awsCredentialsOf(settings, secretKey)
+  return { region, prefix, endpoint, credentials, verifyTls: true, proxyUrl, ...(await caBundleOf(settings)) }
 }
 
 /** What an S3 File Source needs to reach its store: the settings, with the secret key (when signing in with keys) and CA bundle read in. */
 async function s3TargetOf(settings: S3Settings, secretKey?: string): Promise<S3Target> {
   const { host, bucket, prefix, region, pathStyle, verifyTls, proxyUrl } = settings
   const credentials = awsCredentialsOf(settings, secretKey)
-  const caBundle = settings.caBundlePath ? await readCaBundle(settings.caBundlePath) : undefined
-  return { host, bucket, prefix, region, pathStyle, credentials, verifyTls, proxyUrl, ...(caBundle && { caBundle }) }
+  return { host, bucket, prefix, region, pathStyle, credentials, verifyTls, proxyUrl, ...(await caBundleOf(settings)) }
 }
 
 /** A Log Source's node, and those folded into it, without the status or restarts its Source Type doesn't offer. */
@@ -1128,7 +1136,7 @@ export function createCore(options: CoreOptions = {}): Core {
       const engine = await reachDocker(target, secret)
       backend = { kind: 'logs', logSource: engine.logSource }
       serverVersion = engine.version
-    } else if (target.type === 'cloudwatchLogs') backend = { kind: 'logs', logSource: createCloudWatchLogSource(cloudWatchTargetWith(target, secret)) }
+    } else if (target.type === 'cloudwatchLogs') backend = { kind: 'logs', logSource: createCloudWatchLogSource(await cloudWatchTargetReadIn(target, secret)) }
     else backend = { kind: 'logs', logSource: await reachKubernetes(target) }
     try {
       return { backend, nodes: await listBackend(backend, ''), ...(serverVersion !== undefined && { serverVersion }) }

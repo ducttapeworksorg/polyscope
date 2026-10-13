@@ -2,7 +2,7 @@
 // Polyscope may call (ADR 0008) over plain HTTP, for an SDK client pointed at it through its endpoint. It holds the log
 // groups it's seeded with, records every operation it's asked for, and turns away any other as AWS turns away one it
 // doesn't know. Given an access key, it turns away requests signed with another. It can be told to throttle, as AWS
-// does once an account's requests go over its quota.
+// does once an account's requests go over its quota, and to deny operations, as IAM does those a policy doesn't allow.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -42,6 +42,8 @@ export interface TestCloudWatchEndpoint {
   calls: { operation: string; at: number }[]
   /** While set, turns every request away with a ThrottlingException. */
   throttling: boolean
+  /** Operations turned away with an AccessDeniedException, as for a user whose IAM policy doesn't allow them. */
+  denied: Set<(typeof allowedCloudWatchOperations)[number]>
   /** The seeded groups, to add events, streams or groups to as a test goes on. */
   groups: TestLogGroup[]
   close(): Promise<void>
@@ -213,6 +215,12 @@ export async function startTestCloudWatchEndpoint(groups: TestLogGroup[], { acce
       if (accessKeyId !== undefined && signedWith !== accessKeyId) {
         throw new AwsError('UnrecognizedClientException', 'The security token included in the request is invalid.')
       }
+      if ((endpoint.denied as Set<string>).has(operation)) {
+        throw new AwsError(
+          'AccessDeniedException',
+          `User: arn:aws:iam::123456789012:user/reader is not authorized to perform: logs:${operation} because no identity-based policy allows the logs:${operation} action`
+        )
+      }
       const handler = handlers[operation as keyof typeof handlers] as ((request: Request) => unknown) | undefined
       if (!handler) throw new AwsError('UnknownOperationException', `Polyscope may not call ${operation || target}`)
       respond(response, 200, handler(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as Request))
@@ -234,6 +242,7 @@ export async function startTestCloudWatchEndpoint(groups: TestLogGroup[], { acce
     calls,
     groups,
     throttling: false,
+    denied: new Set(),
     close: () =>
       new Promise((resolve) => {
         server.closeAllConnections()

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NewS3Source, TreeNode } from '@shared/core-api'
 import { MB } from '@shared/settings'
+import { ssoProfiles } from './aws-test-sso'
 import { createCore } from './core'
 import { createSecretStore } from './secret-store'
 import { startProxy, startTlsFront } from './test-network'
@@ -396,6 +397,18 @@ describe('an S3 Source signing in with an AWS profile', () => {
 
     await expect(core.connect(source.id)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' })
     expect(await core.connectionState(source.id)).toMatchObject({ state: 'error', code: 'CREDENTIALS_UNAVAILABLE' })
+  })
+
+  it.each(['expired', 'signed-out'])('tells you to run aws sso login when the %s profile’s SSO session has ended', async (profile) => {
+    vi.stubEnv('HOME', dir)
+    await awsFiles({ config: await ssoProfiles(dir) })
+    const core = createCore()
+    const source = await core.addSource(withProfile(profile))
+
+    const ssoLogin = { code: 'AWS_SSO_LOGIN_REQUIRED', message: expect.stringContaining(`aws sso login --profile ${profile}`) }
+    await expect(core.testConnection(withProfile(profile))).rejects.toMatchObject(ssoLogin)
+    await expect(core.connect(source.id)).rejects.toMatchObject(ssoLogin)
+    expect(await core.connectionState(source.id)).toMatchObject({ state: 'error', code: 'AWS_SSO_LOGIN_REQUIRED' })
   })
 })
 

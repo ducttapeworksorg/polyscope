@@ -119,3 +119,65 @@ test('a CloudWatch log group opens as one merged log, each line saying its strea
 
   await expect(window.getByTestId('editor')).toContainText('[abc] START RequestId: 1')
 })
+
+test('a CloudWatch Logs Source takes an endpoint, a CA bundle and a proxy', async () => {
+  const window = await app.firstWindow()
+  const dialog = await openAddCloudWatchSource(window)
+  await dialog.getByLabel('Profile', { exact: true }).selectOption('logs')
+
+  // The endpoint typed in is used, not the one AWS_ENDPOINT_URL_CLOUDWATCH_LOGS names: here, one nothing answers at.
+  await dialog.getByLabel('Endpoint').fill('http://127.0.0.1:1')
+  await dialog.getByRole('button', { name: 'Test connection' }).click()
+  await expect(dialog.getByRole('status')).toContainText('The server can’t be reached')
+
+  await dialog.getByLabel('Endpoint').fill(endpoint.url)
+  await expect(dialog.getByLabel('CA bundle')).toBeVisible()
+  await dialog.getByLabel('Proxy').fill('socks5://proxy.corp:1080')
+  await dialog.getByRole('button', { name: 'Test connection' }).click()
+  await expect(dialog.getByRole('status')).toHaveText('That proxy isn’t an http or https address.')
+})
+
+/** Adds a log group of 30 events logged over the last minute, and opens its last 10 lines. */
+async function openBusyGroup(window: Page) {
+  const now = Date.now()
+  const events = Array.from({ length: 30 }, (_, i) => ({ timestamp: now - 60_000 + i * 1_000, message: `event ${i}` }))
+  endpoint.groups.push({ name: '/aws/lambda/busy', createdAt: now - 3_600_000, streams: [{ name: 'busy', events }] })
+  const dialog = await openAddCloudWatchSource(window)
+  await dialog.getByLabel('Profile', { exact: true }).selectOption('logs')
+  await dialog.getByLabel('Name', { exact: true }).fill('Lambdas')
+  await dialog.getByRole('button', { name: 'Add Source' }).click()
+  await window.getByRole('treeitem', { name: 'Lambdas' }).click()
+  await window.getByRole('treeitem', { name: segment('/aws/lambda/busy') }).click({ button: 'right' })
+  await window.getByRole('menuitem', { name: 'Open log' }).click()
+  await expect(window.getByTestId('editor')).toContainText('[busy] event 29')
+  await window.getByRole('textbox', { name: 'Number of lines' }).fill('10')
+  await window.getByRole('textbox', { name: 'Number of lines' }).press('Enter')
+  await expect(window.getByRole('button', { name: 'Load earlier' })).toBeVisible()
+}
+
+const removeGroup = (name: string) => endpoint.groups.splice(endpoint.groups.findIndex((group) => group.name === name), 1)
+
+test('a Followed CloudWatch log group that’s deleted keeps what it showed, saying it’s gone', async () => {
+  const window = await app.firstWindow()
+  await openBusyGroup(window)
+  await expect(window.getByRole('button', { name: 'Follow' })).toHaveAttribute('aria-pressed', 'true')
+
+  removeGroup('/aws/lambda/busy')
+
+  await expect(window.getByText(`${segment('/aws/lambda/busy')} no longer exists`)).toBeVisible()
+  await expect(window.getByTestId('editor')).toContainText('log is gone, Follow stopped')
+  await expect(window.getByTestId('editor')).toContainText('[busy] event 29')
+})
+
+test('a CloudWatch log group deleted while its tab is open says it’s gone when loading earlier lines', async () => {
+  const window = await app.firstWindow()
+  await openBusyGroup(window)
+  await window.getByRole('button', { name: 'Follow' }).click()
+  await expect(window.getByRole('button', { name: 'Follow' })).toHaveAttribute('aria-pressed', 'false')
+
+  removeGroup('/aws/lambda/busy')
+  await window.getByRole('button', { name: 'Load earlier' }).click()
+
+  await expect(window.getByText(`${segment('/aws/lambda/busy')} no longer exists`)).toBeVisible()
+  await expect(window.getByTestId('editor')).toContainText('[busy] event 29')
+})

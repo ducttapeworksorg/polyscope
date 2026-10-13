@@ -331,6 +331,8 @@ export function useTabs({ onSourcesChanged }: Options) {
       const read = await core.readEarlierLog(tab.source.id, path, { earlier, lines: lastNLines, timestamps })
       setWorkspace((ws) => addEarlierLines(ws, key, earlier, read))
     } catch (error) {
+      // Removed, say a log group: the tab keeps what it read, saying it's gone, as when reading it again.
+      if (error instanceof CoreCallError && error.code === 'NOT_FOUND') return setWorkspace((ws) => markLogStreamGone(ws, key))
       setOpenError(describeError(error))
     }
   }

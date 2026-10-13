@@ -1,12 +1,14 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { FollowEvent, NewCloudWatchLogsSource, TreeNode } from '@shared/core-api'
 import { cloudWatchFollowTiming } from './cloudwatch-log-source'
 import { allowedCloudWatchOperations, startTestCloudWatchEndpoint, type TestCloudWatchEndpoint, type TestLogGroup } from './cloudwatch-test-endpoint'
+import { ssoProfiles } from './aws-test-sso'
 import { createCore } from './core'
 import { createSecretStore } from './secret-store'
+import { startProxy, startTlsFront } from './test-network'
 import { cloudWatchNameOf, cloudWatchSegment as segment } from '@shared/core-api'
 
 let dir: string
@@ -103,7 +105,9 @@ describe('adding a CloudWatch Logs Source', () => {
       accessKeyId: '',
       secretKeySet: false,
       profile: 'work-sso',
-      endpoint: ''
+      endpoint: '',
+      caBundlePath: '',
+      proxyUrl: ''
     }
     expect(added).toEqual(expected)
     expect(await core.listSources()).toEqual([expected])
@@ -164,6 +168,126 @@ describe('adding a CloudWatch Logs Source', () => {
 
     await expect(core.connect(source.id)).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' })
     expect(await core.connectionState(source.id)).toMatchObject({ state: 'error', code: 'CREDENTIALS_UNAVAILABLE' })
+  })
+
+  it.each(['expired', 'signed-out'])('tells you to run aws sso login when the %s profile’s SSO session has ended', async (profile) => {
+    vi.stubEnv('HOME', dir)
+    await awsFiles({ config: await ssoProfiles(dir) })
+    const core = createCore()
+    const source = await core.addSource(settings({ auth: 'profile', profile }))
+
+    const ssoLogin = { code: 'AWS_SSO_LOGIN_REQUIRED', message: expect.stringContaining(`aws sso login --profile ${profile}`) }
+    await expect(core.testConnection(settings({ auth: 'profile', profile }))).rejects.toMatchObject(ssoLogin)
+    await expect(core.connect(source.id)).rejects.toMatchObject(ssoLogin)
+    expect(await core.connectionState(source.id)).toMatchObject({ state: 'error', code: 'AWS_SSO_LOGIN_REQUIRED' })
+  })
+})
+
+describe('a CloudWatch Logs Source’s endpoint, trust and proxy settings', () => {
+  it('are normalised', async () => {
+    const added = await createCore().addSource(settings({ endpoint: 'logs.us-gov-west-1.amazonaws.com/', caBundlePath: ' /etc/ssl/corp.pem ', proxyUrl: ' proxy.corp:3128/ ' }))
+
+    expect(added).toMatchObject({ endpoint: 'https://logs.us-gov-west-1.amazonaws.com', caBundlePath: '/etc/ssl/corp.pem', proxyUrl: 'http://proxy.corp:3128' })
+  })
+
+  it.each(['socks5://proxy.corp:1080', 'http://'])('refuse a proxy that isn’t an http(s) address: %s', async (proxyUrl) => {
+    await expect(createCore().addSource(settings({ proxyUrl }))).rejects.toMatchObject({ code: 'INVALID_PROXY' })
+  })
+
+  it('take their defaults for a Source saved before they existed', async () => {
+    const dataDir = join(dir, 'user-data')
+    await mkdir(dataDir)
+    const saved = { id: 'old', type: 'cloudwatchLogs', name: 'Old', region: 'eu-west-1', prefix: '', auth: 'profile', accessKeyId: '', profile: '', endpoint: '' }
+    await writeFile(join(dataDir, 'sources.json'), JSON.stringify({ version: 1, sources: [saved], groupOrder: ['local', 'cloudwatchLogs'] }))
+
+    const [source] = await createCore({ dataDir }).listSources()
+
+    expect(source).toMatchObject({ caBundlePath: '', proxyUrl: '' })
+  })
+
+  it('keep a Source from connecting when its CA bundle can’t be read, or holds no certificates', async () => {
+    const empty = join(dir, 'empty.pem')
+    await writeFile(empty, 'not a certificate\n')
+    const core = createCore()
+    const missing = await core.addSource(settings({ caBundlePath: join(dir, 'missing.pem') }))
+    const notCertificates = await core.addSource(settings({ caBundlePath: empty }))
+
+    await expect(core.connect(missing.id)).rejects.toMatchObject({ code: 'CA_BUNDLE_UNREADABLE' })
+    await expect(core.connect(notCertificates.id)).rejects.toMatchObject({ code: 'CA_BUNDLE_UNREADABLE' })
+    await expect(core.testConnection(settings({ caBundlePath: empty }))).rejects.toMatchObject({ code: 'CA_BUNDLE_UNREADABLE' })
+  })
+
+  describe('in a corporate network', () => {
+    const disposals: (() => Promise<void>)[] = []
+    afterEach(async () => {
+      for (const dispose of disposals.splice(0).reverse()) await dispose()
+    })
+
+    /**
+     * The stand-in endpoint behind TLS, with a certificate from a private CA, as at a VPC endpoint behind TLS
+     * inspection: its `endpoint` there, a `caBundlePath` that trusts it, and the front's `host` (and port), as a proxy is
+     * asked to tunnel to it.
+     */
+    const behindTls = async () => {
+      const { url } = await endpointWith()
+      const front = await startTlsFront(url)
+      disposals.push(front.close)
+      return { endpoint: front.url, caBundlePath: front.caPath, host: new URL(front.url).host }
+    }
+    const proxy = async () => {
+      const started = await startProxy()
+      disposals.push(started.close)
+      return started
+    }
+    const connects = async (changes: Partial<NewCloudWatchLogsSource>) => {
+      const core = createCore()
+      const source = await core.addSource(settings(changes))
+      const root = names(await core.connect(source.id))
+      await core.disconnect(source.id)
+      return root.slice(0, 2)
+    }
+    const listed = ['/aws/lambda/orders', '/batch/job-00']
+
+    it('refuses a certificate from an unknown CA', async () => {
+      const { endpoint } = await behindTls()
+
+      await expect(createCore().testConnection(settings({ endpoint }))).rejects.toMatchObject({ code: 'CERTIFICATE_UNTRUSTED' })
+    })
+
+    it('reaches the endpoint it’s given, trusting a certificate from the CA bundle', async () => {
+      const { endpoint, caBundlePath } = await behindTls()
+
+      expect(await connects({ endpoint, caBundlePath })).toEqual(listed)
+    })
+
+    it('goes through its own proxy, whatever NO_PROXY says', async () => {
+      vi.stubEnv('NO_PROXY', '*')
+      const { url, tunnels } = await proxy()
+      const { endpoint, caBundlePath, host } = await behindTls()
+
+      expect(await connects({ endpoint, caBundlePath, proxyUrl: url })).toEqual(listed)
+      expect(tunnels).toContain(host)
+    })
+
+    it('goes through HTTPS_PROXY without a proxy of its own', async () => {
+      const { url, tunnels } = await proxy()
+      vi.stubEnv('HTTPS_PROXY', url)
+      vi.stubEnv('NO_PROXY', undefined)
+      const { endpoint, caBundlePath, host } = await behindTls()
+
+      expect(await connects({ endpoint, caBundlePath })).toEqual(listed)
+      expect(tunnels).toContain(host)
+    })
+
+    it('goes straight to hosts NO_PROXY lists', async () => {
+      const { url, tunnels } = await proxy()
+      vi.stubEnv('HTTPS_PROXY', url)
+      vi.stubEnv('NO_PROXY', '127.0.0.1')
+      const { endpoint, caBundlePath } = await behindTls()
+
+      expect(await connects({ endpoint, caBundlePath })).toEqual(listed)
+      expect(tunnels).toEqual([])
+    })
   })
 })
 
@@ -265,6 +389,44 @@ describe('a connected CloudWatch Logs Source', () => {
 
     await expect(core.openLog(source.id, segment('/aws/lambda/gone'))).rejects.toMatchObject({ code: 'NOT_FOUND' })
     await expect(core.openLog(source.id, `${segment('/aws/lambda/orders')}/gone`)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+})
+
+describe('a CloudWatch Logs Source whose IAM policy is missing a permission', () => {
+  const orders = segment('/aws/lambda/orders')
+
+  it('names the action it needs to list log groups', async () => {
+    const { denied } = await endpointWith()
+    denied.add('DescribeLogGroups')
+    const core = createCore()
+    const source = await core.addSource(settings())
+
+    await expect(core.testConnection(settings())).rejects.toMatchObject({ code: 'MISSING_PERMISSION', message: expect.stringMatching(/^logs:DescribeLogGroups\b/) })
+    await expect(core.connect(source.id)).rejects.toMatchObject({ code: 'MISSING_PERMISSION', message: expect.stringMatching(/^logs:DescribeLogGroups\b/) })
+  })
+
+  it('names the action it needs to list a log group’s streams', async () => {
+    const { denied } = await endpointWith()
+    denied.add('DescribeLogStreams')
+    const core = createCore()
+    const source = await core.addSource(settings())
+    await core.connect(source.id)
+
+    expect(await core.expand(source.id, orders)).toMatchObject([{ kind: 'error', code: 'MISSING_PERMISSION', message: expect.stringMatching(/^logs:DescribeLogStreams\b/) }])
+  })
+
+  it('names the action it needs to read a log group, or a stream', async () => {
+    const { denied } = await endpointWith()
+    denied.add('FilterLogEvents').add('GetLogEvents')
+    const core = createCore()
+    const source = await core.addSource(settings())
+    await core.connect(source.id)
+
+    await expect(core.openLog(source.id, orders, { lastNLines: 10 })).rejects.toMatchObject({ code: 'MISSING_PERMISSION', message: expect.stringMatching(/^logs:FilterLogEvents\b/) })
+    await expect(core.openLog(source.id, `${orders}/${segment('2026/10/12/[$LATEST]aaa')}`, { lastNLines: 10 })).rejects.toMatchObject({
+      code: 'MISSING_PERMISSION',
+      message: expect.stringMatching(/^logs:GetLogEvents\b/)
+    })
   })
 })
 

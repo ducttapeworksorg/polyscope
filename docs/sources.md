@@ -1,6 +1,6 @@
 # Sources
 
-A **Source** is one place Polyscope reads from: a folder, a folder on a server, a bucket, a blob container, a Workload's files, a namespace's logs, or a Docker engine's container logs. You configure each one once, give it a name, and it stays in the sidebar, grouped by its Source Type.
+A **Source** is one place Polyscope reads from: a folder, a folder on a server, a bucket, a blob container, a Workload's files, a namespace's logs, a Docker engine's container logs, or an AWS region's CloudWatch logs. You configure each one once, give it a name, and it stays in the sidebar, grouped by its Source Type.
 
 To add one, choose **+** next to **Sources** at the top of the sidebar, pick a **Source Type**, and fill in the rest. **Test connection** checks the settings without saving anything.
 
@@ -198,6 +198,60 @@ Docker keeps every run of a container in one log, so there's no **Previous** tog
 ### Log drivers
 
 Polyscope reads a log the way `docker logs` does, so only from engines that keep a copy of it. The `json-file`, `local` and `journald` drivers always do. Others (`syslog`, `gelf`, `fluentd`, `awslogs`, `splunk`…) send the log elsewhere, and are readable only while Docker's dual logging keeps a local copy, which is on unless it was turned off. When there's no copy, or the driver is `none`, the log says so and names the driver, so you know where the log went.
+
+## CloudWatch Logs
+
+The log groups of one AWS region in CloudWatch Logs, where Lambda functions, ECS and Fargate tasks, API Gateway, EKS's control plane and much else send their logs.
+
+- **Sign in with**, as for an [S3 Source](#s3-compatible-storage):
+  - **AWS profile** (the default): a profile from your AWS config and credentials files, SSO ones included, or the default credential chain. When an SSO profile's session has ended, the Source tells you to run `aws sso login --profile <name>`.
+  - **Access keys**: an access key and secret key, the secret key stored encrypted by your operating system's secure storage.
+- **Region**: the one region the Source shows. It's filled in from the profile's region until you choose another. For several regions or accounts, add a Source for each.
+- **Log group prefix**: optional. Shows only the log groups whose names start with it, like `/aws/lambda/orders-`.
+- **Endpoint**: optional. For a VPC endpoint (`https://vpce-….logs.eu-west-1.vpce.amazonaws.com`) or GovCloud (`https://logs.us-gov-west-1.amazonaws.com`). Left blank, it's the region's own, or the one `AWS_ENDPOINT_URL_CLOUDWATCH_LOGS` names.
+- **CA bundle**: a PEM file of extra CA certificates to trust, for TLS inspection by a private CA.
+- **Proxy**: like `http://proxy.corp:3128`. Otherwise `HTTPS_PROXY` and `NO_PROXY` apply.
+
+A new Source is named after its region and prefix, like `eu-west-1 /aws/lambda/orders-`. **Test connection** signs in and lists log groups.
+
+### The tree
+
+The Source lists its log groups by name, 50 at a time, with **Load more…** for the next ones. A log group's tooltip gives its stored size and how long it keeps events. Under each log group are its streams, newest event first, 50 at a time, each with the time of its last event.
+
+### Reading and following
+
+Clicking a log group expands it. Right-click it and choose **Open log** to open it as **one log**: the events of all its streams, interleaved by time. Each line starts with a short form of its stream's name, so you can tell instances apart: the end of a Lambda stream's name, like `[0123abcd]`, or an ECS task's id, cut to its first 8 characters. To read one instance or task alone, click its stream under the log group.
+
+Logs open with the same toolbar as any log: **Last N lines**, **Timestamps** (each event's CloudWatch timestamp), **Wrap** and **Follow**. An event with several lines, like a stack trace, keeps them, each with the event's timestamp. **Load earlier** adds the lines before the first one shown. There's no **Previous** toggle, and no restarts.
+
+A **Follow** asks CloudWatch for new events every 2 seconds, so it's a few seconds behind. A Source asks for all its Followed logs together, on one schedule, so following several logs doesn't flood your account's API quota, which is shared with other tools. A log group's Follow picks up streams created after it started, like a new Lambda instance or ECS task. If AWS throttles the requests, the Source asks less and less often, down to every 30 seconds, and the tab says **Following slowed: AWS is throttling** until it catches up.
+
+If a log group or stream is deleted while its tab is open, the tab keeps what it showed and says it no longer exists.
+
+### What it costs
+
+Polyscope calls only four CloudWatch Logs APIs: `DescribeLogGroups`, `DescribeLogStreams`, `GetLogEvents` and `FilterLogEvents`. AWS doesn't charge per call for any of them. It never uses **Live Tail**, which is billed per minute, or **Logs Insights**, which is billed per GB scanned, so browsing and following logs adds no CloudWatch charges to your bill (checked against [AWS's CloudWatch pricing](https://aws.amazon.com/cloudwatch/pricing/) in October 2026; see [ADR 0008](adr/0008-cloudwatch-reads-only-through-unbilled-apis.md)). As with anything that leaves AWS, the log data you read counts as data transfer out, billed at EC2's data transfer rates.
+
+### Permissions
+
+The identity the Source signs in as needs these IAM actions, on the log groups it should read:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["logs:DescribeLogGroups", "logs:DescribeLogStreams", "logs:GetLogEvents", "logs:FilterLogEvents"],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+The AWS managed policy **CloudWatchLogsReadOnlyAccess** includes them. When one is missing, the Source or the log names it, like `logs:FilterLogEvents`.
+
+In VS Code, a CloudWatch log opens in a Polyscope viewer tab, a secret key is kept in VS Code's SecretStorage, and under Remote-SSH, WSL or Dev Containers the Source uses the remote machine's AWS config, credentials and SSO sessions, as an S3 Source does.
 
 ## Environments
 

@@ -490,6 +490,18 @@ function CloudWatchLogsFields({ value, onChange, editing }: FieldsProps<CloudWat
         />
         <span className="field__hint">{t('cloudwatchSource.prefix.hint')}</span>
       </label>
+      <label className="field">
+        <span className="field__label">{t('cloudwatchSource.endpoint')}</span>
+        <input
+          className="field__input field__input--path"
+          value={value.endpoint ?? ''}
+          onChange={(e) => onChange({ ...value, endpoint: e.target.value })}
+          spellCheck={false}
+        />
+        <span className="field__hint">{t('cloudwatchSource.endpoint.hint')}</span>
+      </label>
+      <CaBundleField value={value.caBundlePath ?? ''} onChange={(caBundlePath) => onChange({ ...value, caBundlePath })} />
+      <ProxyField value={value.proxyUrl ?? ''} onChange={(proxyUrl) => onChange({ ...value, proxyUrl })} />
     </>
   )
 }
@@ -1057,9 +1069,21 @@ export const sourceTypeUi: SourceTypeUis = {
     hint: 'sourceType.cloudwatchLogs.hint',
     Icon: CloudWatchLogsIcon,
     // A profile first: most who read CloudWatch already sign in to AWS with one, SSO ones included.
-    blank: () => ({ type: 'cloudwatchLogs', name: '', region: '', prefix: '', auth: 'profile', accessKeyId: '', secretAccessKey: '', profile: '', endpoint: '' }),
+    blank: () => ({
+      type: 'cloudwatchLogs',
+      name: '',
+      region: '',
+      prefix: '',
+      auth: 'profile',
+      accessKeyId: '',
+      secretAccessKey: '',
+      profile: '',
+      endpoint: '',
+      caBundlePath: '',
+      proxyUrl: ''
+    }),
     // Everything but the secret key, which the renderer never has: left blank, the stored one stays.
-    settingsOf: ({ name, region, prefix, auth, accessKeyId, profile, endpoint }) => ({
+    settingsOf: ({ name, region, prefix, auth, accessKeyId, profile, endpoint, caBundlePath, proxyUrl }) => ({
       type: 'cloudwatchLogs',
       name,
       region,
@@ -1068,7 +1092,9 @@ export const sourceTypeUi: SourceTypeUis = {
       accessKeyId,
       secretAccessKey: '',
       profile,
-      endpoint
+      endpoint,
+      caBundlePath,
+      proxyUrl
     }),
     fullPath: regionPath,
     Fields: CloudWatchLogsFields

@@ -34,15 +34,27 @@ const credentialErrors = new Set(['CredentialsProviderError', 'TokenProviderErro
 
 const errorNameOf = (error: unknown) => (error instanceof Error ? error.name : '')
 
-/** An AWS SDK failure about `what` as a CoreError, by the service's own `codes` for its errors, then those of signing in. */
-export function awsErrorOf(error: unknown, what: string, codes: Record<string, CoreErrorCode> = {}): CoreError {
-  if (error instanceof CoreError) return error
-  const message = error instanceof Error ? error.message : String(error)
-  const code = codes[errorNameOf(error)] ?? signInCodes[errorNameOf(error)]
-  if (code) return new CoreError(code, `${what}: ${message || errorNameOf(error)}`)
-  if (credentialErrors.has(errorNameOf(error))) return new CoreError('CREDENTIALS_UNAVAILABLE', message)
-  const errno = (error as NodeJS.ErrnoException).code ?? ''
-  if (networkCodes.has(errno)) return new CoreError('UNREACHABLE', `${what}: ${message}`)
-  if (certificateCodes.has(errno)) return new CoreError('CERTIFICATE_UNTRUSTED', `${what}: ${message}`)
-  return new CoreError('UNKNOWN', `${what}: ${message}`)
+/** What the SDK says when an SSO profile's session has ended, or there's none: "To refresh this SSO session run aws sso login…". */
+const ssoSessionEnded = /\baws sso login\b/
+
+/**
+ * How a Source signing in as `credentials` sees AWS SDK failures: as CoreErrors, by the service's own `codes` for its
+ * errors, then those of signing in. An SSO profile whose session has ended says how to sign in again.
+ */
+export function awsErrorsOf(credentials: AwsCredentials, codes: Record<string, CoreErrorCode> = {}) {
+  return (error: unknown, what: string): CoreError => {
+    if (error instanceof CoreError) return error
+    const message = error instanceof Error ? error.message : String(error)
+    const code = codes[errorNameOf(error)] ?? signInCodes[errorNameOf(error)]
+    if (code) return new CoreError(code, `${what}: ${message || errorNameOf(error)}`)
+    if (credentialErrors.has(errorNameOf(error))) {
+      if (!ssoSessionEnded.test(message)) return new CoreError('CREDENTIALS_UNAVAILABLE', message)
+      const profile = 'profile' in credentials && credentials.profile ? ` --profile ${credentials.profile}` : ''
+      return new CoreError('AWS_SSO_LOGIN_REQUIRED', `Run aws sso login${profile}, then retry. (${message})`)
+    }
+    const errno = (error as NodeJS.ErrnoException).code ?? ''
+    if (networkCodes.has(errno)) return new CoreError('UNREACHABLE', `${what}: ${message}`)
+    if (certificateCodes.has(errno)) return new CoreError('CERTIFICATE_UNTRUSTED', `${what}: ${message}`)
+    return new CoreError('UNKNOWN', `${what}: ${message}`)
+  }
 }
