@@ -16,6 +16,7 @@ import {
   markLogStreamGone,
   markPodGone,
   noteRestart,
+  noteSlowed,
   openTab,
   pinTab,
   reopenLogTab,
@@ -64,12 +65,13 @@ export function useTabs({ onSourcesChanged }: Options) {
   const activeTab = tabs.find((tab) => tab.key === workspace.activeKey) ?? null
 
   // A Follow that ends by itself (its container finished or is gone, its Source disconnected…) leaves its tab showing
-  // what it got. One whose container restarts lets its tab switch to the Previous Log.
+  // what it got. One whose container restarts lets its tab switch to the Previous Log. One slowed down says so.
   useEffect(
     () =>
       core.onFollowEvent((event) => {
         if (event.kind === 'ended') setWorkspace((ws) => endFollow(ws, event.followId, event.reason))
         if (event.kind === 'restarted') setWorkspace((ws) => noteRestart(ws, event.followId))
+        if (event.kind === 'slowed') setWorkspace((ws) => noteSlowed(ws, event.followId, event.slowed))
       }),
     []
   )

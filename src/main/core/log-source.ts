@@ -16,6 +16,11 @@ export interface LogReadOptions {
 export interface LogFollowOptions {
   /** Only lines logged since this RFC 3339 time; the backend may go back to the start of its second. */
   sinceTime?: string
+  /**
+   * Called by a backend that polls when it's slowed down (CloudWatch Logs, when AWS throttles it) with true, and with
+   * false once it no longer is.
+   */
+  onSlowed?(slowed: boolean): void
 }
 
 /** The connection a log is followed over. */

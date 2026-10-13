@@ -1,8 +1,9 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { NewCloudWatchLogsSource, TreeNode } from '@shared/core-api'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import type { FollowEvent, NewCloudWatchLogsSource, TreeNode } from '@shared/core-api'
+import { cloudWatchFollowTiming } from './cloudwatch-log-source'
 import { allowedCloudWatchOperations, startTestCloudWatchEndpoint, type TestCloudWatchEndpoint, type TestLogGroup } from './cloudwatch-test-endpoint'
 import { createCore } from './core'
 import { createSecretStore } from './secret-store'
@@ -354,22 +355,140 @@ describe('a CloudWatch log group opened as one merged log', () => {
   })
 })
 
-describe('following a CloudWatch log group', () => {
-  it('goes on from its merged log’s last line, picking up events of a stream made since', async () => {
+describe('following CloudWatch logs', () => {
+  const orders = segment('/aws/lambda/orders')
+  const ccc = `${orders}/${segment('2026/10/12/[$LATEST]ccc')}`
+  const shop = `${segment('/ecs/shop')}/${segment('web/web/0123')}`
+
+  beforeEach(() => {
+    const { interval, maxInterval } = cloudWatchFollowTiming
+    Object.assign(cloudWatchFollowTiming, { interval: 100, maxInterval: 800 })
+    onTestFinished(() => void Object.assign(cloudWatchFollowTiming, { interval, maxInterval }))
+  })
+
+  async function connected() {
     await endpointWith()
     const core = createCore()
     const source = await core.addSource(settings())
     await core.connect(source.id)
-    const lines: string[] = []
-    const unsubscribe = core.onFollowEvent((event) => event.kind === 'lines' && lines.push(...event.lines))
+    const events: FollowEvent[] = []
+    onTestFinished(core.onFollowEvent((event) => void events.push(event)))
+    const linesOf = (followId: string) => events.flatMap((event) => (event.followId === followId && event.kind === 'lines' ? event.lines : []))
+    return { core, source, events, linesOf }
+  }
 
-    const followed = await core.followLog(source.id, segment('/aws/lambda/orders'), { lastNLines: 1 })
-    endpoint!.groups[0]!.streams!.push({ name: '2026/10/12/[$LATEST]ddd', events: [{ timestamp: at(9_000), message: 'START RequestId: 4' }] })
+  const groups = () => endpoint!.groups
+  const log = (group: number, stream: number, message: string, timestamp = at(30_000)) => groups()[group]!.streams![stream]!.events!.push({ timestamp, message })
+  /** The calls Following made, after the first `from`. */
+  const pollsSince = (from: number) => endpoint!.calls.slice(from).filter(({ operation }) => operation === 'GetLogEvents' || operation === 'FilterLogEvents')
+  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  it('goes on from its merged log’s last line, picking up events of a stream made since', async () => {
+    const { core, source, linesOf } = await connected()
+
+    const followed = await core.followLog(source.id, orders, { lastNLines: 1 })
+    groups()[0]!.streams!.push({ name: '2026/10/12/[$LATEST]ddd', events: [{ timestamp: at(9_000), message: 'START RequestId: 4' }] })
 
     expect(followed.content).toBe('[ccc] END RequestId: 3')
-    await vi.waitFor(() => expect(lines).toEqual(['[ddd] START RequestId: 4']), { timeout: 5_000 })
+    await vi.waitFor(() => expect(linesOf(followed.followId)).toEqual(['[ddd] START RequestId: 4']), { timeout: 5_000 })
     await core.disconnect(source.id)
-    unsubscribe()
+  })
+
+  it('shows a stream’s new events as they come', async () => {
+    const { core, source, linesOf } = await connected()
+
+    const followed = await core.followLog(source.id, ccc, { lastNLines: 1 })
+    log(0, 1, 'START RequestId: 5')
+
+    expect(followed.content).toBe('END RequestId: 3')
+    await vi.waitFor(() => expect(linesOf(followed.followId)).toEqual(['START RequestId: 5']), { timeout: 5_000 })
+    await core.disconnect(source.id)
+  })
+
+  it('asks for all of a Source’s Followed logs on one schedule, one call per log each round', async () => {
+    const { core, source } = await connected()
+
+    await core.followLog(source.id, orders, { lastNLines: 1 })
+    await pause(150)
+    await core.followLog(source.id, shop, { lastNLines: 1 })
+    const from = endpoint!.calls.length
+    await pause(1_000)
+
+    // Rounds are told apart by the time between them; each asks once for the group, once for the stream.
+    const rounds: string[][] = []
+    let last = -Infinity
+    for (const { operation, at } of pollsSince(from)) {
+      if (at - last > 50) rounds.push([])
+      rounds.at(-1)!.push(operation)
+      last = at
+    }
+    expect(rounds.length).toBeGreaterThanOrEqual(5)
+    for (const round of rounds.slice(0, -1)) expect(round.toSorted()).toEqual(['FilterLogEvents', 'GetLogEvents'])
+    await core.disconnect(source.id)
+  })
+
+  it('slows down while AWS throttles it, saying so, and catches up once it stops', async () => {
+    const { core, source, events, linesOf } = await connected()
+    const followed = await core.followLog(source.id, ccc, { lastNLines: 1 })
+    const slowed = () => events.filter((event) => event.followId === followed.followId && event.kind === 'slowed')
+
+    endpoint!.throttling = true
+    const from = endpoint!.calls.length
+    await vi.waitFor(() => expect(slowed()).toEqual([{ followId: followed.followId, kind: 'slowed', slowed: true }]))
+    await pause(1_600)
+    const times = pollsSince(from).map(({ at }) => at)
+    const gaps = times.slice(1).map((time, i) => time - times[i]!)
+    // Twice as long each time, up to the ceiling: 200, 400, 800, 800 ms.
+    expect(gaps.length).toBeLessThanOrEqual(5)
+    expect(gaps.at(-1)).toBeGreaterThanOrEqual(700)
+
+    log(0, 1, 'START RequestId: 5')
+    endpoint!.throttling = false
+    await vi.waitFor(() => expect(linesOf(followed.followId)).toEqual(['START RequestId: 5']), { timeout: 3_000 })
+    expect(slowed().map((event) => event.kind === 'slowed' && event.slowed)).toEqual([true, false])
+    expect(events.filter((event) => event.kind === 'failed')).toEqual([])
+    await core.disconnect(source.id)
+  })
+
+  it('holds new events back while paused, and shows them once resumed', async () => {
+    const { core, source, linesOf } = await connected()
+    const followed = await core.followLog(source.id, ccc, { lastNLines: 1 })
+
+    await core.pauseFollow(followed.followId)
+    log(0, 1, 'START RequestId: 5')
+    await pause(400)
+    expect(linesOf(followed.followId)).toEqual([])
+    await core.resumeFollow(followed.followId)
+
+    expect(linesOf(followed.followId)).toEqual(['START RequestId: 5'])
+    await core.disconnect(source.id)
+  })
+
+  it('ends, its log gone, once its log group is deleted, while another goes on', async () => {
+    const { core, source, events, linesOf } = await connected()
+    const followed = await core.followLog(source.id, orders, { lastNLines: 1 })
+    const other = await core.followLog(source.id, shop, { lastNLines: 1 })
+
+    groups().splice(0, 1)
+    await vi.waitFor(() => expect(events).toContainEqual({ followId: followed.followId, kind: 'ended', reason: 'gone' }))
+    log(0, 0, 'still here')
+
+    await vi.waitFor(() => expect(linesOf(other.followId)).toEqual(['still here']))
+    await core.disconnect(source.id)
+  })
+
+  it('stops asking once its Source is disconnected', async () => {
+    const { core, source, events } = await connected()
+    const followed = await core.followLog(source.id, orders, { lastNLines: 1 })
+    await core.followLog(source.id, shop, { lastNLines: 1 })
+    await pause(250)
+
+    await core.disconnect(source.id)
+    const from = endpoint!.calls.length
+    await pause(500)
+
+    expect(pollsSince(from)).toEqual([])
+    expect(events).toContainEqual({ followId: followed.followId, kind: 'ended', reason: 'disconnected' })
   })
 })
 

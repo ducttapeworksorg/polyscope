@@ -44,14 +44,15 @@ export const asCoreError = (error: unknown) =>
 
 /**
  * Passes a Follow's updates on to `send`, or, while paused, holds them back until resumed: at most the
- * last `cap` lines, dropping the oldest and any marks before them.
+ * last `cap` lines, dropping the oldest and any marks before them. Whether it's slowed is no line, so is passed on
+ * straight away.
  */
 export function holdBack(cap: LastNLines, send: (update: FollowUpdate) => void) {
   // Updates held back while paused, in order; undefined while not.
   let held: FollowUpdate[] | undefined
   return {
     emit(update: FollowUpdate) {
-      if (!held) return send(update)
+      if (!held || update.kind === 'slowed') return send(update)
       held.push(update)
       if (cap === 'all') return
       let excess = held.reduce((count, u) => count + (u.kind === 'lines' ? u.lines.length : 0), 0) - cap
@@ -100,6 +101,13 @@ export function startFollow(logSource: LogSource, path: SourcePath, options: Fol
   let stopped = false
   let connection: LogConnection | undefined
   let wake: (() => void) | undefined
+  // Whether the backend last said it's slowed down.
+  let slowed = false
+  const onSlowed = (now: boolean) => {
+    if (stopped || now === slowed) return
+    slowed = now
+    emit({ kind: 'slowed', slowed })
+  }
 
   const sendLines = (pieces: string[]) => {
     const lines: string[] = []
@@ -181,7 +189,7 @@ export function startFollow(logSource: LogSource, path: SourcePath, options: Fol
         partial = ''
         toSkip = atAfter
         try {
-          connection = await logSource.followLog(path, since === undefined ? {} : { sinceTime: since }, receive)
+          connection = await logSource.followLog(path, { ...(since !== undefined && { sinceTime: since }), onSlowed }, receive)
         } catch (error) {
           // No log to give yet, say a container waiting to start: look again in a while.
           if (asCoreError(error).code !== 'LOG_UNAVAILABLE') throw error

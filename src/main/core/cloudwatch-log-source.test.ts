@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { createCloudWatchLogSource, type CloudWatchTarget } from './cloudwatch-log-source'
+import { cloudWatchFollowTiming, createCloudWatchLogSource, type CloudWatchTarget } from './cloudwatch-log-source'
 import { allowedCloudWatchOperations, startTestCloudWatchEndpoint, type TestCloudWatchEndpoint, type TestLogGroup } from './cloudwatch-test-endpoint'
 import { describeLogSourceContract } from './log-source-contract'
 import { cloudWatchSegment as segment } from '@shared/core-api'
@@ -40,7 +40,10 @@ const target = (changes: Partial<CloudWatchTarget> = {}): CloudWatchTarget => ({
 })
 
 describe('CloudWatch Logs against a stand-in endpoint', () => {
+  const { interval } = cloudWatchFollowTiming
+
   beforeAll(async () => {
+    cloudWatchFollowTiming.interval = 100
     endpoint = await startTestCloudWatchEndpoint(seed(), { accessKeyId: 'AKIDTEST' })
   })
 
@@ -49,10 +52,11 @@ describe('CloudWatch Logs against a stand-in endpoint', () => {
     const allowed: readonly string[] = allowedCloudWatchOperations
     expect(endpoint.operations.filter((operation) => !allowed.includes(operation))).toEqual([])
     await endpoint.close()
+    cloudWatchFollowTiming.interval = interval
   })
 
   describeLogSourceContract('CloudWatch Logs', capabilities, async () => ({
-    logSource: createCloudWatchLogSource(target(), { pageSize: 2, pollInterval: 100 }),
+    logSource: createCloudWatchLogSource(target(), { pageSize: 2 }),
     counter
   }))
 
@@ -126,6 +130,13 @@ describe('CloudWatch Logs against a stand-in endpoint', () => {
       const logSource = createCloudWatchLogSource(target())
 
       await expect(logSource.readLog(`${segment('/aws/lambda/gone')}/x`)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    })
+
+    it('can’t be followed once gone, failing to follow it rather than once followed', async () => {
+      const logSource = createCloudWatchLogSource(target())
+
+      await expect(logSource.followLog(`${segment('/aws/lambda/orders')}/gone`, {}, () => undefined)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+      await expect(logSource.followLog(segment('/aws/lambda/gone'), {}, () => undefined)).rejects.toMatchObject({ code: 'NOT_FOUND' })
     })
   })
 

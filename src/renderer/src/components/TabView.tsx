@@ -27,8 +27,8 @@ interface Props {
 }
 
 /**
- * What the active tab shows: any error opening it, banners for a Disconnected Source or a pod or Log Stream that's gone,
- * its toolbar, and the viewer.
+ * What the active tab shows: any error opening it, banners for a Disconnected Source, a pod or Log Stream that's gone or
+ * a slowed Follow, its toolbar, and the viewer.
  */
 export function TabView({ viewerRef, model, settings, connection, onReconnect, panelId, onOpenAnyway, children }: Props) {
   const { tabs, activeTab, openError } = model
@@ -53,6 +53,11 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
       {activeTab?.logStreamGone && (
         <div className="workbench__banner" role="status">
           <span className="workbench__banner-text">{t('viewer.logStreamGone', { name: activeTab.file.name })}</span>
+        </div>
+      )}
+      {activeTab?.follow?.slowed && (
+        <div className="workbench__banner" role="status">
+          <span className="workbench__banner-text">{t('viewer.followSlowed')}</span>
         </div>
       )}
       {activeTab?.podGone && (
