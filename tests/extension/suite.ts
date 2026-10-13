@@ -7,10 +7,11 @@ import { homedir, tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import * as vscode from 'vscode'
-import type { FollowEvent, HostKey } from '@shared/core-api'
+import { cloudWatchSegment, type FollowEvent, type HostKey } from '@shared/core-api'
 import { MB } from '@shared/settings'
 import { hasTestAccount, seedPrefix as seedBlobs, takesTokens, testAzureBlobSource, testEndpoint, testSasUrl } from '../../src/main/core/azure-blob-test-store'
 import { startManagedIdentity } from '../../src/main/core/azure-test-identity'
+import { allowedCloudWatchOperations, startTestCloudWatchEndpoint } from '../../src/main/core/cloudwatch-test-endpoint'
 import { kubeConfigFor } from '../../src/main/core/kubeconfig'
 import { startTestDockerEngine } from '../../src/main/core/docker-test-engine'
 import { execInPod } from '../../src/main/core/kubernetes-exec'
@@ -903,6 +904,79 @@ const firstRun: [string, () => Promise<void>][] = [
         else process.env['DOCKER_HOST'] = before
         await engine.close()
       }
+    }
+  ],
+  [
+    // Where the extension host runs, so on the remote machine under Remote-SSH: its AWS config and credentials files.
+    'a CloudWatch Logs Source signs in with the extension host’s AWS profile, and a log group opens in a viewer tab, whose Follow gets what’s logged',
+    async () => {
+      const { core, open } = await extension()
+      const now = Date.now()
+      const stream = { name: '2026/10/12/[$LATEST]abc', events: [{ timestamp: now - 1_000, message: 'START RequestId: 1' }] }
+      const endpoint = await startTestCloudWatchEndpoint([{ name: '/aws/lambda/orders', createdAt: now - 60_000, streams: [stream] }], { accessKeyId: 'AKIDTEST' })
+      const awsDir = await mkdtemp(join(tmpdir(), 'polyscope-aws-'))
+      await writeFile(join(awsDir, 'credentials'), '[logs]\naws_access_key_id = AKIDTEST\naws_secret_access_key = secret\n')
+      await writeFile(join(awsDir, 'config'), '[profile logs]\nregion = eu-west-1\n')
+      const { lines, unsubscribe } = followedLines(core)
+      const orders = cloudWatchSegment('/aws/lambda/orders')
+
+      try {
+        await withEnv({ AWS_SHARED_CREDENTIALS_FILE: join(awsDir, 'credentials'), AWS_CONFIG_FILE: join(awsDir, 'config') }, async () => {
+          assert.equal(await core.awsProfileRegion('logs'), 'eu-west-1')
+          const source = await core.addSource({ type: 'cloudwatchLogs', name: 'Lambdas', region: 'eu-west-1', profile: 'logs', endpoint: endpoint.url })
+          try {
+            assert.deepEqual((await core.connect(source.id)).map(nameOf), [orders])
+            assert.equal((await core.openLog(source.id, orders)).content, '[abc] START RequestId: 1')
+
+            await open({ kind: 'log', sourceId: source.id, path: orders, name: orders, pinned: true })
+            const tab = await eventually(() => activeViewerTab(orders))
+            // The tab follows once its page has loaded; until then, what's logged goes unseen.
+            await eventually(async () => {
+              stream.events.push({ timestamp: Date.now(), message: 'END RequestId: 1' })
+              await sleep(3_000)
+              assert.ok(
+                lines.some((event) => event.kind === 'lines' && event.lines.some((line) => line.includes('[abc] END RequestId: 1'))),
+                'The viewer tab’s Follow got what the log group logged'
+              )
+            }, 30_000)
+            await vscode.window.tabGroups.close(tab)
+          } finally {
+            await core.deleteSource(source.id)
+          }
+        })
+        // ADR 0008: nothing billed per use, like Live Tail or Logs Insights, is ever called.
+        const allowed: readonly string[] = allowedCloudWatchOperations
+        assert.deepEqual(endpoint.operations.filter((operation) => !allowed.includes(operation)), [])
+      } finally {
+        unsubscribe()
+        await endpoint.close()
+        await rm(awsDir, { recursive: true, force: true })
+      }
+    }
+  ],
+  [
+    'a CloudWatch Logs Source’s secret key is kept in SecretStorage when edited without retyping it, copied with a duplicate and forgotten with the Source',
+    async () => {
+      const { core, secrets } = await extension()
+      const endpoint = await startTestCloudWatchEndpoint([{ name: '/ecs/shop' }], { accessKeyId: 'AKIDTEST' })
+      const settings = { type: 'cloudwatchLogs', name: 'Keys', region: 'eu-west-1', auth: 'keys', accessKeyId: 'AKIDTEST', secretAccessKey: 'secret', endpoint: endpoint.url } as const
+      const source = await core.addSource(settings)
+
+      try {
+        assert.equal(await secrets.get(source.id, 'secretKey'), 'secret')
+        const edited = await core.editSource(source.id, { ...settings, name: 'Renamed', secretAccessKey: '' })
+        assert.equal(edited.type === 'cloudwatchLogs' && edited.secretKeySet, true)
+        const copy = await core.duplicateSource(source.id)
+        assert.deepEqual((await core.connect(copy.id)).map(nameOf), [cloudWatchSegment('/ecs/shop')])
+
+        await core.deleteSource(copy.id)
+        assert.equal(await secrets.get(copy.id, 'secretKey'), undefined)
+        assert.equal(await secrets.get(source.id, 'secretKey'), 'secret', 'The original keeps its secret key')
+      } finally {
+        await core.deleteSource(source.id)
+        await endpoint.close()
+      }
+      assert.equal(await secrets.get(source.id, 'secretKey'), undefined)
     }
   ],
   [

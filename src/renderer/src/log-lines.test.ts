@@ -80,6 +80,14 @@ describe('what a Follow adds to its log view', () => {
     expect(ended).not.toMatch(/container/)
   })
 
+  it('says a CloudWatch log’s Follow ended with its log group or stream, not a container', () => {
+    const [ended] = followLines({ kind: 'ended', reason: 'gone' }, { ...plain, sourceType: 'cloudwatchLogs' })
+
+    expect(isMarker(ended!)).toBe(true)
+    expect(ended).toMatch(/log is gone/)
+    expect(ended).not.toMatch(/container/)
+  })
+
   it('says a Follow ended because its connection dropped', () => {
     const [ended] = followLines({ kind: 'ended', reason: 'connectionLost' }, { ...plain, of: 'file' })
 

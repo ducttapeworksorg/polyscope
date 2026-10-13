@@ -25,15 +25,16 @@ To watch a growing file on a Local Filesystem, SSH Files or Kubernetes Files Sou
 
 ## Logs
 
-A container's log opens with a toolbar:
+A container's log, or a CloudWatch log, opens with a toolbar:
 
 - **Last N lines**: how much of the log to fetch and keep: 1K, 10K (the default, set in **Settings**), 50K, 100K, **All**, or a number you type. Choosing **All** for a log over the Large File threshold asks first.
+- **Load earlier**, for CloudWatch logs: add the lines before the first one shown, as many as **Last N lines** says.
 - **Follow**: show new lines as they're logged. **Pause** holds new lines back while you read, and **Resume** shows them.
 - **Previous**: show the container's **Previous Log**, the log of its run before it last restarted, in the same tab, marked "(previous)". It has ended, so there's nothing to Follow; turn **Previous** off to go back to the current log, Following it again. It's available once the container has restarted, which a Follow notices as it happens; Kubernetes keeps only the run just before the current one, and not always that.
 - **Timestamps**: start each line with when it was logged, in local time or, with **UTC**, in UTC.
 - **Wrap**: wrap long lines.
 
-While following, the log marks what happened in line: a container restarting, the connection dropping and recovering, or the container, pod or Source going away.
+While following, the log marks what happened in line: a container restarting, the connection dropping and recovering, or the container, pod, CloudWatch log or Source going away.
 
 ## Large Files
 

@@ -6,7 +6,7 @@ import {
   S3ServiceException
 } from '@aws-sdk/client-s3'
 import type { CoreErrorCode } from '@shared/core-api'
-import { awsClientSettings, awsErrorOf, type AwsCredentials } from './aws-sign-in'
+import { awsClientSettings, awsErrorsOf, type AwsCredentials } from './aws-sign-in'
 import type { FileSource } from './file-source'
 import type { NetworkSettings } from './network-agents'
 import { createObjectStoreFileSource, type ObjectStore } from './object-store-file-source'
@@ -34,8 +34,6 @@ const s3Codes: Record<string, CoreErrorCode> = {
   Forbidden: 'PERMISSION_DENIED'
 }
 
-const toCoreError = (error: unknown, what: string) => awsErrorOf(error, what, s3Codes)
-
 /** A File Source over the keys under a bucket's prefix, with key prefixes (up to a '/') shown as folders. */
 export function createS3FileSource(target: S3Target, { pageSize = s3PageSize } = {}): FileSource {
   const { bucket, credentials } = target
@@ -49,6 +47,7 @@ export function createS3FileSource(target: S3Target, { pageSize = s3PageSize } =
     responseChecksumValidation: 'WHEN_REQUIRED'
   })
   const where = (key: string) => `s3://${bucket}/${key}`
+  const toCoreError = awsErrorsOf(credentials, s3Codes)
 
   const send = async <T>(key: string, run: () => Promise<T>) => {
     try {

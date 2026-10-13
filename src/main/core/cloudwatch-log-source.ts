@@ -9,7 +9,7 @@ import {
 } from '@aws-sdk/client-cloudwatch-logs'
 import type { CoreErrorCode, LogStreamNode, SourcePath } from '@shared/core-api'
 import { cloudWatchNameOf as nameOf, cloudWatchSegment as segmentOf } from '@shared/core-api'
-import { awsClientSettings, awsErrorOf, type AwsCredentials } from './aws-sign-in'
+import { awsClientSettings, awsErrorsOf, type AwsCredentials } from './aws-sign-in'
 import { CoreError } from './core-error'
 import type { LogConnection, LogFollowOptions, LogPage, LogReadBack, LogReadBackOptions, LogReadOptions, LogSource } from './log-source'
 import type { NetworkSettings } from './network-agents'
@@ -50,6 +50,9 @@ export const cloudWatchFollowTiming = {
   /** …or, while AWS throttles them, twice as long after each throttled round, up to this. */
   maxInterval: 30_000
 }
+
+/** The CloudWatch Logs actions Polyscope may call: none of them billed per use (ADR 0008). */
+type CloudWatchAction = 'DescribeLogGroups' | 'DescribeLogStreams' | 'GetLogEvents' | 'FilterLogEvents'
 
 // CloudWatch Logs error codes and what they mean to the user, beyond those of signing in.
 const cloudWatchCodes: Record<string, CoreErrorCode> = {
@@ -122,11 +125,21 @@ export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize =
   // would only add to what AWS is throttling.
   const followClient = new CloudWatchLogsClient({ ...clientSettings, maxAttempts: 1 })
 
-  const send = async <T>(what: string, run: () => Promise<T>) => {
+  const toCoreError = awsErrorsOf(target.credentials, cloudWatchCodes)
+
+  /**
+   * Runs a request about `what` for one of the four actions, its failure as a CoreError: a denial names the action
+   * the user's IAM policy needs to allow, like `logs:FilterLogEvents`, then AWS's own account of it (an explicit deny,
+   * say, or an organisation's policy).
+   */
+  const send = async <T>(what: string, action: CloudWatchAction, run: () => Promise<T>) => {
     try {
       return await run()
     } catch (error) {
-      throw awsErrorOf(error, what, cloudWatchCodes)
+      const failure = toCoreError(error, what)
+      if (failure.code !== 'PERMISSION_DENIED') throw failure
+      const said = error instanceof Error && error.message ? `: ${error.message}` : ''
+      throw new CoreError('MISSING_PERMISSION', `logs:${action} on ${what}${said}`)
     }
   }
 
@@ -163,7 +176,7 @@ export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize =
 
   /** The log group, failing with NOT_FOUND unless it's there: listed by its name as a prefix, it comes first. */
   const checkGroup = async (group: string) => {
-    const { logGroups = [] } = await send(group, () => client.send(new DescribeLogGroupsCommand({ logGroupNamePrefix: group, limit: 1 })))
+    const { logGroups = [] } = await send(group, 'DescribeLogGroups', () => client.send(new DescribeLogGroupsCommand({ logGroupNamePrefix: group, limit: 1 })))
     if (logGroups[0]?.logGroupName !== group) throw new CoreError('NOT_FOUND', `No such log group: ${group}`)
     return logGroups[0]
   }
@@ -171,7 +184,7 @@ export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize =
   /** Fails with NOT_FOUND unless the log stream is there, as checkGroup does. */
   const checkStream = async (group: string, stream: string) => {
     const where = `${group} ${stream}`
-    const { logStreams = [] } = await send(where, () =>
+    const { logStreams = [] } = await send(where, 'DescribeLogStreams', () =>
       client.send(new DescribeLogStreamsCommand({ logGroupName: group, logStreamNamePrefix: stream, limit: 1 }))
     )
     if (logStreams[0]?.logStreamName !== stream) throw new CoreError('NOT_FOUND', `No such log stream: ${where}`)
@@ -193,11 +206,11 @@ export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize =
     stream: string,
     page: { nextToken?: string; startFromHead: boolean; startTime?: number; endTime?: number; limit?: number },
     sender = client
-  ) => send(`${group} ${stream}`, () => sender.send(new GetLogEventsCommand({ logGroupName: group, logStreamName: stream, ...page })))
+  ) => send(`${group} ${stream}`, 'GetLogEvents', () => sender.send(new GetLogEventsCommand({ logGroupName: group, logStreamName: stream, ...page })))
 
   /** A page of the log group's events, all its streams' interleaved by time, from `startTime` up to `endTime`. */
   const groupPage = (group: string, page: { nextToken?: string; startTime?: number; endTime?: number }, sender = client) =>
-    send(group, () => sender.send(new FilterLogEventsCommand({ logGroupName: group, ...page })))
+    send(group, 'FilterLogEvents', () => sender.send(new FilterLogEventsCommand({ logGroupName: group, ...page })))
 
   /** A stream's lines before a time, read back from it a page at a time. */
   const streamLinesBefore =
@@ -424,13 +437,13 @@ export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize =
       const { group, stream } = partsOf(path)
       const nextToken = cursor && { nextToken: cursor }
       if (group === undefined) {
-        const page = await send('Log groups', () =>
+        const page = await send('log groups', 'DescribeLogGroups', () =>
           client.send(new DescribeLogGroupsCommand({ ...(target.prefix && { logGroupNamePrefix: target.prefix }), limit: pageSize, ...nextToken }))
         )
         return { nodes: (page.logGroups ?? []).map(groupNode), ...(page.nextToken && { cursor: page.nextToken }) }
       }
       if (stream === undefined) {
-        const page = await send(group, () =>
+        const page = await send(group, 'DescribeLogStreams', () =>
           client.send(new DescribeLogStreamsCommand({ logGroupName: group, orderBy: 'LastEventTime', descending: true, limit: pageSize, ...nextToken }))
         )
         return { nodes: (page.logStreams ?? []).map((s) => streamNode(group, s)), ...(page.nextToken && { cursor: page.nextToken }) }

@@ -1,4 +1,4 @@
-import type { FollowUpdate, LogOf, LogSnapshot } from '@shared/core-api'
+import type { FollowUpdate, LogOf, LogSnapshot, SourceTypeId } from '@shared/core-api'
 import { describeFailure } from './core-client'
 import { t } from './i18n'
 
@@ -8,6 +8,8 @@ export interface LogFormat {
   utc: boolean
   /** What the lines are of, which marks mention; a Log Stream unless given. */
   of?: LogOf
+  /** The Source Type of the lines' Source, which marks mention too: a container's unless given. */
+  sourceType?: SourceTypeId
 }
 
 
@@ -45,7 +47,7 @@ export const isMarker = (line: string) => line.startsWith(markOpen) && line.ends
 export const markerPattern = /^── .* ──$/
 
 /** The lines a Follow's update adds to its log view: its new lines, or a mark saying what happened. */
-export function followLines(update: FollowUpdate, { timestamps, utc, of = 'logStream' }: LogFormat): string[] {
+export function followLines(update: FollowUpdate, { timestamps, utc, of = 'logStream', sourceType }: LogFormat): string[] {
   switch (update.kind) {
     case 'lines':
       return timestamps ? update.lines.map((line) => showTimestamp(line, utc)) : update.lines
@@ -63,7 +65,8 @@ export function followLines(update: FollowUpdate, { timestamps, utc, of = 'logSt
     case 'slowed':
       return []
     case 'ended':
-      // A file is gone with the pod it was in.
-      return [mark(t(of === 'file' && update.reason === 'gone' ? 'logView.mark.ended.podGone' : `logView.mark.ended.${update.reason}`))]
+      if (update.reason !== 'gone') return [mark(t(`logView.mark.ended.${update.reason}`))]
+      // A file is gone with the pod it was in; a CloudWatch log with its log group or stream.
+      return [mark(t(of === 'file' ? 'logView.mark.ended.podGone' : sourceType === 'cloudwatchLogs' ? 'logView.mark.ended.logGone' : 'logView.mark.ended.gone'))]
   }
 }
