@@ -27,10 +27,11 @@ const withFolded = (node: LogNode): LogNode[] => (node.kind === 'group' && node.
 /** Every node of a tree, with those folded into others: all the nodes it shows. */
 const shownNodes = async (source: LogSource) => (await walk(source)).flatMap(({ node }) => withFolded(node))
 
-/** Some of a tree's groups, which have no logs: the first few, and the counter's own. */
+/** Some of a tree's groups, which have no logs: the first few, and the counter's own if it's a group, not a Log Stream. */
 const someGroups = async (source: LogSource, counter: SourcePath) => {
   const groups = (await walk(source)).map(({ node }) => node).filter((node) => node.kind === 'group')
-  return [...new Set([...groups.slice(0, 3).map((node) => node.path), parentOf(counter)])]
+  const own = groups.filter((node) => node.path === parentOf(counter))
+  return [...new Set([...groups.slice(0, 3), ...own].map((node) => node.path))]
 }
 
 const parentOf = (path: SourcePath) => path.slice(0, Math.max(0, path.lastIndexOf('/')))
@@ -178,6 +179,16 @@ export function describeLogSourceContract(name: string, capabilities: LogCapabil
       it('reports a Log Stream that is not there', async () => {
         const { logSource, counter } = await subject()
         await expect(logSource.readLog(`${parentOf(counter)}/no-such-log`)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+      })
+
+      it('reads further back, if it does, a number of lines at a time, as far as its start', async () => {
+        const { logSource, counter } = await subject()
+        if (!logSource.readLogBack) return
+        const last = await logSource.readLogBack(counter, { tailLines: 40 })
+        expect(last.text).toBe(counterLines(61, 100))
+        const before = await logSource.readLogBack(counter, { tailLines: 40, before: last.before! })
+        expect(before.text).toBe(counterLines(21, 60))
+        expect(await logSource.readLogBack(counter, { tailLines: 40, before: before.before! })).toEqual({ text: counterLines(1, 20) })
       })
 
       it('starts each line with when it was logged, when asked', async () => {

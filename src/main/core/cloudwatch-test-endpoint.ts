@@ -75,11 +75,14 @@ function limitOf(request: Request, most: number) {
   return limit
 }
 
-/** The events of a stream from `startTime` (inclusive) up to `endTime` (exclusive), as GetLogEvents and FilterLogEvents take them. */
-const eventsBetween = (events: TestLogEvent[], request: Request) => {
+/**
+ * The events of a stream from `startTime` (inclusive) up to `endTime`: exclusive, as GetLogEvents takes it, or
+ * inclusive, as FilterLogEvents does.
+ */
+const eventsBetween = (events: TestLogEvent[], request: Request, { endInclusive = false } = {}) => {
   const start = numberOf(request['startTime']) ?? -Infinity
   const end = numberOf(request['endTime']) ?? Infinity
-  return events.filter(({ timestamp }) => timestamp >= start && timestamp < end)
+  return events.filter(({ timestamp }) => timestamp >= start && (endInclusive ? timestamp <= end : timestamp < end))
 }
 
 /** Starts a stand-in CloudWatch Logs endpoint holding `groups`; with `accessKeyId`, it turns away requests signed with any other. */
@@ -172,7 +175,14 @@ export async function startTestCloudWatchEndpoint(groups: TestLogGroup[], { acce
       const named = request['logStreamNames'] as string[] | undefined
       const streams = (group.streams ?? []).filter((s) => !named || named.includes(s.name))
       const events = streams
-        .flatMap((stream) => eventsBetween(stream.events ?? [], request).map((event, i) => ({ ...event, logStreamName: stream.name, eventId: `${stream.name}/${i}` })))
+        // An event's id is its own, whatever is asked for.
+        .flatMap((stream) =>
+          eventsBetween(
+            (stream.events ?? []).map((event, i) => ({ ...event, logStreamName: stream.name, eventId: `${stream.name}/${i}` })),
+            request,
+            { endInclusive: true }
+          )
+        )
         .toSorted((a, b) => a.timestamp - b.timestamp)
       const { page, nextToken } = paged(events, request['nextToken'], limitOf(request, eventsLimit))
       return { events: page.map((event) => ({ ...event, ingestionTime: event.timestamp })), ...(nextToken && { nextToken }) }

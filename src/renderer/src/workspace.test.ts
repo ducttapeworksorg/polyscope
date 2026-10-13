@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { SourceInfo, TextFile } from '@shared/core-api'
 import {
+  addEarlierLines,
+  dropEarlier,
+  earlierOf,
   activateTab,
   canFollowFile,
   canShowPrevious,
@@ -351,5 +354,37 @@ describe('cycling through tabs', () => {
 
   it('leaves a workspace without tabs as it is', () => {
     expect(cycleTab(emptyWorkspace, 1)).toBe(emptyWorkspace)
+  })
+})
+
+describe('reading further back in a log view', () => {
+  const log = { view: 'log', of: 'logStream', path: 'g', name: 'g', offersPreviousLog: false, previous: false, restarted: false, lastNLines: 2, timestamps: false, content: 'c\nd', earlier: 'e1' } as const
+  const opened = () => openTab(emptyWorkspace, { key: 'g', source, file: { ...log, followId: 'f' } })
+  const onlyTab = (ws: Workspace) => ws.tabs[0]!
+
+  it('adds the lines read before those shown, going on from where they end', () => {
+    const once = addEarlierLines(opened(), 'g', 'e1', { content: 'b', earlier: 'e2' })
+    const twice = addEarlierLines(once, 'g', 'e2', { content: 'a' })
+
+    expect(onlyTab(once).loadedEarlier).toEqual({ content: 'b', earlier: 'e2' })
+    expect(onlyTab(twice).loadedEarlier).toEqual({ content: 'a\nb' })
+    expect(earlierOf(onlyTab(twice))).toBeUndefined()
+  })
+
+  it('adds nothing read from where the tab no longer ends, say read twice at once', () => {
+    const once = addEarlierLines(opened(), 'g', 'e1', { content: 'b', earlier: 'e2' })
+
+    expect(addEarlierLines(once, 'g', 'e1', { content: 'b', earlier: 'e2' })).toBe(once)
+  })
+
+  it('reads no further back once its Follow has dropped its first lines', () => {
+    expect(earlierOf(onlyTab(dropEarlier(opened(), 'g')))).toBeUndefined()
+  })
+
+  it('forgets the lines read further back once read again', () => {
+    const reopened = reopenLogTab(dropEarlier(addEarlierLines(opened(), 'g', 'e1', { content: 'b' }), 'g'), 'g', log)
+
+    expect(onlyTab(reopened)).not.toHaveProperty('loadedEarlier')
+    expect(earlierOf(onlyTab(reopened))).toBe('e1')
   })
 })

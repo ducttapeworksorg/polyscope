@@ -105,3 +105,17 @@ test('a CloudWatch Logs Source lists its log groups, and their streams', async (
   await expect(window.getByRole('treeitem', { name: segment('/ecs/shop') })).toBeVisible()
   await expect(window.getByRole('treeitem', { name: segment('2026/10/12/[$LATEST]abc') })).toBeVisible()
 })
+
+test('a CloudWatch log group opens as one merged log, each line saying its stream', async () => {
+  const window = await app.firstWindow()
+  const dialog = await openAddCloudWatchSource(window)
+  await dialog.getByLabel('Profile', { exact: true }).selectOption('logs')
+  await dialog.getByLabel('Name', { exact: true }).fill('Lambdas')
+  await dialog.getByRole('button', { name: 'Add Source' }).click()
+  await window.getByRole('treeitem', { name: 'Lambdas' }).click()
+
+  await window.getByRole('treeitem', { name: segment('/aws/lambda/orders') }).click({ button: 'right' })
+  await window.getByRole('menuitem', { name: 'Open log' }).click()
+
+  await expect(window.getByTestId('editor')).toContainText('[abc] START RequestId: 1')
+})

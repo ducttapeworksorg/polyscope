@@ -26,6 +26,23 @@ export interface LogConnection {
   stop(): void
 }
 
+/** How many of a log's lines to read back from where `before` says; see LogSource.readLogBack. */
+export interface LogReadBackOptions {
+  tailLines: number
+  /** Where to read back from: a `before` that readLogBack gave; the log's end when left out. */
+  before?: string
+  /** Starts each line with when it was logged, as for readLog. */
+  timestamps?: boolean
+}
+
+/** Lines read back, and where the lines before them end. */
+export interface LogReadBack {
+  /** Lines ending in '\n', at most as many as asked for. */
+  text: string
+  /** Where the lines before these end, to read them with; left out at the log's start. */
+  before?: string
+}
+
 /** The current run of what logs to a Log Stream: a container, say. */
 export interface LogStreamRun {
   /** How many times it has restarted; each new run counts one more. */
@@ -89,6 +106,12 @@ export interface LogSource {
    * run is no longer kept. Asked for a Previous Log only when the Source Type has them.
    */
   readLog(path: SourcePath, options?: LogReadOptions): Promise<string>
+  /**
+   * A Log Stream's last lines before where `before` says (as readLog's `tailLines` reads them, when left out), with
+   * where the lines before those end: from a Source Type that can read further back. Fails as readLog does. Left out
+   * by Source Types that can't.
+   */
+  readLogBack?(path: SourcePath, options: LogReadBackOptions): Promise<LogReadBack>
   /**
    * Starts following a Log Stream's current log, resolving once the backend is sending; `onText` gets
    * what arrives, in pieces that needn't end at a line break. Fails like readLog.

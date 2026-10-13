@@ -1,4 +1,5 @@
 import type {
+  EarlierLog,
   FileLog,
   FollowEndReason,
   FollowedFile,
@@ -106,6 +107,10 @@ export interface OpenTab {
   restarted?: boolean
   /** Whether a log tab's Log Stream's Source Type has Previous Logs, as last read; left out until a read has said. */
   offersPreviousLog?: boolean
+  /** A log tab's lines read further back, before its content's, as they came, and where the lines before those end. */
+  loadedEarlier?: EarlierLog
+  /** Set once a log tab's Follow dropped its first lines: lines read further back would leave a gap, so none are. */
+  earlierDropped?: true
 }
 
 /** A Follow under way in a log tab: new lines are added as they come, unless it's paused. */
@@ -203,12 +208,35 @@ export const markPodGone = (ws: Workspace, key: string, pod: string): Workspace 
 /** Marks a log tab as showing what was last read from its Log Stream, which no longer exists; its content stays. */
 export const markLogStreamGone = (ws: Workspace, key: string): Workspace => updateTab(ws, key, { logStreamGone: true })
 
+/** Two pieces of a log, one after the other, either of which may have no lines. */
+export const joinLines = (first: string, second: string) => (first && second ? `${first}\n${second}` : first || second)
+
+/** Where the lines before a log tab's first end, if it can read them: from a Source Type that can read further back. */
+export function earlierOf({ file, loadedEarlier, earlierDropped }: Pick<OpenTab, 'file' | 'loadedEarlier' | 'earlierDropped'>): string | undefined {
+  if (earlierDropped || file.view !== 'log' || file.of !== 'logStream') return undefined
+  return loadedEarlier ? loadedEarlier.earlier : file.earlier
+}
+
+/**
+ * Adds lines read further back, from `earlier`, before the first a log tab shows; nothing if it has since been read
+ * again, or has had them added already.
+ */
+export function addEarlierLines(ws: Workspace, key: string, earlier: string, read: EarlierLog): Workspace {
+  const tab = ws.tabs.find((open) => open.key === key)
+  if (!tab || earlierOf(tab) !== earlier) return ws
+  const content = joinLines(read.content, tab.loadedEarlier?.content ?? '')
+  return updateTab(ws, key, { loadedEarlier: { content, ...(read.earlier !== undefined && { earlier: read.earlier }) } })
+}
+
+/** Notes that a log tab's Follow dropped its first lines, so it no longer reads further back. */
+export const dropEarlier = (ws: Workspace, key: string): Workspace => updateTab(ws, key, { earlierDropped: true })
+
 /** Puts a freshly read log in its tab, with the Follow that goes on from it, if any. Pins the tab. */
 export function reopenLogTab(ws: Workspace, key: string, file: TabContent): Workspace {
   const tab = ws.tabs.find((open) => open.key === key)
   if (!tab) return ws
-  // Read afresh, so from a Log Stream that's there.
-  const { logStreamGone: _, ...reopened } = tab
+  // Read afresh, so from a Log Stream that's there, and with only the lines just read.
+  const { logStreamGone: _, loadedEarlier: __, earlierDropped: ___, ...reopened } = tab
   const fresh = { ...reopened, file, follow: followOf(file), ...restartedOf(file), pinned: true }
   return { ...ws, tabs: ws.tabs.map((open) => (open === tab ? fresh : open)) }
 }

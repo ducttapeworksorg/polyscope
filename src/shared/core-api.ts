@@ -528,8 +528,6 @@ export interface LogGroupNode extends LogNodeBase {
   kubernetes?: KubernetesLogGroup
   /** What the group is, in a Docker Logs Source. */
   docker?: DockerLogGroup
-  /** What the group is, in a CloudWatch Logs Source. */
-  cloudwatch?: CloudWatchLogGroup
 }
 
 /** A Log Stream in a Log Source's tree: what opens in a log view. */
@@ -543,8 +541,8 @@ export interface LogStreamNode extends LogNodeBase {
   kubernetes?: KubernetesLogStream
   /** What the Log Stream is, in a Docker Logs Source. */
   docker?: DockerLogStream
-  /** What the Log Stream is, in a CloudWatch Logs Source. */
-  cloudwatch?: CloudWatchLogStream
+  /** What the Log Stream is, in a CloudWatch Logs Source: a log stream, or a log group, its streams merged. */
+  cloudwatch?: CloudWatchLogStream | CloudWatchLogGroup
 }
 
 /** The kinds of Workload a Kubernetes Logs Source groups its tree by; a Pod stands for a pod no Workload owns. */
@@ -602,7 +600,10 @@ export interface DockerLogStream {
   finishedAt?: number
 }
 
-/** What a group is in a CloudWatch Logs Source: a log group, holding its log streams, newest event first. */
+/**
+ * What a Log Stream with children is in a CloudWatch Logs Source: a log group, holding its log streams, newest event
+ * first, whose log is theirs merged, interleaved by time, each line starting with a short form of its stream's name.
+ */
 export interface CloudWatchLogGroup {
   kind: 'logGroup'
   /** How many bytes of events it holds, as CloudWatch last worked it out. */
@@ -847,6 +848,29 @@ export interface LogSnapshot {
   timestamps: boolean
   /** The lines, joined by '\n', without a final line break. */
   content: string
+  /**
+   * Where the lines before these end, to read them with readEarlierLog; left out when there are none, or when its
+   * Source Type can't read further back.
+   */
+  earlier?: string
+}
+
+/** How many of the lines before those a log view shows to read; see readEarlierLog. */
+export interface EarlierLogOptions {
+  /** Where they end: the `earlier` of the snapshot, or of the lines read further back last. */
+  earlier: string
+  /** How many to read; at most that many come. */
+  lines: number
+  /** Starts each line with when it was logged, as the snapshot's do. */
+  timestamps?: boolean
+}
+
+/** Lines of a Log Stream before those a log view shows. */
+export interface EarlierLog {
+  /** The lines, joined by '\n', without a final line break. */
+  content: string
+  /** Where the lines before these end; left out at the log's start. */
+  earlier?: string
 }
 
 export interface OpenLogOptions {
@@ -1118,6 +1142,11 @@ export interface CoreApi {
    */
   openLog(sourceId: string, path: SourcePath, options?: OpenLogOptions): Promise<LogSnapshot>
   /**
+   * Reads a Log Stream's lines before those a log view shows, from where its snapshot's (or the last lines read this
+   * way's) `earlier` says. Fails with LOG_UNAVAILABLE when its Source Type can't read further back.
+   */
+  readEarlierLog(sourceId: string, path: SourcePath, options: EarlierLogOptions): Promise<EarlierLog>
+  /**
    * Opens a Log Stream like openLog, and Follows it from its last line: what comes next arrives as
    * FollowEvents with the returned `followId`, until the Follow is stopped or ends by itself (disconnecting
    * its Source ends it). From a Source Type with restarts, the Follow goes on with each new run; from one
@@ -1217,6 +1246,7 @@ export const coreMethods: readonly CoreMethod[] = [
   'cancelLargeFileSearch',
   'closeLargeFile',
   'openLog',
+  'readEarlierLog',
   'followLog',
   'openFileLog',
   'followFile',
