@@ -80,6 +80,23 @@ export function describeLogSourceContract(name: string, capabilities: LogCapabil
         }
       })
 
+      it('lists a page at a time, if it does, its pages together listing every child in turn', async () => {
+        const { logSource, counter } = await subject()
+        if (!logSource.listPage) return
+        for (const path of ['', parentOf(counter)]) {
+          const paged: LogNode[] = []
+          let cursor: string | undefined
+          do {
+            const page = await logSource.listPage(path, cursor)
+            paged.push(...page.nodes)
+            cursor = page.cursor
+          } while (cursor !== undefined)
+          // Only what names them: how they're doing may change between the listings.
+          const names = (nodes: LogNode[]) => nodes.map(({ kind, name, path }) => ({ kind, name, path }))
+          expect(names(paged), path).toEqual(names(await logSource.listChildren(path)))
+        }
+      })
+
       it('lists the counter Log Stream', async () => {
         const { logSource, counter } = await subject()
         const siblings = await logSource.listChildren(parentOf(counter))

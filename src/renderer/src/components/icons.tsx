@@ -115,6 +115,14 @@ export const ContainerIcon = () => (
   </svg>
 )
 
+/** A cloud with lines of log under it, for CloudWatch Logs (never the AWS logo). */
+export const CloudWatchLogsIcon = () => (
+  <svg {...base}>
+    <path d="M4.5 8.25a2.5 2.5 0 01.2-4.95 3.5 3.5 0 016.6.6 2.2 2.2 0 01.2 4.35z" />
+    <path d="M3.25 11h9.5M3.25 13.75h6.5" />
+  </svg>
+)
+
 /** Lines of text, for a Log Stream. */
 export const LogIcon = () => (
   <svg {...base}>

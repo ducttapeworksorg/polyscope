@@ -194,6 +194,7 @@ flowchart TB
     KF["kubernetes-file-source<br/>→ shell-file-source over pod exec"]
     KL["kubernetes-log-source<br/>Kubernetes API"]
     DL["docker-log-source<br/>Docker Engine API"]
+    CW["cloudwatch-log-source<br/>AWS SDK"]
   end
 
   Facade --> Stores
@@ -206,6 +207,7 @@ flowchart TB
   OS --> S3 & Azure
   LS --> KL
   LS --> DL
+  LS --> CW
 ```
 
 #### The façade: `core.ts`
@@ -239,8 +241,9 @@ Each interface has a **contract test suite** (`file-source-contract.ts`, `log-so
 | Kubernetes Files | `kubernetes-file-source.ts` → `shell-file-source.ts` + `kubernetes-exec.ts` | Finds the Workload's pods through the Kubernetes API, then runs small POSIX `sh` scripts (`stat`, `dd`…) in the container over the exec API, as `kubectl exec` does |
 | Kubernetes Logs | `kubernetes-log-source.ts` | Kubernetes API: lists Workloads, pods and containers; reads and streams container logs |
 | Docker Logs | `docker-log-source.ts` | Docker Engine HTTP API over the engine its Docker context reaches (`docker-contexts.ts`: a Unix socket, a named pipe, TCP with the context's TLS material, or an `ssh://` host, where `docker-ssh.ts` runs `docker system dial-stdio` on channels of an SSH connection from `ssh-connection.ts`, a few kept open for short requests and one per Follow), its version agreed from `/version`: lists every container, grouped by its Compose labels, inspecting those listed for their Container Status (`container-status.ts`) and restarts, and reads and streams its log, taking apart the frames stdout and stderr are multiplexed into unless it has a TTY. A Follow carries on across restarts, from the end of the last run; a log driver the engine can't read back gives LOG_UNAVAILABLE naming it |
+| CloudWatch Logs | `cloudwatch-log-source.ts` | `@aws-sdk/client-cloudwatch-logs`, signing in as S3 does (`aws-sign-in.ts`), and only through the APIs not billed per use (ADR 0008): `DescribeLogGroups` and `DescribeLogStreams` list log groups and their streams a page at a time, newest event first; `GetLogEvents` reads a stream from either end. Names stand in path segments with the division slash (∕) in place of `/` |
 
-Supporting modules: `kubeconfig.ts` (loads `KUBECONFIG` or `~/.kube/config`), `kubernetes-api.ts` (shared API helpers and error mapping), `pod-status.ts` (Pod Status and Ready Count), `container-status.ts` (Container Status, and a Docker container's current run), `docker-contexts.ts` (the Docker CLI's contexts, and the engine a context or `DOCKER_HOST` reaches), `rbac.ts`, `aws-profiles.ts`, `proxy-env.ts`, `network-errors.ts`, `network-agents.ts` (the agents S3 and Azure Blob Storage requests go out through: a CA bundle trusted, and a Source's proxy or `HTTPS_PROXY`/`NO_PROXY`).
+Supporting modules: `kubeconfig.ts` (loads `KUBECONFIG` or `~/.kube/config`), `kubernetes-api.ts` (shared API helpers and error mapping), `pod-status.ts` (Pod Status and Ready Count), `container-status.ts` (Container Status, and a Docker container's current run), `docker-contexts.ts` (the Docker CLI's contexts, and the engine a context or `DOCKER_HOST` reaches), `rbac.ts`, `aws-profiles.ts`, `aws-sign-in.ts`, `proxy-env.ts`, `network-errors.ts`, `network-agents.ts` (the agents S3 and Azure Blob Storage requests go out through: a CA bundle trusted, and a Source's proxy or `HTTPS_PROXY`/`NO_PROXY`).
 
 `object-store-file-source.ts` is a `FileSource` built on any store keeping objects by key: it shows key prefixes up to a `/` as folders, pages listings, and lists an object and a prefix sharing a name as a file and a folder. S3 and Azure Blob Storage each adapt their SDK to its small `ObjectStore` interface.
 

@@ -3,10 +3,19 @@
 
 import type { Settings } from './settings'
 
-export type SourceTypeId = 'local' | 'sshFiles' | 's3' | 'azureBlob' | 'kubernetesFiles' | 'kubernetesLogs' | 'dockerLogs'
+export type SourceTypeId = 'local' | 'sshFiles' | 's3' | 'azureBlob' | 'kubernetesFiles' | 'kubernetesLogs' | 'dockerLogs' | 'cloudwatchLogs'
 
 /** Every Source Type, in the default order of its sidebar group. */
-export const sourceTypeIds: readonly SourceTypeId[] = ['local', 'sshFiles', 's3', 'azureBlob', 'kubernetesFiles', 'kubernetesLogs', 'dockerLogs']
+export const sourceTypeIds: readonly SourceTypeId[] = [
+  'local',
+  'sshFiles',
+  's3',
+  'azureBlob',
+  'kubernetesFiles',
+  'kubernetesLogs',
+  'dockerLogs',
+  'cloudwatchLogs'
+]
 
 export interface NewLocalSource {
   type: 'local'
@@ -31,7 +40,7 @@ export interface NewS3Source {
   /** Addresses the bucket in the path rather than the host name, as MinIO and most self-hosted stores need; off unless given. */
   pathStyle?: boolean
   /** How the Source signs in: typed keys, or an AWS profile. Keys unless given. */
-  auth?: S3Auth
+  auth?: AwsAuth
   /** Signing in with keys: needed then, ignored otherwise. */
   accessKeyId?: string
   /**
@@ -156,6 +165,30 @@ export interface NewDockerLogsSource {
   environmentId?: string
 }
 
+export interface NewCloudWatchLogsSource {
+  type: 'cloudwatchLogs'
+  name: string
+  /** The one AWS region whose log groups the Source shows, e.g. `eu-west-1`. */
+  region: string
+  /** Shows only the log groups whose names start with it, e.g. `/aws/lambda/orders-`; all of them when blank or left out. */
+  prefix?: string
+  /** How the Source signs in, as an S3 Source does: typed keys, or an AWS profile. A profile unless given. */
+  auth?: AwsAuth
+  /** Signing in with keys: needed then, ignored otherwise. */
+  accessKeyId?: string
+  /** Signing in with keys: kept as an S3 Source's is. Blank or left out when editing keeps the stored one. */
+  secretAccessKey?: string
+  /** Signing in with a profile: its name in the local AWS config, SSO ones included; the default credential chain when blank or left out. */
+  profile?: string
+  /**
+   * The CloudWatch Logs endpoint, e.g. a VPC endpoint's `https://vpce-….logs.eu-west-1.vpce.amazonaws.com`; the region's
+   * own (or AWS_ENDPOINT_URL_CLOUDWATCH_LOGS's) when blank or left out. https is assumed without a scheme.
+   */
+  endpoint?: string
+  /** The Environment the Source is labelled with; unlabelled when left out. */
+  environmentId?: string
+}
+
 /** The kinds of Workload a Kubernetes Files Source can browse: those whose pods run for good. */
 export type FilesWorkloadKind = Extract<WorkloadKind, 'Deployment' | 'StatefulSet' | 'DaemonSet'>
 
@@ -184,8 +217,11 @@ export interface NewKubernetesFilesSource {
   environmentId?: string
 }
 
-/** How an S3 Source signs in: typed access and secret keys, or an AWS profile (or the default credential chain). */
-export type S3Auth = 'keys' | 'profile'
+/** How a Source on AWS signs in: typed access and secret keys, or an AWS profile (or the default credential chain). */
+export type AwsAuth = 'keys' | 'profile'
+
+/** How a Source on AWS signs in unless told: an S3 Source with keys, as most S3-compatible stores have no profiles; a CloudWatch Logs Source with a profile. */
+export const defaultAwsAuth = (type: 's3' | 'cloudwatchLogs'): AwsAuth => (type === 's3' ? 'keys' : 'profile')
 
 /**
  * How an Azure Blob Storage Source signs in: a connection string or a SAS, both kept in the OS keychain, or as yourself
@@ -208,6 +244,7 @@ export type NewSource =
   | NewKubernetesFilesSource
   | NewKubernetesLogsSource
   | NewDockerLogsSource
+  | NewCloudWatchLogsSource
 
 /** How many of a log's last lines a log view fetches and keeps: a number of lines, or all of them. */
 export type LastNLines = number | 'all'
@@ -239,7 +276,7 @@ export interface S3SourceInfo extends SourceIdentity {
   prefix: string
   region: string
   pathStyle: boolean
-  auth: S3Auth
+  auth: AwsAuth
   /** Blank when signing in with a profile. */
   accessKeyId: string
   /** Whether a secret key is stored for the Source; the key itself never leaves the core. Always false when signing in with a profile. */
@@ -311,6 +348,22 @@ export interface DockerLogsSourceInfo extends SourceIdentity {
   passwordSet: boolean
 }
 
+export interface CloudWatchLogsSourceInfo extends SourceIdentity {
+  type: 'cloudwatchLogs'
+  region: string
+  /** Blank for every log group. */
+  prefix: string
+  auth: AwsAuth
+  /** Blank when signing in with a profile. */
+  accessKeyId: string
+  /** Whether a secret key is stored for the Source; the key itself never leaves the core. Always false when signing in with a profile. */
+  secretKeySet: boolean
+  /** Blank for the default credential chain, and when signing in with keys. */
+  profile: string
+  /** Normalised: a URL with its scheme, or blank for the region's own. */
+  endpoint: string
+}
+
 export interface KubernetesFilesSourceInfo extends SourceIdentity {
   type: 'kubernetesFiles'
   context: string
@@ -329,6 +382,7 @@ export type SourceInfo =
   | KubernetesFilesSourceInfo
   | KubernetesLogsSourceInfo
   | DockerLogsSourceInfo
+  | CloudWatchLogsSourceInfo
 
 /** A context in the user's kubeconfig, as offered when adding a Kubernetes Source. */
 export interface KubeContext {
@@ -474,6 +528,8 @@ export interface LogGroupNode extends LogNodeBase {
   kubernetes?: KubernetesLogGroup
   /** What the group is, in a Docker Logs Source. */
   docker?: DockerLogGroup
+  /** What the group is, in a CloudWatch Logs Source. */
+  cloudwatch?: CloudWatchLogGroup
 }
 
 /** A Log Stream in a Log Source's tree: what opens in a log view. */
@@ -487,6 +543,8 @@ export interface LogStreamNode extends LogNodeBase {
   kubernetes?: KubernetesLogStream
   /** What the Log Stream is, in a Docker Logs Source. */
   docker?: DockerLogStream
+  /** What the Log Stream is, in a CloudWatch Logs Source. */
+  cloudwatch?: CloudWatchLogStream
 }
 
 /** The kinds of Workload a Kubernetes Logs Source groups its tree by; a Pod stands for a pod no Workload owns. */
@@ -542,6 +600,32 @@ export interface DockerLogStream {
   startedAt?: number
   /** Milliseconds since the epoch at which it exited, when it isn't running; left out while it is. */
   finishedAt?: number
+}
+
+/** What a group is in a CloudWatch Logs Source: a log group, holding its log streams, newest event first. */
+export interface CloudWatchLogGroup {
+  kind: 'logGroup'
+  /** How many bytes of events it holds, as CloudWatch last worked it out. */
+  storedBytes?: number
+  /** How many days it keeps its events; left out when it keeps them for ever. */
+  retentionDays?: number
+}
+
+/**
+ * A CloudWatch log group's or stream's name as its path segment, and so its node's name: '/' stands in it as the
+ * division slash (∕), which looks like it, as log groups' names are full of them and streams' often have some. A stream
+ * whose own name has a division slash can't be told apart, so isn't found.
+ */
+export const cloudWatchSegment = (name: string) => name.replaceAll('/', '\u2215')
+
+/** The name of the CloudWatch log group or stream a path segment stands for; see cloudWatchSegment. */
+export const cloudWatchNameOf = (segment: string) => segment.replaceAll('\u2215', '/')
+
+/** What a Log Stream is in a CloudWatch Logs Source: a log stream of a log group. */
+export interface CloudWatchLogStream {
+  kind: 'logStream'
+  /** Milliseconds since the epoch of its newest event; left out while it has none. */
+  lastEventTime?: number
 }
 
 /** How many of a Workload's pods are ready, out of how many it wants. */
@@ -869,6 +953,8 @@ export type CoreErrorCode =
   | 'ACCESS_KEY_REQUIRED'
   | 'SECRET_KEY_REQUIRED'
   | 'BUCKET_NOT_FOUND'
+  /** A CloudWatch Logs Source without a region. */
+  | 'REGION_REQUIRED'
   | 'ACCOUNT_REQUIRED'
   | 'CONTAINER_REQUIRED'
   | 'CONNECTION_STRING_REQUIRED'
@@ -1064,6 +1150,11 @@ export interface CoreApi {
   rememberLastNLines(sourceId: string, lastNLines: LastNLines | null): Promise<void>
   /** The profiles in the local AWS config and credentials files, by name, `default` first; none if there are no such files. */
   listAwsProfiles(): Promise<string[]>
+  /**
+   * The region a local AWS profile names, as the AWS CLI would use it; for blank, the default credential chain's
+   * (AWS_REGION, or else the default profile's). Blank if none is named.
+   */
+  awsProfileRegion(profile: string): Promise<string>
   /** The Host aliases in the user's `~/.ssh/config` (and the files it Includes), in the order they come, with what it says about each. */
   listSshHosts(): Promise<SshHost[]>
   /** The contexts in the user's kubeconfig (KUBECONFIG, or ~/.kube/config), by name; none if there is no kubeconfig. */
@@ -1134,6 +1225,7 @@ export const coreMethods: readonly CoreMethod[] = [
   'stopFollow',
   'rememberLastNLines',
   'listAwsProfiles',
+  'awsProfileRegion',
   'listSshHosts',
   'listKubeContexts',
   'listKubeNamespaces',
