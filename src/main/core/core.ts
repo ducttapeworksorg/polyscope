@@ -45,6 +45,7 @@ import type {
   SourceTypeId,
   SshAuth,
   SshFilesSourceInfo,
+  SystemdJournalSourceInfo,
   TextEncoding,
   FileLogOptions,
   TreeNode
@@ -80,6 +81,7 @@ import { listNamespaces } from './kubernetes-api'
 import { createKubernetesFileSource, listWorkloads } from './kubernetes-file-source'
 import { createKubernetesLogSource } from './kubernetes-log-source'
 import { createHostKeyStore } from './host-keys'
+import { createJournalLogSource, thisMachine } from './journal-log-source'
 import { languageFor } from './languages'
 import { chunksOf, openLargeFile, readLastLinesBytes, lastLinesOf, type OpenLargeFile } from './large-file'
 import { createLargeFileCache } from './large-file-cache'
@@ -143,6 +145,7 @@ function withDefaults(saved: SavedSource): SavedSource {
       return { ...source, caBundlePath: source.caBundlePath ?? '', proxyUrl: source.proxyUrl ?? '' }
     case 'kubernetesFiles':
     case 'kubernetesLogs':
+    case 'systemdJournal':
       return source
   }
 }
@@ -160,6 +163,7 @@ type Target =
   | Pick<KubernetesLogsSourceInfo, 'type' | 'context' | 'namespace'>
   | Pick<DockerLogsSourceInfo, 'type' | 'context' | 'auth' | 'keyFile'>
   | Omit<CloudWatchLogsSourceInfo, 'id' | 'name' | 'environmentId' | 'lastNLines' | 'secretKeySet'>
+  | Pick<SystemdJournalSourceInfo, 'type' | 'target'>
 
 type S3Settings = Extract<Target, { type: 's3' }>
 type CloudWatchSettings = Extract<Target, { type: 'cloudwatchLogs' }>
@@ -296,6 +300,11 @@ function targetOf(input: NewSource): Target {
   if (input.type === 'sshFiles') return sshTargetOf(input)
   if (input.type === 'azureBlob') return azureBlobTargetOf(input)
   if (input.type === 'cloudwatchLogs') return cloudWatchTargetOf(input)
+  if (input.type === 'systemdJournal') {
+    // This machine is the only target so far, and has a journal only on Linux.
+    if (process.platform !== 'linux') throw new CoreError('NO_JOURNAL', 'Only Linux has a systemd journal, and this machine isn’t running it')
+    return { type: 'systemdJournal', target: 'thisMachine' }
+  }
   const s3: NewS3Source = input
   // Blank for AWS itself; a store is most likely https, a proxy http.
   const host = normaliseUrl(s3.host ?? '', 'https', 'INVALID_HOST')
@@ -1137,6 +1146,7 @@ export function createCore(options: CoreOptions = {}): Core {
       backend = { kind: 'logs', logSource: engine.logSource }
       serverVersion = engine.version
     } else if (target.type === 'cloudwatchLogs') backend = { kind: 'logs', logSource: createCloudWatchLogSource(await cloudWatchTargetReadIn(target, secret)) }
+    else if (target.type === 'systemdJournal') backend = { kind: 'logs', logSource: createJournalLogSource(thisMachine) }
     else backend = { kind: 'logs', logSource: await reachKubernetes(target) }
     try {
       return { backend, nodes: await listBackend(backend, ''), ...(serverVersion !== undefined && { serverVersion }) }
@@ -1184,8 +1194,8 @@ export function createCore(options: CoreOptions = {}): Core {
       await reachLocal(target)
       return { saved: { ...target, name, ...label } }
     }
-    // Nor is a cluster or an engine: it may be away, or its context not in the kubeconfig yet.
-    if (target.type === 'kubernetesLogs' || target.type === 'kubernetesFiles') return { saved: { ...target, name, ...label } }
+    // Nor is a cluster or an engine: it may be away, or its context not in the kubeconfig yet. A journal holds no secret.
+    if (target.type === 'kubernetesLogs' || target.type === 'kubernetesFiles' || target.type === 'systemdJournal') return { saved: { ...target, name, ...label } }
     // A Source on AWS, an SSH Files or a Docker Logs Source isn't reached until it's connected: it may be saved while
     // its server, or its engine's ssh:// host, is away.
     const typed = await secretFor(input)
@@ -1633,6 +1643,8 @@ export function createCore(options: CoreOptions = {}): Core {
     },
 
     listDockerContexts: () => listDockerContexts(),
+
+    platform: async () => process.platform,
 
     async getSettings() {
       await settingsLoaded

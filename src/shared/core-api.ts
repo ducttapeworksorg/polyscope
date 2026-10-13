@@ -3,7 +3,16 @@
 
 import type { Settings } from './settings'
 
-export type SourceTypeId = 'local' | 'sshFiles' | 's3' | 'azureBlob' | 'kubernetesFiles' | 'kubernetesLogs' | 'dockerLogs' | 'cloudwatchLogs'
+export type SourceTypeId =
+  | 'local'
+  | 'sshFiles'
+  | 's3'
+  | 'azureBlob'
+  | 'kubernetesFiles'
+  | 'kubernetesLogs'
+  | 'dockerLogs'
+  | 'cloudwatchLogs'
+  | 'systemdJournal'
 
 /** Every Source Type, in the default order of its sidebar group. */
 export const sourceTypeIds: readonly SourceTypeId[] = [
@@ -14,7 +23,8 @@ export const sourceTypeIds: readonly SourceTypeId[] = [
   'kubernetesFiles',
   'kubernetesLogs',
   'dockerLogs',
-  'cloudwatchLogs'
+  'cloudwatchLogs',
+  'systemdJournal'
 ]
 
 export interface NewLocalSource {
@@ -193,6 +203,18 @@ export interface NewCloudWatchLogsSource {
   environmentId?: string
 }
 
+/** Whose journal a systemd Journal Source reads: this machine's, the one the core runs on (only on Linux). */
+export type JournalTarget = 'thisMachine'
+
+export interface NewSystemdJournalSource {
+  type: 'systemdJournal'
+  name: string
+  /** This machine unless given. */
+  target?: JournalTarget
+  /** The Environment the Source is labelled with; unlabelled when left out. */
+  environmentId?: string
+}
+
 /** The kinds of Workload a Kubernetes Files Source can browse: those whose pods run for good. */
 export type FilesWorkloadKind = Extract<WorkloadKind, 'Deployment' | 'StatefulSet' | 'DaemonSet'>
 
@@ -249,6 +271,7 @@ export type NewSource =
   | NewKubernetesLogsSource
   | NewDockerLogsSource
   | NewCloudWatchLogsSource
+  | NewSystemdJournalSource
 
 /** How many of a log's last lines a log view fetches and keeps: a number of lines, or all of them. */
 export type LastNLines = number | 'all'
@@ -372,6 +395,11 @@ export interface CloudWatchLogsSourceInfo extends SourceIdentity {
   proxyUrl: string
 }
 
+export interface SystemdJournalSourceInfo extends SourceIdentity {
+  type: 'systemdJournal'
+  target: JournalTarget
+}
+
 export interface KubernetesFilesSourceInfo extends SourceIdentity {
   type: 'kubernetesFiles'
   context: string
@@ -391,6 +419,7 @@ export type SourceInfo =
   | KubernetesLogsSourceInfo
   | DockerLogsSourceInfo
   | CloudWatchLogsSourceInfo
+  | SystemdJournalSourceInfo
 
 /** A context in the user's kubeconfig, as offered when adding a Kubernetes Source. */
 export interface KubeContext {
@@ -551,6 +580,8 @@ export interface LogStreamNode extends LogNodeBase {
   docker?: DockerLogStream
   /** What the Log Stream is, in a CloudWatch Logs Source: a log stream, or a log group, its streams merged. */
   cloudwatch?: CloudWatchLogStream | CloudWatchLogGroup
+  /** What the Log Stream is, in a systemd Journal Source: a system unit. */
+  systemd?: SystemdUnit
 }
 
 /** The kinds of Workload a Kubernetes Logs Source groups its tree by; a Pod stands for a pod no Workload owns. */
@@ -635,6 +666,16 @@ export interface CloudWatchLogStream {
   kind: 'logStream'
   /** Milliseconds since the epoch of its newest event; left out while it has none. */
   lastEventTime?: number
+}
+
+/**
+ * What a Log Stream is in a systemd Journal Source: a system unit that has journal entries of its own, named as systemd
+ * names it, its type the end of its name (`nginx.service`, `logrotate.timer`). Its status is its active state.
+ */
+export interface SystemdUnit {
+  kind: 'unit'
+  /** What systemd says it is, e.g. `The nginx HTTP and reverse proxy server`; left out for a unit systemd no longer has loaded. */
+  description?: string
 }
 
 /** How many of a Workload's pods are ready, out of how many it wants. */
@@ -1079,6 +1120,8 @@ export type CoreErrorCode =
   | 'UNSUPPORTED_DOCKER_HOST'
   /** An `ssh://` Docker host without the `docker` command, or with none on the signed-in user's PATH. */
   | 'DOCKER_NOT_FOUND'
+  /** A machine with no systemd journal to read: not Linux, or without `journalctl`. */
+  | 'NO_JOURNAL'
   | 'UNKNOWN'
 
 /** What a connection test that passed found out. */
@@ -1214,6 +1257,11 @@ export interface CoreApi {
   listKubeWorkloads(context: string, namespace: string): Promise<KubeWorkload[]>
   /** The contexts in the Docker CLI's config folder (DOCKER_CONFIG, or ~/.docker), by name; none if there are none. */
   listDockerContexts(): Promise<DockerContext[]>
+  /**
+   * The OS the core runs on, as Node names it (`linux`, `darwin`, `win32`…): in an Extension Copy, the machine its
+   * extension host runs on, a Remote-SSH window's server.
+   */
+  platform(): Promise<string>
   getSettings(): Promise<Settings>
   /** Changes the given settings, keeping the rest; all of them together must still be valid. */
   updateSettings(changes: Partial<Settings>): Promise<Settings>
@@ -1278,6 +1326,7 @@ export const coreMethods: readonly CoreMethod[] = [
   'listKubeNamespaces',
   'listKubeWorkloads',
   'listDockerContexts',
+  'platform',
   'getSettings',
   'updateSettings'
 ]

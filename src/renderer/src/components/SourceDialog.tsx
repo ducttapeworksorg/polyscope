@@ -1,9 +1,9 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { sourceTypeIds, type Environment, type HostKey, type NewSource, type SourceInfo, type SourceTypeId } from '@shared/core-api'
 import { core, CoreCallError, describeError } from '../core-client'
 import { environmentOf } from '../environments'
 import { t } from '../i18n'
-import { uiFor } from '../source-types'
+import { offeredOn, uiFor } from '../source-types'
 import { useModalDialog } from './use-modal-dialog'
 
 interface Props {
@@ -35,6 +35,11 @@ export function SourceDialog({ editing, environments, onManageEnvironments, onSa
   const [busy, setBusy] = useState(false)
   const [test, setTest] = useState<TestRun | null>(null)
   const ui = uiFor(settings.type)
+  // The OS the core runs on, which decides which Source Types can be added: those it decides are left out until it's known.
+  const [platform, setPlatform] = useState<string>()
+  useEffect(() => {
+    void core.platform().then(setPlatform, () => undefined)
+  }, [])
 
   // A test result only speaks for the settings it was run with.
   const change = (next: NewSource) => {
@@ -98,7 +103,7 @@ export function SourceDialog({ editing, environments, onManageEnvironments, onSa
                 change(labelled({ ...uiFor(type).blank(), name: settings.name }, settings.environmentId))
               }}
             >
-              {sourceTypeIds.map((type) => (
+              {sourceTypeIds.filter((type) => type === settings.type || offeredOn(type, platform)).map((type) => (
                 <option key={type} value={type}>
                   {t(uiFor(type).label)}
                 </option>

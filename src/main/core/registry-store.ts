@@ -9,7 +9,8 @@ import {
   type LocalSourceInfo,
   type S3SourceInfo,
   type SourceTypeId,
-  type SshFilesSourceInfo
+  type SshFilesSourceInfo,
+  type SystemdJournalSourceInfo
 } from '@shared/core-api'
 import { jsonFileWriter, readJsonFile } from './json-file'
 
@@ -23,6 +24,7 @@ export type SavedSource =
   | KubernetesLogsSourceInfo
   | DockerLogsSourceInfo
   | Omit<CloudWatchLogsSourceInfo, 'secretKeySet'>
+  | SystemdJournalSourceInfo
 
 /** Everything the user configured about their Sources, as saved between launches. */
 export interface Registry {

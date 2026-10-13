@@ -61,6 +61,7 @@ export const core: CoreApi & CoreEvents = {
   listKubeNamespaces: call('listKubeNamespaces'),
   listKubeWorkloads: call('listKubeWorkloads'),
   listDockerContexts: call('listDockerContexts'),
+  platform: call('platform'),
   getSettings: call('getSettings'),
   updateSettings: call('updateSettings'),
   onSettingsChanged: (listener) => window.polyscope.onSettingsChanged(listener),

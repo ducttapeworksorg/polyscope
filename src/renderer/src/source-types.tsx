@@ -19,12 +19,23 @@ import {
   type SourcePath,
   type SourceTypeId,
   type SshAuth,
-  type SshFilesSourceInfo
+  type SshFilesSourceInfo,
+  type SystemdJournalSourceInfo
 } from '@shared/core-api'
 import { awsRegions } from '@shared/aws-regions'
 import { parseSas } from '@shared/azure-sas'
 import { ComboBox } from './components/ComboBox'
-import { BlobStorageIcon, BucketIcon, CloudWatchLogsIcon, DockerLogsIcon, HardDriveIcon, KubernetesFilesIcon, KubernetesLogsIcon, TerminalIcon } from './components/icons'
+import {
+  BlobStorageIcon,
+  BucketIcon,
+  CloudWatchLogsIcon,
+  DockerLogsIcon,
+  HardDriveIcon,
+  KubernetesFilesIcon,
+  KubernetesLogsIcon,
+  SystemdJournalIcon,
+  TerminalIcon
+} from './components/icons'
 import { core, describeError } from './core-client'
 import { t, type MessageKey } from './i18n'
 
@@ -916,6 +927,38 @@ function enginePath({ context }: DockerLogsSourceInfo, path: SourcePath) {
   return `${context}: ${segments[0] === dockerStandaloneGroup || segments.length === 3 ? segments.at(-1) : path}`
 }
 
+type SystemdJournalSettings = Extract<NewSource, { type: 'systemdJournal' }>
+
+/** Whose journal a systemd Journal Source reads: so far only this machine's, which is only offered on Linux. */
+function SystemdJournalFields({ value, onChange }: FieldsProps<SystemdJournalSettings>) {
+  // A new Source is named after its target.
+  useEffect(() => {
+    if (!value.name.trim()) onChange({ ...value, name: t('journalSource.defaultName') })
+    // Named once, when the fields appear.
+  }, [])
+
+  return (
+    <div className="field">
+      <span className="field__label" id="journal-target-label">
+        {t('journalSource.target')}
+      </span>
+      <div className="segmented" role="radiogroup" aria-labelledby="journal-target-label">
+        <label className="segmented__option">
+          <input type="radio" name="journal-target" value="thisMachine" checked onChange={() => onChange({ ...value, target: 'thisMachine' })} />
+          {t('journalSource.target.thisMachine')}
+        </label>
+      </div>
+      <span className="field__hint">{t('journalSource.target.thisMachine.hint')}</span>
+    </div>
+  )
+}
+
+/** Where a systemd Journal Source's unit is: its machine, then the unit's name, which is how journalctl knows it. */
+function unitPath(_source: SystemdJournalSourceInfo, path: SourcePath) {
+  const machine = t('journalSource.target.thisMachine')
+  return path ? `${machine}: ${path}` : machine
+}
+
 /** Where a Source path is in its bucket, as an `s3://` URL. */
 function objectUrl({ bucket, prefix }: S3SourceInfo, path: SourcePath) {
   return `s3://${bucket}/${[prefix, path].filter(Boolean).join('/')}`
@@ -1098,8 +1141,23 @@ export const sourceTypeUi: SourceTypeUis = {
     }),
     fullPath: regionPath,
     Fields: CloudWatchLogsFields
+  },
+  systemdJournal: {
+    label: 'sourceType.systemdJournal',
+    hint: 'sourceType.systemdJournal.hint',
+    Icon: SystemdJournalIcon,
+    blank: () => ({ type: 'systemdJournal', name: '', target: 'thisMachine' }),
+    settingsOf: ({ name, target }) => ({ type: 'systemdJournal', name, target }),
+    fullPath: unitPath,
+    Fields: SystemdJournalFields
   }
 }
+
+/**
+ * Whether a Source Type can be added where the core runs (`platform`, as Node names it, or undefined while it isn't
+ * known): systemd Journal only once it's known to be Linux.
+ */
+export const offeredOn = (type: SourceTypeId, platform: string | undefined) => type !== 'systemdJournal' || platform === 'linux'
 
 /**
  * Where a Source points, as a string that changes whenever anything but its name, label, secrets or remembered
