@@ -370,6 +370,9 @@ export const en = {
 
   'logView.lastNLines': 'Last N lines',
   'logView.choice.all': 'All',
+  'logView.loadEarlier': 'Load earlier',
+  'logView.loadEarlier.tooltip': 'Show the {count} lines before the first one shown',
+  'logView.loadEarlier.tooltip.one': 'Show the line before the first one shown',
   'logView.typed': 'Number of lines',
   'logView.tooLarge': 'The whole log is larger than the Large File threshold ({size}). Showing all of it may slow Polyscope down.',
   'logView.showAll': 'Show all anyway',

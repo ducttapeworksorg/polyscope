@@ -46,6 +46,7 @@ export const core: CoreApi & CoreEvents = {
   cancelLargeFileSearch: call('cancelLargeFileSearch'),
   closeLargeFile: call('closeLargeFile'),
   openLog: call('openLog'),
+  readEarlierLog: call('readEarlierLog'),
   followLog: call('followLog'),
   openFileLog: call('openFileLog'),
   followFile: call('followFile'),

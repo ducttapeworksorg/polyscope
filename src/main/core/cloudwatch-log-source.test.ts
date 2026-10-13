@@ -57,19 +57,19 @@ describe('CloudWatch Logs against a stand-in endpoint', () => {
   }))
 
   describe('its tree', () => {
-    it('lists log groups by name, with their size and retention, and never folds in their only stream', async () => {
+    it('lists log groups by name, each a log of its own with its streams under it, with their size and retention', async () => {
       const nodes = await createCloudWatchLogSource(target()).listChildren('')
 
       expect(nodes.map((node) => node.name)).toEqual(['/aws/lambda/counter', '/aws/lambda/orders', '/ecs/shop'].map(segment))
       expect(nodes[0]).toEqual({
-        kind: 'group',
+        kind: 'logStream',
         name: segment('/aws/lambda/counter'),
         path: segment('/aws/lambda/counter'),
-        unfoldable: true,
+        hasChildren: true,
         cloudwatch: { kind: 'logGroup', storedBytes: 2048, retentionDays: 14 }
       })
       expect(nodes[1]).toMatchObject({ cloudwatch: { kind: 'logGroup', storedBytes: 0 } })
-      expect(nodes[1]!.kind === 'group' && nodes[1]!.cloudwatch).not.toHaveProperty('retentionDays')
+      expect(nodes[1]!.kind === 'logStream' && nodes[1]!.cloudwatch).not.toHaveProperty('retentionDays')
     })
 
     it('lists only the log groups starting with its prefix', async () => {

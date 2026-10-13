@@ -390,7 +390,7 @@ export function SourceTree(props: Props) {
   const tooltip = (node: ShownNode) => {
     const where = uiFor(source.type).fullPath(source, node.path)
     if (isLogNode(node) && node.status) return [statusTooltip(node.path, node.status), ...dockerLines(node)].join('\n')
-    if (isLogNode(node) && node.cloudwatch) return [where, ...cloudwatchLines(node)].join('\n')
+    if (isLogNode(node) && node.kind === 'logStream' && node.cloudwatch) return [where, ...cloudwatchLines(node.cloudwatch)].join('\n')
     if (!isLogNode(node) && node.kubernetes?.kind === 'pod') return statusTooltip(node.path, node.kubernetes.status)
     if (!('modifiedTime' in node) || node.modifiedTime === undefined) return where
     return `${where}\n${t('tree.modified', { time: formatDateTime(node.modifiedTime) })}`
@@ -420,23 +420,23 @@ export function SourceTree(props: Props) {
   }
 
   /** A CloudWatch log group's size and how long it keeps its events, or a log stream's last event time. */
-  const cloudwatchLines = (node: LogNode): string[] => {
-    if (node.kind === 'group' && node.cloudwatch) {
-      const { storedBytes, retentionDays } = node.cloudwatch
+  const cloudwatchLines = (cloudwatch: NonNullable<LogStreamNode['cloudwatch']>): string[] => {
+    if (cloudwatch.kind === 'logGroup') {
+      const { storedBytes, retentionDays } = cloudwatch
       return [
         ...(storedBytes !== undefined ? [t('logGroup.stored', { size: formatSize(storedBytes) })] : []),
         retentionDays === undefined ? t('logGroup.keptForever') : t('logGroup.retention', { count: retentionDays })
       ]
     }
-    const lastEventTime = node.kind === 'logStream' ? node.cloudwatch?.lastEventTime : undefined
+    const { lastEventTime } = cloudwatch
     return [lastEventTime === undefined ? t('logStream.noEvents') : t('logStream.lastEvent', { time: formatDateTime(lastEventTime) })]
   }
 
   /** How long ago a CloudWatch log stream last logged, shown like a file's modified time. */
-  const lastEventDetails = (node: LogStreamNode) =>
-    node.cloudwatch?.lastEventTime === undefined ? undefined : (
+  const lastEventDetails = ({ cloudwatch }: LogStreamNode) =>
+    cloudwatch?.kind !== 'logStream' || cloudwatch.lastEventTime === undefined ? undefined : (
       <span className="tree-row__details">
-        <span>{formatRelativeTime(node.cloudwatch.lastEventTime, now)}</span>
+        <span>{formatRelativeTime(cloudwatch.lastEventTime, now)}</span>
       </span>
     )
 

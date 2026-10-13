@@ -5,7 +5,7 @@ import { t } from '../i18n'
 import { formatCount, formatSize } from '../i18n/format'
 import { followLines, shownContent } from '../log-lines'
 import { editorFontFamily, monaco } from '../monaco'
-import { largeFileIdsOf, type OpenTab } from '../workspace'
+import { joinLines, largeFileIdsOf, type OpenTab } from '../workspace'
 import { LargeFileViewer, type LargeFilePlace } from './LargeFileViewer'
 
 interface Props {
@@ -24,6 +24,8 @@ interface Props {
   followFeed: FollowFeed
   /** Told how many lines a followed log's view holds after new ones are added, by Follow. */
   onLineCount(followId: string, count: number): void
+  /** Told, by tab, when a followed log's view drops its first lines to keep within its "Last N lines". */
+  onDroppedLines(key: string): void
   /** Whether the editor shows a minimap beside the text. */
   minimap: boolean
 }
@@ -32,9 +34,9 @@ interface Props {
  * What the editor shows for a tab, or null when it shows something else: a binary file, a log too large to show or
  * that couldn't be read, a Large File.
  */
-function editorContent({ file, language, utc }: OpenTab) {
+function editorContent({ file, language, utc, loadedEarlier }: OpenTab) {
   if (file.view === 'binary' || file.view === 'logTooLarge' || file.view === 'logFailed' || file.view === 'large') return null
-  if (file.view === 'log') return { text: shownContent(file, utc ?? false), language: 'log' }
+  if (file.view === 'log') return { text: joinLines(earlierShown(loadedEarlier?.content ?? '', file.timestamps, utc ?? false), shownContent(file, utc ?? false)), language: 'log' }
   return { text: file.content, language: file.view === 'hex' ? 'plaintext' : (language ?? file.language) }
 }
 
@@ -50,12 +52,20 @@ interface TabModel {
    * shown again in the other time without fetching them again; and whether they're shown in UTC.
    */
   timestamped?: { lines: string[]; utc: boolean }
+  /** The lines read further back the model holds, as they came, above the file's. */
+  earlier: string
 }
+
+/** Lines read further back, as a log view shows them. */
+const earlierShown = (content: string, timestamps: boolean, utc: boolean) => shownContent({ content, timestamps }, utc)
+
+/** How many lines a log's text has; none if it's empty. */
+const lineCount = (text: string) => (text ? text.split('\n').length : 0)
 
 /** Keeps the last `cap` of `lines`. */
 const capped = (lines: string[], cap: LastNLines) => (cap === 'all' || lines.length <= cap ? lines : lines.slice(-cap))
 
-/** Adds lines to the end of a log's model, then drops its first lines past `cap`. */
+/** Adds lines to the end of a log's model, then drops its first lines past `cap`; how many it dropped. */
 function appendLines(model: monaco.editor.ITextModel, lines: string[], cap: LastNLines) {
   const last = model.getLineCount()
   const end = model.getLineMaxColumn(last)
@@ -63,13 +73,14 @@ function appendLines(model: monaco.editor.ITextModel, lines: string[], cap: Last
   model.applyEdits([{ range: new monaco.Range(last, end, last, end), text }])
   const excess = cap === 'all' ? 0 : model.getLineCount() - cap
   if (excess > 0) model.applyEdits([{ range: new monaco.Range(1, 1, excess + 1, 1), text: null }])
+  return Math.max(0, excess)
 }
 
 /**
  * One read-only Monaco editor; each tab keeps its own model and scroll/cursor state. Binary files, logs
  * too large to show whole, and logs that couldn't be read get a placeholder.
  */
-export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileThreshold, openAnywayLimit, onOpenAnyway, followFeed, onLineCount, minimap }: Props) {
+export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileThreshold, openAnywayLimit, onOpenAnyway, followFeed, onLineCount, onDroppedLines, minimap }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const modelsRef = useRef(new Map<string, TabModel>())
@@ -147,18 +158,34 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
     if (!entry) {
       const { source, file } = activeTab
       const uri = monaco.Uri.from({ scheme: 'polyscope', authority: source.id, path: `/${file.path}` })
-      entry = { model: monaco.editor.createModel(content.text, content.language, uri), file, viewState: null }
+      entry = { model: monaco.editor.createModel(content.text, content.language, uri), file, viewState: null, earlier: activeTab.loadedEarlier?.content ?? '' }
       models.set(activeTab.key, entry)
     }
     editor.setModel(entry.model)
     const fresh = entry.file !== activeTab.file
     const { file } = activeTab
     const utc = activeTab.utc ?? false
+    const earlier = activeTab.loadedEarlier?.content ?? ''
     if (fresh) {
       // Reloaded or reopened: new content, but the reader stays where they were.
       entry.model.setValue(content.text)
       entry.file = file
-      entry.timestamped = file.view === 'log' && file.timestamps ? { lines: file.content ? file.content.split('\n') : [], utc } : undefined
+      entry.earlier = earlier
+      const lines = joinLines(earlier, file.view === 'log' ? file.content : '')
+      entry.timestamped = file.view === 'log' && file.timestamps ? { lines: lines ? lines.split('\n') : [], utc } : undefined
+    } else if (file.view === 'log' && earlier !== entry.earlier) {
+      // Lines read further back go above those it holds, which may have had a Follow's added; the reader stays put.
+      const added = earlier.slice(0, earlier.length - entry.earlier.length).replace(/\n$/, '')
+      entry.earlier = earlier
+      if (added) {
+        if (entry.timestamped) entry.timestamped.lines = [...added.split('\n'), ...entry.timestamped.lines]
+        if (entry.viewState) editor.restoreViewState(entry.viewState)
+        const scrollTop = editor.getScrollTop()
+        const below = entry.model.getValueLength() === 0 ? '' : '\n'
+        entry.model.applyEdits([{ range: new monaco.Range(1, 1, 1, 1), text: earlierShown(added, file.timestamps, entry.timestamped?.utc ?? utc) + below }])
+        editor.setScrollTop(scrollTop + lineCount(added) * editor.getOption(monaco.editor.EditorOption.lineHeight))
+        entry.viewState = editor.saveViewState()
+      }
     } else if (entry.timestamped && entry.timestamped.utc !== utc) {
       // The same lines, in the other time.
       entry.timestamped.utc = utc
@@ -182,6 +209,8 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
     const { file } = tab
     if (file.view !== 'log' || !('followId' in file)) return
     const { followId, lastNLines } = file
+    // Lines read further back are kept on top of its "Last N lines".
+    const cap = (): LastNLines => (lastNLines === 'all' ? 'all' : lastNLines + lineCount(entry.earlier))
     entry.detach = followFeed.attach(followId, (update) => {
       const editor = editorRef.current
       const { model, timestamped } = entry
@@ -189,8 +218,9 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
       // A reader at the end is kept there as lines come; one who has scrolled up is left in peace.
       const shown = editor?.getModel() === model
       const atEnd = shown && (editor.getVisibleRanges().at(-1)?.endLineNumber ?? 0) >= model.getLineCount()
-      if (timestamped) timestamped.lines = capped([...timestamped.lines, ...followLines(update, { timestamps: false, utc: false, of: file.of })], lastNLines)
-      appendLines(model, followLines(update, { timestamps: file.timestamps, utc: timestamped?.utc ?? false, of: file.of }), lastNLines)
+      if (timestamped) timestamped.lines = capped([...timestamped.lines, ...followLines(update, { timestamps: false, utc: false, of: file.of })], cap())
+      const dropped = appendLines(model, followLines(update, { timestamps: file.timestamps, utc: timestamped?.utc ?? false, of: file.of }), cap())
+      if (dropped) onDroppedLines(tab.key)
       if (atEnd) editor.revealLine(model.getLineCount())
       onLineCount(followId, model.getLineCount())
     })

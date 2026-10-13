@@ -5,6 +5,9 @@ import { createFollowFeed } from '../follow-feed'
 import { targetOf } from '../source-types'
 import {
   activateTab,
+  addEarlierLines,
+  dropEarlier,
+  earlierOf,
   emptyWorkspace,
   endFollow,
   followIdsOf,
@@ -315,6 +318,26 @@ export function useTabs({ onSourcesChanged }: Options) {
     if (tab) setWorkspace((ws) => setLogView(ws, key, { utc: !tab.utc }))
   }
 
+  /** Reads as many lines as a log tab shows from before its first, and shows them above it. */
+  const loadEarlier = async (key: string) => {
+    const tab = tabs.find((open) => open.key === key)
+    const earlier = tab && earlierOf(tab)
+    if (!tab || earlier === undefined || tab.file.view !== 'log' || tab.file.lastNLines === 'all') return
+    const { path, lastNLines, timestamps } = tab.file
+    setOpenError(null)
+    try {
+      const read = await core.readEarlierLog(tab.source.id, path, { earlier, lines: lastNLines, timestamps })
+      setWorkspace((ws) => addEarlierLines(ws, key, earlier, read))
+    } catch (error) {
+      setOpenError(describeError(error))
+    }
+  }
+
+  /** Notes that a log tab's Follow dropped its first lines, which leaves it reading no further back. */
+  const noteDroppedLines = (key: string) => {
+    if (tabs.some((open) => open.key === key && earlierOf(open) !== undefined)) setWorkspace((ws) => dropEarlier(ws, key))
+  }
+
   /** Wraps a log tab's (or an open file's) long lines, or stops wrapping them. */
   const toggleWrap = (key: string) => {
     const tab = tabs.find((open) => open.key === key)
@@ -344,7 +367,9 @@ export function useTabs({ onSourcesChanged }: Options) {
     togglePause,
     toggleTimestamps,
     toggleUtc,
-    toggleWrap
+    toggleWrap,
+    loadEarlier,
+    noteDroppedLines
   }
 }
 

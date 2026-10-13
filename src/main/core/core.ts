@@ -644,7 +644,7 @@ export function createCore(options: CoreOptions = {}): Core {
     await settingsLoaded
     const lastNLines = asked ?? sourceFor(sourceId).lastNLines ?? settings.defaultLastNLines
     const read = { timestamps: timestamps || forFollowing, previous }
-    const snapshot = (lines: string[]): LogSnapshot => ({
+    const snapshot = (lines: string[], earlier?: string): LogSnapshot => ({
       view: 'log',
       of: 'logStream',
       path,
@@ -654,11 +654,15 @@ export function createCore(options: CoreOptions = {}): Core {
       restarted: offersPreviousLog && hasPreviousLog === true,
       lastNLines,
       timestamps,
-      content: lines.join('\n')
+      content: lines.join('\n'),
+      ...(earlier !== undefined && { earlier })
     })
     let text: string
+    let earlier: string | undefined
     try {
-      if (lastNLines !== 'all') text = await logSource.readLog(path, { ...read, tailLines: lastNLines })
+      // From a Source Type that can read further back, the read also tells where the lines before these end.
+      if (lastNLines !== 'all' && logSource.readLogBack && !previous) ({ text, before: earlier } = await logSource.readLogBack(path, { ...read, tailLines: lastNLines }))
+      else if (lastNLines !== 'all') text = await logSource.readLog(path, { ...read, tailLines: lastNLines })
       else if (options.allowLarge) text = await logSource.readLog(path, read)
       else text = await readUpToLarge(logSource, path, read)
     } catch (error) {
@@ -672,7 +676,7 @@ export function createCore(options: CoreOptions = {}): Core {
     const lastTimestamp = stamps.at(-1)
     const shown = read.timestamps && !timestamps ? kept.map((line, i) => line.slice(stamps[i]!.length + 1)) : kept
     return {
-      snapshot: snapshot(shown),
+      snapshot: snapshot(shown, earlier),
       ...(lastTimestamp !== undefined && { lastTimestamp, lastTimestampCount: stamps.filter((stamp) => stamp === lastTimestamp).length })
     }
   }
@@ -1511,6 +1515,16 @@ export function createCore(options: CoreOptions = {}): Core {
     async openLog(sourceId, path, options = {}) {
       await loaded
       return (await readSnapshot(await logSourceFor(sourceId, path), sourceId, path, options)).snapshot
+    },
+
+    async readEarlierLog(sourceId, path, { earlier, lines, timestamps = false }) {
+      await loaded
+      const tailLines = checkLastNLines(lines)
+      if (tailLines === 'all') throw new CoreError('INVALID_LINE_COUNT', 'Lines read further back come a number at a time, not all at once')
+      const logSource = await logSourceFor(sourceId, path)
+      if (!logSource.readLogBack) throw new CoreError('LOG_UNAVAILABLE', `Its Source Type can’t read further back: ${path}`)
+      const { text, before } = await logSource.readLogBack(path, { tailLines, before: earlier, timestamps })
+      return { content: text.replace(/\n$/, ''), ...(before !== undefined && { earlier: before }) }
     },
 
     async followLog(sourceId, path, options = {}) {

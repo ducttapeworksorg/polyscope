@@ -70,6 +70,7 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
           onToggleTimestamps={() => model.toggleTimestamps(activeTab.key)}
           onToggleUtc={() => model.toggleUtc(activeTab.key)}
           onToggleWrap={() => model.toggleWrap(activeTab.key)}
+          onLoadEarlier={() => void model.loadEarlier(activeTab.key)}
         />
       )}
       {activeTab && (activeTab.file.view === 'editor' || activeTab.file.view === 'hex') && (
@@ -92,6 +93,7 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
           onOpenAnyway={onOpenAnyway ?? ((key) => void model.reopenTabAs(key, { inEditor: true }))}
           followFeed={model.followFeed}
           onLineCount={model.noteLineCount}
+          onDroppedLines={model.noteDroppedLines}
           minimap={settings.showMinimap}
         />
         {!activeTab && children}

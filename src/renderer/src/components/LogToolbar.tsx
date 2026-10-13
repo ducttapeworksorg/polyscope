@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
 import type { LastNLines } from '@shared/core-api'
 import { t } from '../i18n'
-import { canShowPrevious, isLog, offersPrevious, type OpenTab } from '../workspace'
+import { formatCount } from '../i18n/format'
+import { canShowPrevious, earlierOf, isLog, offersPrevious, type OpenTab } from '../workspace'
 import { LastNLinesControl } from './LastNLinesControl'
 
 interface Props {
@@ -13,6 +14,8 @@ interface Props {
   onToggleTimestamps(): void
   onToggleUtc(): void
   onToggleWrap(): void
+  /** Reads the lines before the first shown, from a Source Type that can read further back. */
+  onLoadEarlier(): void
 }
 
 interface ToggleProps {
@@ -32,11 +35,11 @@ export function Toggle({ pressed, disabled, tooltip, onToggle, children }: Toggl
 }
 
 /**
- * The controls at the top of every log view: its "Last N lines", Follow (with pause and resume) for a
- * Log Stream's current log or a file, switching a Log Stream to its Previous Log and back if its Source Type has
+ * The controls at the top of every log view: its "Last N lines", loading the lines before those shown when its Source
+ * Type can, Follow (with pause and resume) for a Log Stream's current log or a file, switching a Log Stream to its Previous Log and back if its Source Type has
  * them, timestamps in local time or UTC for a Log Stream, and wrapping.
  */
-export function LogToolbar({ tab, onChangeLastNLines, onToggleFollow, onTogglePause, onTogglePrevious, onToggleTimestamps, onToggleUtc, onToggleWrap }: Props) {
+export function LogToolbar({ tab, onChangeLastNLines, onToggleFollow, onTogglePause, onTogglePrevious, onToggleTimestamps, onToggleUtc, onToggleWrap, onLoadEarlier }: Props) {
   const { file, follow } = tab
   const log = file.view === 'log' ? file : null
   // Kept by a log that failed to read, for reading it again.
@@ -49,6 +52,11 @@ export function LogToolbar({ tab, onChangeLastNLines, onToggleFollow, onTogglePa
   return (
     <div className="log-toolbar">
       <LastNLinesControl value={lastNLines} onChange={onChangeLastNLines} />
+      {earlierOf(tab) !== undefined && lastNLines !== 'all' && (
+        <button type="button" className="button button--quiet" title={lastNLines === 1 ? t('logView.loadEarlier.tooltip.one') : t('logView.loadEarlier.tooltip', { count: formatCount(lastNLines) })} onClick={onLoadEarlier}>
+          {t('logView.loadEarlier')}
+        </button>
+      )}
       <div className="log-toolbar__toggles">
         <Toggle
           pressed={Boolean(follow)}
