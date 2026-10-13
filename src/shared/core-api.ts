@@ -906,6 +906,8 @@ export type FollowUpdate =
   | { kind: 'failed'; code: CoreErrorCode; message: string; retryIn: number }
   /** Following again after failing. */
   | { kind: 'recovered' }
+  /** The Follow is slowed down, AWS throttling a CloudWatch Logs Source's polling, or (`slowed` false) no longer is. */
+  | { kind: 'slowed'; slowed: boolean }
   /** Nothing more comes. */
   | { kind: 'ended'; reason: FollowEndReason }
 
@@ -979,6 +981,8 @@ export type CoreErrorCode =
   | 'BUCKET_NOT_FOUND'
   /** A CloudWatch Logs Source without a region. */
   | 'REGION_REQUIRED'
+  /** AWS turned a request away, its account having made too many of them. */
+  | 'THROTTLED'
   | 'ACCOUNT_REQUIRED'
   | 'CONTAINER_REQUIRED'
   | 'CONNECTION_STRING_REQUIRED'

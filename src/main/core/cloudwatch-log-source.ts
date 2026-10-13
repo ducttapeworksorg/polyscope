@@ -43,12 +43,18 @@ const backfill = 14 * 24 * 60 * 60_000
 /** How far ahead of now an event may have been logged: CloudWatch takes none further ahead. */
 const ahead = 2 * 60 * 60_000
 
-/** How often a Follow asks for what's new. */
-const followInterval = 2_000
+/** How often a Source's Follows ask for what's new, in milliseconds. */
+export const cloudWatchFollowTiming = {
+  /** Between rounds, each asking once for each Followed log… */
+  interval: 2_000,
+  /** …or, while AWS throttles them, twice as long after each throttled round, up to this. */
+  maxInterval: 30_000
+}
 
 // CloudWatch Logs error codes and what they mean to the user, beyond those of signing in.
 const cloudWatchCodes: Record<string, CoreErrorCode> = {
-  ResourceNotFoundException: 'NOT_FOUND'
+  ResourceNotFoundException: 'NOT_FOUND',
+  ThrottlingException: 'THROTTLED'
 }
 
 /** An event as GetLogEvents or FilterLogEvents gives it; only the latter tells its stream. */
@@ -105,12 +111,16 @@ const placeOf = (before: string) => {
 type LinesBefore = (end: number | undefined, needed: number) => Promise<{ lines: Line[] }>
 
 /** A Log Source over a region's log groups (those starting with the prefix), each a group of its log streams. */
-export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize = cloudWatchPageSize, pollInterval = followInterval } = {}): LogSource {
-  const client = new CloudWatchLogsClient({
+export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize = cloudWatchPageSize } = {}): LogSource {
+  const clientSettings = {
     region: target.region,
     ...(target.endpoint && { endpoint: target.endpoint }),
     ...awsClientSettings(target.credentials, target)
-  })
+  }
+  const client = new CloudWatchLogsClient(clientSettings)
+  // Following asks again each round anyway, backing off when throttled, so its requests aren't tried again: that
+  // would only add to what AWS is throttling.
+  const followClient = new CloudWatchLogsClient({ ...clientSettings, maxAttempts: 1 })
 
   const send = async <T>(what: string, run: () => Promise<T>) => {
     try {
@@ -178,12 +188,16 @@ export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize =
   }
 
   /** A page of the stream's events, from where `nextToken` says or else as `startFromHead` says, starting no sooner than `startTime`. */
-  const eventsPage = (group: string, stream: string, page: { nextToken?: string; startFromHead: boolean; startTime?: number; endTime?: number; limit?: number }) =>
-    send(`${group} ${stream}`, () => client.send(new GetLogEventsCommand({ logGroupName: group, logStreamName: stream, ...page })))
+  const eventsPage = (
+    group: string,
+    stream: string,
+    page: { nextToken?: string; startFromHead: boolean; startTime?: number; endTime?: number; limit?: number },
+    sender = client
+  ) => send(`${group} ${stream}`, () => sender.send(new GetLogEventsCommand({ logGroupName: group, logStreamName: stream, ...page })))
 
   /** A page of the log group's events, all its streams' interleaved by time, from `startTime` up to `endTime`. */
-  const groupPage = (group: string, page: { nextToken?: string; startTime?: number; endTime?: number }) =>
-    send(group, () => client.send(new FilterLogEventsCommand({ logGroupName: group, ...page })))
+  const groupPage = (group: string, page: { nextToken?: string; startTime?: number; endTime?: number }, sender = client) =>
+    send(group, () => sender.send(new FilterLogEventsCommand({ logGroupName: group, ...page })))
 
   /** A stream's lines before a time, read back from it a page at a time. */
   const streamLinesBefore =
@@ -296,45 +310,112 @@ export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize =
   }
 
   /**
-   * Asks for a stream's events from where it got to last, and calls `onText` with what's new. Its tokens are good
-   * only for the request they came of, so it's the same request each time, but for the token.
+   * Asks once for a stream's events from where it got to last, and calls `onText` with what's new. Its tokens are good
+   * only for the request they came of, so it's the same request each time, but for the token; at the stream's end,
+   * CloudWatch gives back the token it was given, which goes on to what's logged next.
    */
   const streamFetcher = (group: string, stream: string, startTime: number | undefined, onText: (text: string) => void) => {
     let token: string | undefined
     return async () => {
-      for (;;) {
-        const page = await eventsPage(group, stream, { startFromHead: true, ...(startTime !== undefined && { startTime }), ...(token && { nextToken: token }) })
-        const text = (page.events ?? []).flatMap((event) => linesOf(event, false, true)).join('')
-        if (text) onText(text)
-        if (!page.nextForwardToken || page.nextForwardToken === token) return
-        token = page.nextForwardToken
-      }
+      const page = await eventsPage(group, stream, { startFromHead: true, ...(startTime !== undefined && { startTime }), ...(token && { nextToken: token }) }, followClient)
+      const text = (page.events ?? []).flatMap((event) => linesOf(event, false, true)).join('')
+      if (text) onText(text)
+      token = page.nextForwardToken ?? token
     }
   }
 
   /**
-   * Asks for a log group's events from the time of the last one seen, and calls `onText` with what's new: those at
-   * that time are asked for again, so the ones seen already are told by their event ids and dropped.
+   * Asks once for a log group's events from the time of the last one seen, or for the next page of those asked for
+   * last, and calls `onText` with what's new: those at that time are asked for again, so the ones seen already are
+   * told by their event ids and dropped. FilterLogEvents searches all the group's streams, so new ones join in.
    */
   const groupFetcher = (group: string, startTime: number | undefined, onText: (text: string) => void) => {
     let latest = startTime
     let seenAtLatest = new Set<string>()
+    // The start time of the request whose next page `token` is, which asking for that page repeats.
+    let since = latest
+    let token: string | undefined
     return async () => {
-      const since = latest
-      for (let token: string | undefined, first = true; first || token; first = false) {
-        const page = await groupPage(group, { ...(since !== undefined && { startTime: since }), ...(token && { nextToken: token }) })
-        const fresh = (page.events ?? []).filter(({ timestamp = 0, eventId = '' }) => {
-          if (timestamp === latest && seenAtLatest.has(eventId)) return false
-          if (latest === undefined || timestamp > latest) [latest, seenAtLatest] = [timestamp, new Set()]
-          seenAtLatest.add(eventId)
-          return true
-        })
-        const text = fresh.flatMap((event) => linesOf(event, true, true)).join('')
-        if (text) onText(text)
-        token = page.nextToken
-      }
+      if (!token) since = latest
+      const page = await groupPage(group, { ...(since !== undefined && { startTime: since }), ...(token && { nextToken: token }) }, followClient)
+      const fresh = (page.events ?? []).filter(({ timestamp = 0, eventId = '' }) => {
+        if (timestamp === latest && seenAtLatest.has(eventId)) return false
+        if (latest === undefined || timestamp > latest) [latest, seenAtLatest] = [timestamp, new Set()]
+        seenAtLatest.add(eventId)
+        return true
+      })
+      const text = fresh.flatMap((event) => linesOf(event, true, true)).join('')
+      if (text) onText(text)
+      token = page.nextToken
     }
   }
+
+  /** A Followed log, as the poller asks for it. */
+  interface Followed {
+    /** Asks once for what's new. */
+    fetch(): Promise<void>
+    /** Tells it, after each round that didn't fail it, whether AWS throttled the round. */
+    asked(throttled: boolean): void
+    /** Fails its Follow. */
+    fail(error: unknown): void
+  }
+
+  /**
+   * The one schedule all the Source's Follows are asked for on, a round every so often while there are any: each
+   * round asks once for each, together. While AWS throttles a round, each next one waits twice as long, up to a
+   * ceiling.
+   */
+  const poller = (() => {
+    const followed = new Set<Followed>()
+    let timer: NodeJS.Timeout | undefined
+    let running = false
+    let wait = 0
+
+    const schedule = () => {
+      if (timer || running || !followed.size) return
+      timer = setTimeout(() => void round(), wait || cloudWatchFollowTiming.interval)
+    }
+
+    const round = async () => {
+      timer = undefined
+      running = true
+      const asked = [...followed]
+      const results = await Promise.allSettled(asked.map((log) => log.fetch()))
+      running = false
+      const failed = new Set<Followed>()
+      let throttled = false
+      results.forEach((result, i) => {
+        const log = asked[i]!
+        if (result.status === 'fulfilled' || !followed.has(log)) return
+        if (result.reason instanceof CoreError && result.reason.code === 'THROTTLED') throttled = true
+        else {
+          followed.delete(log)
+          failed.add(log)
+          log.fail(result.reason)
+        }
+      })
+      // The Follows all stopped meanwhile: the next one starts afresh.
+      if (!followed.size) return void (wait = 0)
+      const { interval, maxInterval } = cloudWatchFollowTiming
+      wait = throttled ? Math.min(Math.max(wait, interval) * 2, maxInterval) : 0
+      for (const log of asked) if (followed.has(log) && !failed.has(log)) log.asked(throttled)
+      schedule()
+    }
+
+    return {
+      add(log: Followed) {
+        followed.add(log)
+        schedule()
+      },
+      delete(log: Followed) {
+        followed.delete(log)
+        if (followed.size) return
+        clearTimeout(timer)
+        timer = undefined
+        wait = 0
+      }
+    }
+  })()
 
   const logSource: LogSource = {
     capabilities: { previousLog: false, restarts: false, status: false },
@@ -387,33 +468,35 @@ export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize =
       return readBack(await linesBeforeOf(path), options)
     },
 
-    // Asks for what's new every so often, from the last event seen. Its own schedule for now: one shared by all a
-    // Source's Follows, backing off when throttled, is to come.
-    async followLog(path, { sinceTime }: LogFollowOptions, onText): Promise<LogConnection> {
+    // Asked for what's new on the Source's one schedule, from the last event seen, once its first round has asked:
+    // a log that isn't there fails that with NOT_FOUND, so isn't looked for first, which would be one more request to
+    // throttle. One whose first round AWS throttled is followed, slowed.
+    async followLog(path, { sinceTime, onSlowed }: LogFollowOptions, onText): Promise<LogConnection> {
       const { group, stream } = logAt(path)
-      if (stream === undefined) await checkGroup(group)
       const startTime = sinceTime === undefined ? undefined : Date.parse(sinceTime)
       let stopped = false
-      let timer: NodeJS.Timeout | undefined
       const sendText = (text: string) => !stopped && onText(text)
-      const fetchNew = stream === undefined ? groupFetcher(group, startTime, sendText) : streamFetcher(group, stream, startTime, sendText)
-      await fetchNew()
-      let end!: { resolve: () => void; reject: (error: unknown) => void }
+      let start!: { resolve: () => void; reject: (error: unknown) => void }
+      const started = new Promise<void>((resolve, reject) => (start = { resolve, reject }))
+      let end!: typeof start
       const ended = new Promise<void>((resolve, reject) => (end = { resolve, reject }))
-      const poll = () => {
-        timer = setTimeout(() => {
-          fetchNew().then(
-            () => !stopped && poll(),
-            (error: unknown) => !stopped && end.reject(error)
-          )
-        }, pollInterval)
+      let isStarted = false
+      const log: Followed = {
+        fetch: stream === undefined ? groupFetcher(group, startTime, sendText) : streamFetcher(group, stream, startTime, sendText),
+        asked(throttled) {
+          isStarted = true
+          start.resolve()
+          if (!stopped) onSlowed?.(throttled)
+        },
+        fail: (error) => (isStarted ? !stopped && end.reject(error) : start.reject(error))
       }
-      poll()
+      poller.add(log)
+      await started
       return {
         ended,
         stop() {
           stopped = true
-          clearTimeout(timer)
+          poller.delete(log)
           end.resolve()
         }
       }

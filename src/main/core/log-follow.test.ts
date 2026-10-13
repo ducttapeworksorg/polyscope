@@ -8,7 +8,10 @@ const path = 'pods/web/app'
 
 /** A stream the test drives: text arrives, then it ends or fails. */
 interface FakeStream {
-  options: LogFollowOptions
+  /** Where it was asked to follow from. */
+  options: Pick<LogFollowOptions, 'sinceTime'>
+  /** Says, as a backend that polls does, whether it's slowed down. */
+  slow(slowed: boolean): void
   send(text: string): void
   end(): void
   fail(error: CoreError): void
@@ -37,8 +40,10 @@ function fakeLogSource({ restarts = true } = {}) {
       let resolve!: () => void
       let reject!: (error: CoreError) => void
       const ended = new Promise<void>((res, rej) => ((resolve = res), (reject = rej)))
+      const { onSlowed, ...from } = options
       const stream: FakeStream = {
-        options,
+        options: from,
+        slow: (slowed) => onSlowed?.(slowed),
         stopped: false,
         send: (text) => !stream.stopped && onText(text),
         end: resolve,
@@ -361,6 +366,33 @@ describe('a stream that fails', () => {
     expect(lines()).toEqual(['<restarted>'])
     expect(source.streams).toHaveLength(2)
     expect(source.stream.options).toEqual({})
+  })
+})
+
+describe('a backend slowed down', () => {
+  it('says so once, then once it no longer is', async () => {
+    await follow()
+
+    source.stream.slow(true)
+    source.stream.slow(true)
+    source.stream.send(logged(6, 'slowly'))
+    source.stream.slow(false)
+    await settle()
+
+    expect(updates).toEqual([
+      { kind: 'slowed', slowed: true },
+      { kind: 'lines', lines: ['slowly'] },
+      { kind: 'slowed', slowed: false }
+    ])
+  })
+
+  it('says so even while paused, as it’s no line to hold back', async () => {
+    const following = await follow()
+    following.pause()
+
+    source.stream.slow(true)
+
+    expect(updates).toEqual([{ kind: 'slowed', slowed: true }])
   })
 })
 

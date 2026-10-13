@@ -16,6 +16,7 @@ import {
   markLogStreamGone,
   markPodGone,
   noteRestart,
+  noteSlowed,
   offersPrevious,
   openTab,
   pinTab,
@@ -251,6 +252,22 @@ describe('offering to Follow a tab’s file', () => {
   it('doesn’t for a Log Stream, which has its own Follow', () => {
     const log = { view: 'log', of: 'logStream', path: 'p', name: 'c', offersPreviousLog: true, previous: false, restarted: false, lastNLines: 10, timestamps: false, content: '' } as const
     expect(canFollowFile({ source, file: log })).toBe(false)
+  })
+})
+
+describe('a log tab whose Follow is slowed', () => {
+  const log = { view: 'log', of: 'logStream', path: 'g', name: 'g', offersPreviousLog: false, previous: false, restarted: false, lastNLines: 10, timestamps: false, content: '' } as const
+  const followed = () => openTab(openTab(emptyWorkspace, { key: 'g', source, file: { ...log, followId: 'f' } }), { key: 'h', source, file: { ...log, followId: 'g' } }, { pinned: true })
+
+  it('says so until it no longer is', () => {
+    const slowed = noteSlowed(followed(), 'f', true)
+
+    expect(slowed.tabs.map((tab) => tab.follow?.slowed ?? false)).toEqual([true, false])
+    expect(noteSlowed(slowed, 'f', false).tabs.map((tab) => tab.follow?.slowed ?? false)).toEqual([false, false])
+  })
+
+  it('stops saying so once its Follow ends', () => {
+    expect(endFollow(noteSlowed(followed(), 'f', true), 'f').tabs[0]?.follow).toBeUndefined()
   })
 })
 

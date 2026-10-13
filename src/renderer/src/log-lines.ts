@@ -59,6 +59,9 @@ export function followLines(update: FollowUpdate, { timestamps, utc, of = 'logSt
       return [mark(t('logView.mark.failed', { reason: describeFailure(update), seconds: Math.round(update.retryIn / 1000) }))]
     case 'recovered':
       return [mark(t('logView.mark.recovered'))]
+    // Its tab says so instead.
+    case 'slowed':
+      return []
     case 'ended':
       // A file is gone with the pod it was in.
       return [mark(t(of === 'file' && update.reason === 'gone' ? 'logView.mark.ended.podGone' : `logView.mark.ended.${update.reason}`))]

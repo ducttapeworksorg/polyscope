@@ -1,7 +1,8 @@
 // Test support: a stand-in for CloudWatch Logs, in the test process, speaking its JSON protocol for the four operations
 // Polyscope may call (ADR 0008) over plain HTTP, for an SDK client pointed at it through its endpoint. It holds the log
 // groups it's seeded with, records every operation it's asked for, and turns away any other as AWS turns away one it
-// doesn't know. Given an access key, it turns away requests signed with another.
+// doesn't know. Given an access key, it turns away requests signed with another. It can be told to throttle, as AWS
+// does once an account's requests go over its quota.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -37,6 +38,10 @@ export interface TestCloudWatchEndpoint {
   url: string
   /** Every operation asked for, in order, allowed or not. */
   operations: string[]
+  /** Likewise, with when each was asked for, in milliseconds since the epoch. */
+  calls: { operation: string; at: number }[]
+  /** While set, turns every request away with a ThrottlingException. */
+  throttling: boolean
   /** The seeded groups, to add events, streams or groups to as a test goes on. */
   groups: TestLogGroup[]
   close(): Promise<void>
@@ -88,6 +93,7 @@ const eventsBetween = (events: TestLogEvent[], request: Request, { endInclusive 
 /** Starts a stand-in CloudWatch Logs endpoint holding `groups`; with `accessKeyId`, it turns away requests signed with any other. */
 export async function startTestCloudWatchEndpoint(groups: TestLogGroup[], { accessKeyId }: { accessKeyId?: string } = {}): Promise<TestCloudWatchEndpoint> {
   const operations: string[] = []
+  const calls: TestCloudWatchEndpoint['calls'] = []
 
   const groupNamed = (request: Request) => {
     const name = stringOf(request['logGroupName']) ?? stringOf(request['logGroupIdentifier'])
@@ -200,7 +206,9 @@ export async function startTestCloudWatchEndpoint(groups: TestLogGroup[], { acce
     const target = String(request.headers['x-amz-target'] ?? '')
     const operation = target.replace(/^Logs_20140328\./, '')
     operations.push(operation)
+    calls.push({ operation, at: Date.now() })
     try {
+      if (endpoint.throttling) throw new AwsError('ThrottlingException', 'Rate exceeded')
       const signedWith = /Credential=([^/]+)\//.exec(String(request.headers['authorization'] ?? ''))?.[1]
       if (accessKeyId !== undefined && signedWith !== accessKeyId) {
         throw new AwsError('UnrecognizedClientException', 'The security token included in the request is invalid.')
@@ -220,14 +228,17 @@ export async function startTestCloudWatchEndpoint(groups: TestLogGroup[], { acce
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
 
-  return {
+  const endpoint: TestCloudWatchEndpoint = {
     url: `http://127.0.0.1:${port}`,
     operations,
+    calls,
     groups,
+    throttling: false,
     close: () =>
       new Promise((resolve) => {
         server.closeAllConnections()
         server.close(() => resolve())
       })
   }
+  return endpoint
 }

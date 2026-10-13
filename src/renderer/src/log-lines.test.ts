@@ -44,6 +44,10 @@ describe('what a Follow adds to its log view', () => {
     ])
   })
 
+  it('adds no line for being slowed, which its tab says instead', () => {
+    expect(followLines({ kind: 'slowed', slowed: true }, plain)).toEqual([])
+  })
+
   it('marks a restart, a failure, recovering and the end with a line each', () => {
     const marks = [
       followLines({ kind: 'restarted' }, plain),

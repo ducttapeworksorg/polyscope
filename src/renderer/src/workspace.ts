@@ -117,6 +117,8 @@ export interface OpenTab {
 export interface FollowState {
   followId: string
   paused: boolean
+  /** Set while it's slowed down: AWS throttling a CloudWatch Logs Source's polling. */
+  slowed?: true
 }
 
 /** The open tabs, in order, and which one is shown. */
@@ -249,6 +251,14 @@ export const setLogView = (ws: Workspace, key: string, change: Partial<Pick<Open
 export function noteRestart(ws: Workspace, followId: string): Workspace {
   const tab = ws.tabs.find((open) => open.follow?.followId === followId)
   return tab ? updateTab(ws, tab.key, { restarted: true }) : ws
+}
+
+/** Notes whether a Follow is slowed down, so its tab can say so. */
+export function noteSlowed(ws: Workspace, followId: string, slowed: boolean): Workspace {
+  const tab = ws.tabs.find((open) => open.follow?.followId === followId)
+  if (!tab?.follow) return ws
+  const { slowed: _, ...follow } = tab.follow
+  return updateTab(ws, tab.key, { follow: { ...follow, ...(slowed && { slowed }) } })
 }
 
 /** Marks a Follow as over in whichever tab it was going on, leaving what it showed; and its Log Stream as gone if that's why. */
