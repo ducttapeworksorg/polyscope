@@ -383,10 +383,14 @@ export function SourceTree(props: Props) {
       </span>
     )
 
-  /** Where the entry really is and, when known, exactly when it was last modified; for a node with a status (a pod, a Docker container), how it's doing. */
+  /**
+   * Where the entry really is and, when known, exactly when it was last modified; for a node with a status (a pod, a
+   * Docker container), how it's doing; for a CloudWatch log group or stream, what CloudWatch tells of it.
+   */
   const tooltip = (node: ShownNode) => {
     const where = uiFor(source.type).fullPath(source, node.path)
     if (isLogNode(node) && node.status) return [statusTooltip(node.path, node.status), ...dockerLines(node)].join('\n')
+    if (isLogNode(node) && node.cloudwatch) return [where, ...cloudwatchLines(node)].join('\n')
     if (!isLogNode(node) && node.kubernetes?.kind === 'pod') return statusTooltip(node.path, node.kubernetes.status)
     if (!('modifiedTime' in node) || node.modifiedTime === undefined) return where
     return `${where}\n${t('tree.modified', { time: formatDateTime(node.modifiedTime) })}`
@@ -414,6 +418,27 @@ export function SourceTree(props: Props) {
       : [])
     ]
   }
+
+  /** A CloudWatch log group's size and how long it keeps its events, or a log stream's last event time. */
+  const cloudwatchLines = (node: LogNode): string[] => {
+    if (node.kind === 'group' && node.cloudwatch) {
+      const { storedBytes, retentionDays } = node.cloudwatch
+      return [
+        ...(storedBytes !== undefined ? [t('logGroup.stored', { size: formatSize(storedBytes) })] : []),
+        retentionDays === undefined ? t('logGroup.keptForever') : t('logGroup.retention', { count: retentionDays })
+      ]
+    }
+    const lastEventTime = node.kind === 'logStream' ? node.cloudwatch?.lastEventTime : undefined
+    return [lastEventTime === undefined ? t('logStream.noEvents') : t('logStream.lastEvent', { time: formatDateTime(lastEventTime) })]
+  }
+
+  /** How long ago a CloudWatch log stream last logged, shown like a file's modified time. */
+  const lastEventDetails = (node: LogStreamNode) =>
+    node.cloudwatch?.lastEventTime === undefined ? undefined : (
+      <span className="tree-row__details">
+        <span>{formatRelativeTime(node.cloudwatch.lastEventTime, now)}</span>
+      </span>
+    )
 
   /** ↻ N, for a pod or container that has restarted N times. */
   const restartBadge = (restarts: number) => {
@@ -530,6 +555,7 @@ export function SourceTree(props: Props) {
         ...openLogItems(node),
         menuItems: copyItems([node]),
         badge: role,
+        details: showDetails ? lastEventDetails(node) : undefined,
         status:
           restarts > 0 || node.status ?
             indicators(
@@ -587,7 +613,8 @@ export function SourceTree(props: Props) {
   const emptyNote = (path: SourcePath) =>
     source.type === 'kubernetesFiles' && !path && !rootFolded ? 'tree.noPods'
     : source.type === 'dockerLogs' && !path ? 'tree.noContainers'
-    : source.type !== 'kubernetesLogs' && source.type !== 'dockerLogs' ? 'tree.emptyFolder'
+    : source.type === 'cloudwatchLogs' && !path ? 'tree.noLogGroups'
+    : source.type !== 'kubernetesLogs' && source.type !== 'dockerLogs' && source.type !== 'cloudwatchLogs' ? 'tree.emptyFolder'
     : path ? 'tree.emptyLogNode'
     : 'tree.emptyNamespace'
 

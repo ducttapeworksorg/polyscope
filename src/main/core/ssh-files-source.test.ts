@@ -6,6 +6,7 @@ import { gzipSync, zstdCompressSync } from 'node:zlib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConnectionEvent, FollowEvent, HostKey, LargeFileEvent, LargeFileSearchEvent, NewSshFilesSource, TreeNode } from '@shared/core-api'
 import { createCore } from './core'
+import { fileFollowTiming } from './file-follow'
 import type { SeedTree } from './file-source-contract'
 import { createSecretStore } from './secret-store'
 import { generateKey, sshdTarget, startTestSshAgent, startTestSshServer, writeTree, type TestSshAgent, type TestSshServer } from './ssh-test-server'
@@ -513,12 +514,13 @@ describe('following a file on an SSH Files Source', () => {
     await eventually(() => expect(updates()).toEqual(['line 6', 'line 7']))
     await core.pauseFollow(followed.followId)
     await appendFile(file, 'line 8\n')
-    await new Promise((resolve) => setTimeout(resolve, 1_500))
+    // Long enough for a look at the file to read it: a look over SSH takes a good part of a poll interval itself.
+    await new Promise((resolve) => setTimeout(resolve, 3 * fileFollowTiming.pollInterval))
     expect(updates()).toEqual(['line 6', 'line 7'])
     await core.resumeFollow(followed.followId)
     expect(updates()).toEqual(['line 6', 'line 7', 'line 8'])
     await core.stopFollow(followed.followId)
-  })
+  }, 15_000)
 
   it('marks a file cut short and follows it from its start', async () => {
     const { file, updates } = await following(numbered(1, 5))

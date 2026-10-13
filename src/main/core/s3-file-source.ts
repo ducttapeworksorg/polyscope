@@ -6,10 +6,9 @@ import {
   S3ServiceException
 } from '@aws-sdk/client-s3'
 import type { CoreErrorCode } from '@shared/core-api'
-import { CoreError } from './core-error'
+import { awsClientSettings, awsErrorOf, type AwsCredentials } from './aws-sign-in'
 import type { FileSource } from './file-source'
-import { networkAgents, type NetworkSettings } from './network-agents'
-import { certificateCodes, networkCodes } from './network-errors'
+import type { NetworkSettings } from './network-agents'
 import { createObjectStoreFileSource, type ObjectStore } from './object-store-file-source'
 
 /** Where an S3 Source points and how it signs in, normalised and with its secret filled in. */
@@ -21,42 +20,21 @@ export interface S3Target extends NetworkSettings {
   prefix: string
   region: string
   pathStyle: boolean
-  /** Typed keys, or the name of an AWS profile to sign in with: blank for the default credential chain. */
-  credentials: { accessKeyId: string; secretAccessKey: string } | { profile: string }
+  credentials: AwsCredentials
 }
 
 /** The most entries S3 lists in one request, and so in one page of the tree. */
 export const s3PageSize = 1000
 
-// S3 error codes (or, for bodiless HEAD responses, HTTP statuses) and what they mean to the user.
+// S3 error codes (or, for bodiless HEAD responses, HTTP statuses) and what they mean to the user, beyond those of signing in.
 const s3Codes: Record<string, CoreErrorCode> = {
   NoSuchKey: 'NOT_FOUND',
   NotFound: 'NOT_FOUND',
   NoSuchBucket: 'BUCKET_NOT_FOUND',
-  AccessDenied: 'PERMISSION_DENIED',
-  Forbidden: 'PERMISSION_DENIED',
-  InvalidAccessKeyId: 'AUTH_FAILED',
-  SignatureDoesNotMatch: 'AUTH_FAILED',
-  InvalidToken: 'AUTH_FAILED',
-  ExpiredToken: 'AUTH_FAILED'
+  Forbidden: 'PERMISSION_DENIED'
 }
 
-// What the SDK throws when it can't come by credentials at all: a missing profile, an expired SSO session…
-const credentialErrors = new Set(['CredentialsProviderError', 'TokenProviderError'])
-
-const nameOf = (error: unknown) => (error instanceof Error ? error.name : '')
-
-function toCoreError(error: unknown, what: string): CoreError {
-  if (error instanceof CoreError) return error
-  const message = error instanceof Error ? error.message : String(error)
-  const code = s3Codes[nameOf(error)]
-  if (code) return new CoreError(code, `${what}: ${message || nameOf(error)}`)
-  if (credentialErrors.has(nameOf(error))) return new CoreError('CREDENTIALS_UNAVAILABLE', message)
-  const errno = (error as NodeJS.ErrnoException).code ?? ''
-  if (networkCodes.has(errno)) return new CoreError('UNREACHABLE', `${what}: ${message}`)
-  if (certificateCodes.has(errno)) return new CoreError('CERTIFICATE_UNTRUSTED', `${what}: ${message}`)
-  return new CoreError('UNKNOWN', `${what}: ${message}`)
-}
+const toCoreError = (error: unknown, what: string) => awsErrorOf(error, what, s3Codes)
 
 /** A File Source over the keys under a bucket's prefix, with key prefixes (up to a '/') shown as folders. */
 export function createS3FileSource(target: S3Target, { pageSize = s3PageSize } = {}): FileSource {
@@ -65,9 +43,7 @@ export function createS3FileSource(target: S3Target, { pageSize = s3PageSize } =
     ...(target.host && { endpoint: target.host }),
     region: target.region,
     forcePathStyle: target.pathStyle,
-    // Without keys or a profile the SDK goes down its default credential chain.
-    ...('profile' in credentials ? credentials.profile && { profile: credentials.profile } : { credentials }),
-    requestHandler: networkAgents(target),
+    ...awsClientSettings(credentials, target),
     // Checksums only where S3 insists: many S3-compatible stores don't support the newer ones.
     requestChecksumCalculation: 'WHEN_REQUIRED',
     responseChecksumValidation: 'WHEN_REQUIRED'

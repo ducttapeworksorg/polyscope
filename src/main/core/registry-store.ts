@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import {
   sourceTypeIds,
   type AzureBlobSourceInfo,
+  type CloudWatchLogsSourceInfo,
   type KubernetesFilesSourceInfo,
   type DockerLogsSourceInfo,
   type KubernetesLogsSourceInfo,
@@ -21,6 +22,7 @@ export type SavedSource =
   | KubernetesFilesSourceInfo
   | KubernetesLogsSourceInfo
   | DockerLogsSourceInfo
+  | Omit<CloudWatchLogsSourceInfo, 'secretKeySet'>
 
 /** Everything the user configured about their Sources, as saved between launches. */
 export interface Registry {

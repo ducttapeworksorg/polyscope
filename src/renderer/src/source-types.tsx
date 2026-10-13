@@ -1,16 +1,19 @@
 import { useEffect, useId, useState, type ComponentType } from 'react'
 import {
+  cloudWatchNameOf,
+  defaultAwsAuth,
   defaultDockerContext,
   dockerStandaloneGroup,
   filesWorkloadKinds,
+  type AwsAuth,
   type AzureBlobAuth,
   type AzureBlobSourceInfo,
+  type CloudWatchLogsSourceInfo,
   type DockerLogsSourceInfo,
   type FilesWorkloadKind,
   type KubeContext,
   type KubernetesFilesSourceInfo,
   type NewSource,
-  type S3Auth,
   type S3SourceInfo,
   type SourceInfo,
   type SourcePath,
@@ -18,9 +21,10 @@ import {
   type SshAuth,
   type SshFilesSourceInfo
 } from '@shared/core-api'
+import { awsRegions } from '@shared/aws-regions'
 import { parseSas } from '@shared/azure-sas'
 import { ComboBox } from './components/ComboBox'
-import { BlobStorageIcon, BucketIcon, DockerLogsIcon, HardDriveIcon, KubernetesFilesIcon, KubernetesLogsIcon, TerminalIcon } from './components/icons'
+import { BlobStorageIcon, BucketIcon, CloudWatchLogsIcon, DockerLogsIcon, HardDriveIcon, KubernetesFilesIcon, KubernetesLogsIcon, TerminalIcon } from './components/icons'
 import { core, describeError } from './core-client'
 import { t, type MessageKey } from './i18n'
 
@@ -342,15 +346,6 @@ function S3Fields({ value, onChange, editing }: FieldsProps<S3Settings>) {
       <span className="field__hint">{t(hint)}</span>
     </label>
   )
-  // Only a secret stored for keys counts: one signing in with a profile has none.
-  const stored = editing?.type === 's3' && editing.auth === 'keys' ? editing.secretKeySet : undefined
-  const auth = value.auth ?? 'keys'
-  const [weakSecrets, setWeakSecrets] = useState(false)
-
-  useEffect(() => {
-    void window.polyscope.secretStorageIsWeak().then(setWeakSecrets)
-  }, [])
-
   return (
     <>
       {text('host', 's3Source.host', { hint: 's3Source.host.hint', mono: true })}
@@ -361,24 +356,60 @@ function S3Fields({ value, onChange, editing }: FieldsProps<S3Settings>) {
       {text('prefix', 's3Source.prefix', { hint: 's3Source.prefix.hint', mono: true })}
       {check('pathStyle', 's3Source.pathStyle', 's3Source.pathStyle.hint', false)}
 
+      <AwsSignInFields value={value} onChange={onChange} editing={editing} />
+
+      <CaBundleField value={value.caBundlePath ?? ''} onChange={(caBundlePath) => onChange({ ...value, caBundlePath })} />
+      {check('verifyTls', 's3Source.verifyTls', 's3Source.verifyTls.hint', true)}
+      <ProxyField value={value.proxyUrl ?? ''} onChange={(proxyUrl) => onChange({ ...value, proxyUrl })} />
+    </>
+  )
+}
+
+/** The settings of a Source on AWS, which signs in as an S3 Source does. */
+type AwsSettings = Extract<NewSource, { type: 's3' | 'cloudwatchLogs' }>
+
+/** How a Source on AWS signs in. */
+const awsAuthOf = (value: AwsSettings): AwsAuth => value.auth ?? defaultAwsAuth(value.type)
+
+/** The way a Source on AWS signs in: typed keys, the secret one kept in the OS's secure storage, or an AWS profile. */
+function AwsSignInFields<S extends AwsSettings>({ value, onChange, editing }: FieldsProps<S>) {
+  const auth = awsAuthOf(value)
+  // Only a secret stored for keys counts: one signing in with a profile has none.
+  const stored = (editing?.type === 's3' || editing?.type === 'cloudwatchLogs') && editing.auth === 'keys' ? editing.secretKeySet : undefined
+  const [weakSecrets, setWeakSecrets] = useState(false)
+
+  useEffect(() => {
+    void window.polyscope.secretStorageIsWeak().then(setWeakSecrets)
+  }, [])
+
+  return (
+    <>
       <div className="field">
-        <span className="field__label" id="s3-auth-label">
-          {t('s3Source.auth')}
+        <span className="field__label" id="aws-auth-label">
+          {t('awsSource.auth')}
         </span>
-        <div className="segmented" role="radiogroup" aria-labelledby="s3-auth-label">
-          {(['keys', 'profile'] as const satisfies S3Auth[]).map((option) => (
+        <div className="segmented" role="radiogroup" aria-labelledby="aws-auth-label">
+          {(['keys', 'profile'] as const satisfies AwsAuth[]).map((option) => (
             <label key={option} className="segmented__option">
-              <input type="radio" name="s3-auth" value={option} checked={auth === option} onChange={() => onChange({ ...value, auth: option })} />
-              {t(`s3Source.auth.${option}`)}
+              <input type="radio" name="aws-auth" value={option} checked={auth === option} onChange={() => onChange({ ...value, auth: option })} />
+              {t(`awsSource.auth.${option}`)}
             </label>
           ))}
         </div>
       </div>
       {auth === 'keys' ? (
         <>
-          {text('accessKeyId', 's3Source.accessKey', { mono: true })}
           <label className="field">
-            <span className="field__label">{t('s3Source.secretKey')}</span>
+            <span className="field__label">{t('awsSource.accessKey')}</span>
+            <input
+              className="field__input field__input--path"
+              value={value.accessKeyId ?? ''}
+              onChange={(e) => onChange({ ...value, accessKeyId: e.target.value })}
+              spellCheck={false}
+            />
+          </label>
+          <label className="field">
+            <span className="field__label">{t('awsSource.secretKey')}</span>
             {/* Typed in, sent to the core once, and never shown again: the core only says whether one is stored. */}
             <input
               type="password"
@@ -389,20 +420,85 @@ function S3Fields({ value, onChange, editing }: FieldsProps<S3Settings>) {
               spellCheck={false}
             />
             {stored !== undefined && (
-              <span className="field__hint">{t(stored ? 's3Source.secretKey.stored' : 's3Source.secretKey.missing')}</span>
+              <span className="field__hint">{t(stored ? 'awsSource.secretKey.stored' : 'awsSource.secretKey.missing')}</span>
             )}
-            {weakSecrets && <span className="field__problem">{t('s3Source.secretKey.weak')}</span>}
+            {weakSecrets && <span className="field__problem">{t('awsSource.secretKey.weak')}</span>}
           </label>
         </>
       ) : (
         <ProfileField value={value.profile ?? ''} onChange={(profile) => onChange({ ...value, profile })} />
       )}
-
-      <CaBundleField value={value.caBundlePath ?? ''} onChange={(caBundlePath) => onChange({ ...value, caBundlePath })} />
-      {check('verifyTls', 's3Source.verifyTls', 's3Source.verifyTls.hint', true)}
-      <ProxyField value={value.proxyUrl ?? ''} onChange={(proxyUrl) => onChange({ ...value, proxyUrl })} />
     </>
   )
+}
+
+type CloudWatchLogsSettings = Extract<NewSource, { type: 'cloudwatchLogs' }>
+
+/** The name a CloudWatch Logs Source is given from its region and prefix, like `eu-west-1 /aws/lambda/orders-`. */
+const cloudWatchName = ({ region, prefix }: Pick<CloudWatchLogsSettings, 'region' | 'prefix'>) =>
+  [region.trim(), prefix?.trim() ?? ''].filter(Boolean).join(' ')
+
+function CloudWatchLogsFields({ value, onChange, editing }: FieldsProps<CloudWatchLogsSettings>) {
+  // A new Source is named after its region and prefix.
+  const set = (changes: Partial<CloudWatchLogsSettings>) => {
+    const next = { ...value, ...changes }
+    onChange({ ...next, name: nameFollowing(value.name, cloudWatchName(value), cloudWatchName(next)) })
+  }
+  // The region the profile names: signing in with keys, the default credential chain's.
+  const signInProfile = awsAuthOf(value) === 'profile' ? (value.profile ?? '') : ''
+  const profileRegion = useListing(() => core.awsProfileRegion(signInProfile), [signInProfile])
+  // The region last filled in from a profile: until another is chosen, the region follows the profile.
+  const [filledIn, setFilledIn] = useState<string>()
+  useEffect(() => {
+    const region = profileRegion.items
+    if (region === null) return
+    if (region && (!value.region || value.region === filledIn)) set({ region })
+    setFilledIn(region)
+    // Filled in whenever the profile's region is read, from the settings as they are then.
+  }, [profileRegion.items])
+  const regionId = useId()
+
+  return (
+    <>
+      <AwsSignInFields value={value} onChange={onChange} editing={editing} />
+      <div className="field">
+        <label className="field__label" htmlFor={regionId}>
+          {t('cloudwatchSource.region')}
+        </label>
+        <select id={regionId} className="field__input field__select" value={value.region} onChange={(e) => set({ region: e.target.value })}>
+          {!value.region && <option value="">{t('cloudwatchSource.region.choose')}</option>}
+          {choicesOf([...awsRegions], value.region).map((region) => (
+            <option key={region} value={region}>
+              {region}
+            </option>
+          ))}
+        </select>
+        {profileRegion.items !== null && (
+          <span className="field__hint">
+            {profileRegion.items ? t('cloudwatchSource.region.hint', { region: profileRegion.items }) : t('cloudwatchSource.region.none')}
+          </span>
+        )}
+      </div>
+      <label className="field">
+        <span className="field__label">{t('cloudwatchSource.prefix')}</span>
+        <input
+          className="field__input field__input--path"
+          value={value.prefix ?? ''}
+          placeholder="/aws/lambda/"
+          onChange={(e) => set({ prefix: e.target.value })}
+          spellCheck={false}
+        />
+        <span className="field__hint">{t('cloudwatchSource.prefix.hint')}</span>
+      </label>
+    </>
+  )
+}
+
+/** Where a CloudWatch Logs Source's node is: its region, then its log group's name and its stream's. */
+function regionPath({ region, prefix }: CloudWatchLogsSourceInfo, path: SourcePath) {
+  const [group, stream] = path ? path.split('/').map(cloudWatchNameOf) : []
+  if (!group) return prefix ? `${region}: ${prefix}…` : region
+  return `${region}: ${group}${stream ? ` ${stream}` : ''}`
 }
 
 type AzureBlobSettings = Extract<NewSource, { type: 'azureBlob' }>
@@ -510,18 +606,18 @@ function ProfileField({ value, onChange }: { value: string; onChange(profile: st
 
   return (
     <div className="field">
-      <label className="field__label" htmlFor="s3-profile">
-        {t('s3Source.profile')}
+      <label className="field__label" htmlFor="aws-profile">
+        {t('awsSource.profile')}
       </label>
-      <select id="s3-profile" className="field__input field__select" value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">{t('s3Source.profile.default')}</option>
+      <select id="aws-profile" className="field__input field__select" value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">{t('awsSource.profile.default')}</option>
         {choices.map((profile) => (
           <option key={profile} value={profile}>
             {profile}
           </option>
         ))}
       </select>
-      <span className="field__hint">{t('s3Source.profile.hint')}</span>
+      <span className="field__hint">{t('awsSource.profile.hint')}</span>
     </div>
   )
 }
@@ -955,6 +1051,27 @@ export const sourceTypeUi: SourceTypeUis = {
     settingsOf: ({ name, context, auth, keyFile }) => ({ type: 'dockerLogs', name, context, auth, keyFile, passphrase: '', password: '' }),
     fullPath: enginePath,
     Fields: DockerLogsFields
+  },
+  cloudwatchLogs: {
+    label: 'sourceType.cloudwatchLogs',
+    hint: 'sourceType.cloudwatchLogs.hint',
+    Icon: CloudWatchLogsIcon,
+    // A profile first: most who read CloudWatch already sign in to AWS with one, SSO ones included.
+    blank: () => ({ type: 'cloudwatchLogs', name: '', region: '', prefix: '', auth: 'profile', accessKeyId: '', secretAccessKey: '', profile: '', endpoint: '' }),
+    // Everything but the secret key, which the renderer never has: left blank, the stored one stays.
+    settingsOf: ({ name, region, prefix, auth, accessKeyId, profile, endpoint }) => ({
+      type: 'cloudwatchLogs',
+      name,
+      region,
+      prefix,
+      auth,
+      accessKeyId,
+      secretAccessKey: '',
+      profile,
+      endpoint
+    }),
+    fullPath: regionPath,
+    Fields: CloudWatchLogsFields
   }
 }
 

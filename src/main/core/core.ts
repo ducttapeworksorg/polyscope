@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
   AzureBlobSourceInfo,
+  CloudWatchLogsSourceInfo,
   Compression,
   ConnectionEvent,
   ConnectionState,
@@ -29,6 +30,7 @@ import type {
   LogNode,
   LogSnapshot,
   NewAzureBlobSource,
+  NewCloudWatchLogsSource,
   NewEnvironment,
   NewS3Source,
   NewSource,
@@ -47,11 +49,13 @@ import type {
   FileLogOptions,
   TreeNode
 } from '@shared/core-api'
-import { defaultDockerContext, filesWorkloadKinds, followableSourceTypes, workloadKinds } from '@shared/core-api'
+import { defaultAwsAuth, defaultDockerContext, filesWorkloadKinds, followableSourceTypes, workloadKinds } from '@shared/core-api'
 import { searchRegExp } from '@shared/search'
 import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings } from '@shared/settings'
-import { listAwsProfiles } from './aws-profiles'
+import { awsProfileRegion, listAwsProfiles } from './aws-profiles'
+import type { AwsCredentials } from './aws-sign-in'
 import { checkConnectionString, checkSas, createAzureBlobFileSource, type AzureBlobTarget } from './azure-blob-file-source'
+import { createCloudWatchLogSource, type CloudWatchTarget } from './cloudwatch-log-source'
 import { CoreError } from './core-error'
 import { dockerEndpointOf, listDockerContexts } from './docker-contexts'
 import { connectDockerEngine } from './docker-log-source'
@@ -136,6 +140,7 @@ function withDefaults(saved: SavedSource): SavedSource {
       return { ...source, auth: source.auth ?? 'connectionString', endpoint: source.endpoint ?? '', caBundlePath: source.caBundlePath ?? '', proxyUrl: source.proxyUrl ?? '' }
     case 'kubernetesFiles':
     case 'kubernetesLogs':
+    case 'cloudwatchLogs':
       return source
   }
 }
@@ -152,16 +157,22 @@ type Target =
   | Pick<KubernetesFilesSourceInfo, 'type' | 'context' | 'namespace' | 'workloadKind' | 'workloadName' | 'path'>
   | Pick<KubernetesLogsSourceInfo, 'type' | 'context' | 'namespace'>
   | Pick<DockerLogsSourceInfo, 'type' | 'context' | 'auth' | 'keyFile'>
+  | Omit<CloudWatchLogsSourceInfo, 'id' | 'name' | 'environmentId' | 'lastNLines' | 'secretKeySet'>
 
 type S3Settings = Extract<Target, { type: 's3' }>
+type CloudWatchSettings = Extract<Target, { type: 'cloudwatchLogs' }>
 type AzureBlobSettings = Extract<Target, { type: 'azureBlob' }>
 
+/** Whether a Source is on AWS, signing in as an S3 Source does. */
+const isAwsSource = <S extends { type: SourceTypeId }>(settings: S): settings is Extract<S, { type: 's3' | 'cloudwatchLogs' }> =>
+  settings.type === 's3' || settings.type === 'cloudwatchLogs'
+
 /**
- * The name a Source's one secret is stored under, when its settings have a use for one: an S3 Source's secret key
+ * The name a Source's one secret is stored under, when its settings have a use for one: a Source on AWS's secret key
  * when it signs in with keys, an Azure Blob Storage Source's connection string or SAS, an SSH Files Source's (or a Docker Logs Source's, for an ssh:// host) key file passphrase or password.
  */
 function secretNameOf(settings: { type: SourceTypeId; auth?: string }) {
-  if (settings.type === 's3') return (settings.auth ?? 'keys') === 'keys' ? 'secretKey' : undefined
+  if (settings.type === 's3' || settings.type === 'cloudwatchLogs') return (settings.auth ?? defaultAwsAuth(settings.type)) === 'keys' ? 'secretKey' : undefined
   if (settings.type === 'azureBlob') {
     const auth = settings.auth ?? 'connectionString'
     return auth === 'azureCli' ? undefined : auth
@@ -282,15 +293,12 @@ function targetOf(input: NewSource): Target {
   }
   if (input.type === 'sshFiles') return sshTargetOf(input)
   if (input.type === 'azureBlob') return azureBlobTargetOf(input)
+  if (input.type === 'cloudwatchLogs') return cloudWatchTargetOf(input)
   const s3: NewS3Source = input
   // Blank for AWS itself; a store is most likely https, a proxy http.
   const host = normaliseUrl(s3.host ?? '', 'https', 'INVALID_HOST')
   const bucket = s3.bucket?.trim() ?? ''
   if (!bucket) throw new CoreError('BUCKET_REQUIRED', 'An S3 Source needs a bucket')
-  const auth = s3.auth ?? 'keys'
-  // Only what the chosen way of signing in uses is kept: an access key typed before switching to a profile goes.
-  const accessKeyId = auth === 'keys' ? (s3.accessKeyId?.trim() ?? '') : ''
-  if (auth === 'keys' && !accessKeyId) throw new CoreError('ACCESS_KEY_REQUIRED', 'An S3 Source needs an access key')
   return {
     type: 's3',
     host,
@@ -298,12 +306,35 @@ function targetOf(input: NewSource): Target {
     prefix: normalisePrefix(s3.prefix),
     region: s3.region?.trim() || 'us-east-1',
     pathStyle: s3.pathStyle ?? false,
-    auth,
-    accessKeyId,
-    profile: auth === 'profile' ? (s3.profile?.trim() ?? '') : '',
+    ...awsSignInOf(s3, 'An S3 Source'),
     verifyTls: s3.verifyTls ?? true,
     caBundlePath: s3.caBundlePath?.trim() ?? '',
     proxyUrl: normaliseUrl(s3.proxyUrl ?? '', 'http', 'INVALID_PROXY')
+  }
+}
+
+/**
+ * How a Source on AWS signs in, checked and trimmed: only what the chosen way of signing in uses is kept, so an access
+ * key typed before switching to a profile goes. `who` is what needs it, in the failure saying what's missing.
+ */
+function awsSignInOf(input: NewS3Source | NewCloudWatchLogsSource, who: string) {
+  const auth = input.auth ?? defaultAwsAuth(input.type)
+  const accessKeyId = auth === 'keys' ? (input.accessKeyId?.trim() ?? '') : ''
+  if (auth === 'keys' && !accessKeyId) throw new CoreError('ACCESS_KEY_REQUIRED', `${who} needs an access key`)
+  return { auth, accessKeyId, profile: auth === 'profile' ? (input.profile?.trim() ?? '') : '' }
+}
+
+/** A CloudWatch Logs Source's settings, checked and trimmed. */
+function cloudWatchTargetOf(input: NewCloudWatchLogsSource): CloudWatchSettings {
+  const region = input.region?.trim() ?? ''
+  if (!region) throw new CoreError('REGION_REQUIRED', 'A CloudWatch Logs Source needs a region')
+  return {
+    type: 'cloudwatchLogs',
+    region,
+    // A log group's name may start with '/', and the prefix is only the start of a name, so it's kept as typed.
+    prefix: input.prefix?.trim() ?? '',
+    ...awsSignInOf(input, 'A CloudWatch Logs Source'),
+    endpoint: normaliseUrl(input.endpoint ?? '', 'https', 'INVALID_HOST')
   }
 }
 
@@ -348,13 +379,23 @@ async function azureBlobTargetReadIn(settings: AzureBlobSettings, secret: string
   return { ...target, ...(caBundle && { caBundle }) }
 }
 
+/** What a Source on AWS signs in with: its profile, or its keys, with the secret key filled in. */
+function awsCredentialsOf(settings: S3Settings | CloudWatchSettings, secretKey?: string): AwsCredentials {
+  if (settings.auth === 'profile') return { profile: settings.profile }
+  if (secretKey === undefined) throw new CoreError('SECRET_KEY_REQUIRED', 'No secret key is stored for this Source')
+  return { accessKeyId: settings.accessKeyId, secretAccessKey: secretKey }
+}
+
+/** What a CloudWatch Logs Log Source needs to reach the region: the settings, with the secret key (when signing in with keys) filled in. */
+function cloudWatchTargetWith(settings: CloudWatchSettings, secretKey?: string): CloudWatchTarget {
+  const { region, prefix, endpoint } = settings
+  return { region, prefix, endpoint, credentials: awsCredentialsOf(settings, secretKey), verifyTls: true, proxyUrl: '' }
+}
+
 /** What an S3 File Source needs to reach its store: the settings, with the secret key (when signing in with keys) and CA bundle read in. */
 async function s3TargetOf(settings: S3Settings, secretKey?: string): Promise<S3Target> {
   const { host, bucket, prefix, region, pathStyle, verifyTls, proxyUrl } = settings
-  let credentials: S3Target['credentials']
-  if (settings.auth === 'profile') credentials = { profile: settings.profile }
-  else if (secretKey === undefined) throw new CoreError('SECRET_KEY_REQUIRED', 'No secret key is stored for this Source')
-  else credentials = { accessKeyId: settings.accessKeyId, secretAccessKey: secretKey }
+  const credentials = awsCredentialsOf(settings, secretKey)
   const caBundle = settings.caBundlePath ? await readCaBundle(settings.caBundlePath) : undefined
   return { host, bucket, prefix, region, pathStyle, credentials, verifyTls, proxyUrl, ...(caBundle && { caBundle }) }
 }
@@ -525,7 +566,7 @@ export function createCore(options: CoreOptions = {}): Core {
     const source =
       saved.environmentId === undefined || environments.some((e) => e.id === saved.environmentId) ? { ...saved } : unlabelled(saved)
     // Only whether there is a secret: the secret itself stays in the core.
-    if (source.type === 's3') return { ...source, secretKeySet: (await secrets.get(source.id, 'secretKey')) !== undefined }
+    if (isAwsSource(source)) return { ...source, secretKeySet: (await secrets.get(source.id, 'secretKey')) !== undefined }
     const stored = async (name: string) => secretNameOf(source) === name && (await secrets.get(source.id, name)) !== undefined
     if (source.type === 'azureBlob') return { ...source, connectionStringSet: await stored('connectionString'), sasSet: await stored('sas') }
     if (source.type === 'sshFiles' || source.type === 'dockerLogs') {
@@ -941,20 +982,22 @@ export function createCore(options: CoreOptions = {}): Core {
    * A Log Source node's children, showing only what its Source Type offers: Log Streams alone in the Source's order
    * (a pod's containers), Kubernetes' groups of Workloads in the order of their kind, the rest by name.
    */
-  const listLogNodes = async (logSource: LogSource, path: SourcePath): Promise<TreeNode[]> => {
-    const nodes = (await logSource.listChildren(path)).map((node) => offered(node, logSource.capabilities))
-    if (nodes.every((node) => node.kind === 'logStream')) return nodes
+  const listLogNodes = async (logSource: LogSource, path: SourcePath, cursor?: string): Promise<TreeNode[]> => {
+    const page = logSource.listPage ? await logSource.listPage(path, cursor) : { nodes: await logSource.listChildren(path) }
+    const more: TreeNode[] = page.cursor === undefined ? [] : [{ kind: 'more', path, cursor: page.cursor }]
+    const nodes = page.nodes.map((node) => offered(node, logSource.capabilities))
+    if (nodes.every((node) => node.kind === 'logStream')) return [...nodes, ...more]
     // Kubernetes' groups of Workloads in their kinds' order; Docker's Standalone group after the Compose projects.
     const rank = (node: LogNode) =>
       node.kubernetes?.kind === 'workloads' ? workloadKinds.indexOf(node.kubernetes.workloadKind)
       : node.docker?.kind === 'standalone' ? 1
       : 0
-    return nodes.toSorted((a, b) => rank(a) - rank(b) || byName.compare(a.name, b.name))
+    return [...nodes.toSorted((a, b) => rank(a) - rank(b) || byName.compare(a.name, b.name)), ...more]
   }
 
   /** Lists a node's children in whichever kind of Source it is. */
   const listBackend = (backend: Backend, path: SourcePath, cursor?: string) =>
-    backend.kind === 'files' ? listNodes(backend.fileSource, path, cursor) : listLogNodes(backend.logSource, path)
+    backend.kind === 'files' ? listNodes(backend.fileSource, path, cursor) : listLogNodes(backend.logSource, path, cursor)
 
   /** Opens a Local File Source at its root folder, once it's clear the folder is there. */
   const reachLocal = async ({ rootPath, showHidden }: Extract<Target, { type: 'local' }>) => {
@@ -1081,7 +1124,8 @@ export function createCore(options: CoreOptions = {}): Core {
       const engine = await reachDocker(target, secret)
       backend = { kind: 'logs', logSource: engine.logSource }
       serverVersion = engine.version
-    } else backend = { kind: 'logs', logSource: await reachKubernetes(target) }
+    } else if (target.type === 'cloudwatchLogs') backend = { kind: 'logs', logSource: createCloudWatchLogSource(cloudWatchTargetWith(target, secret)) }
+    else backend = { kind: 'logs', logSource: await reachKubernetes(target) }
     try {
       return { backend, nodes: await listBackend(backend, ''), ...(serverVersion !== undefined && { serverVersion }) }
     } catch (error) {
@@ -1098,7 +1142,7 @@ export function createCore(options: CoreOptions = {}): Core {
     const name = secretNameOf(input)
     if (name === undefined) return undefined
     const typed =
-      input.type === 's3'
+      isAwsSource(input)
         ? input.secretAccessKey
         : input.type === 'azureBlob'
           ? name === 'sas'
@@ -1130,11 +1174,11 @@ export function createCore(options: CoreOptions = {}): Core {
     }
     // Nor is a cluster or an engine: it may be away, or its context not in the kubeconfig yet.
     if (target.type === 'kubernetesLogs' || target.type === 'kubernetesFiles') return { saved: { ...target, name, ...label } }
-    // An S3, SSH Files or Docker Logs Source isn't reached until it's connected: it may be saved while its server, or
-    // its engine's ssh:// host, is away.
+    // A Source on AWS, an SSH Files or a Docker Logs Source isn't reached until it's connected: it may be saved while
+    // its server, or its engine's ssh:// host, is away.
     const typed = await secretFor(input)
-    if (target.type === 's3' && target.auth === 'keys' && typed === undefined && (await secretFor(input, editing)) === undefined) {
-      throw new CoreError('SECRET_KEY_REQUIRED', 'An S3 Source needs a secret key')
+    if (isAwsSource(target) && target.auth === 'keys' && typed === undefined && (await secretFor(input, editing)) === undefined) {
+      throw new CoreError('SECRET_KEY_REQUIRED', `${target.type === 's3' ? 'An S3' : 'A CloudWatch Logs'} Source needs a secret key`)
     }
     if (target.type === 'azureBlob' && target.auth !== 'azureCli') {
       // Without connecting: one for another account (or a SAS URL for another container) is refused, whether typed now
@@ -1547,6 +1591,7 @@ export function createCore(options: CoreOptions = {}): Core {
     },
 
     listAwsProfiles,
+    awsProfileRegion,
     async listSshHosts() {
       const config = await readSshConfig()
       return config.hosts().map((alias) => {

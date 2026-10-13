@@ -50,6 +50,13 @@ export interface LogStreamInfo {
   kubernetes?: { pod: string; container: string; restarts: number }
 }
 
+/** A page of the nodes under a node, with where the next page starts if there are more. */
+export interface LogPage {
+  nodes: LogNode[]
+  /** Lists the next page; left out on the last. */
+  cursor?: string
+}
+
 /**
  * The contract every Log Source Type implements, checked by the shared suite in log-source-contract.ts, which checks
  * what it offers beyond that only as far as its `capabilities` say.
@@ -65,6 +72,12 @@ export interface LogSource {
    * Fails with NOT_FOUND for a path that isn't in the tree, NOT_A_FOLDER for a Log Stream's that has no children.
    */
   listChildren(path: SourcePath): Promise<LogNode[]>
+  /**
+   * A page of the nodes under a node, which listChildren lists all at once, from where `cursor` says (the first page when
+   * left out): from a Source Type with nodes too many to list at once, like CloudWatch Logs' log groups and streams.
+   * Fails as listChildren does. Left out by Source Types that list them all at once.
+   */
+  listPage?(path: SourcePath, cursor?: string): Promise<LogPage>
   /**
    * What a log's path points at, and whether its log can be read. Fails with NOT_FOUND for a path that isn't in the
    * tree, NOT_A_LOG_STREAM for one that isn't a log's.
