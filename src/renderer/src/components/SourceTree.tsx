@@ -389,7 +389,7 @@ export function SourceTree(props: Props) {
    */
   const tooltip = (node: ShownNode) => {
     const where = uiFor(source.type).fullPath(source, node.path)
-    if (isLogNode(node) && node.status) return [statusTooltip(node.path, node.status), ...dockerLines(node)].join('\n')
+    if (isLogNode(node) && node.status) return [statusTooltip(node.path, node.status), ...dockerLines(node), ...unitLines(node)].join('\n')
     if (isLogNode(node) && node.kind === 'logStream' && node.cloudwatch) return [where, ...cloudwatchLines(node.cloudwatch)].join('\n')
     if (!isLogNode(node) && node.kubernetes?.kind === 'pod') return statusTooltip(node.path, node.kubernetes.status)
     if (!('modifiedTime' in node) || node.modifiedTime === undefined) return where
@@ -418,6 +418,10 @@ export function SourceTree(props: Props) {
       : [])
     ]
   }
+
+  /** What systemd says a unit is. */
+  const unitLines = (node: LogNode): string[] =>
+    node.kind === 'logStream' && node.systemd?.description ? [t('unit.description', { description: node.systemd.description })] : []
 
   /** A CloudWatch log group's size and how long it keeps its events, or a log stream's last event time. */
   const cloudwatchLines = (cloudwatch: NonNullable<LogStreamNode['cloudwatch']>): string[] => {
@@ -614,7 +618,8 @@ export function SourceTree(props: Props) {
     source.type === 'kubernetesFiles' && !path && !rootFolded ? 'tree.noPods'
     : source.type === 'dockerLogs' && !path ? 'tree.noContainers'
     : source.type === 'cloudwatchLogs' && !path ? 'tree.noLogGroups'
-    : source.type !== 'kubernetesLogs' && source.type !== 'dockerLogs' && source.type !== 'cloudwatchLogs' ? 'tree.emptyFolder'
+    : source.type === 'systemdJournal' && !path ? 'tree.noUnits'
+    : !['kubernetesLogs', 'dockerLogs', 'cloudwatchLogs', 'systemdJournal'].includes(source.type) ? 'tree.emptyFolder'
     : path ? 'tree.emptyLogNode'
     : 'tree.emptyNamespace'
 

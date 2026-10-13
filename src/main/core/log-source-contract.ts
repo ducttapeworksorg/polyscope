@@ -4,7 +4,7 @@ import type { LogSource } from './log-source'
 
 export interface LogContractSubject {
   logSource: LogSource
-  /** A Log Stream that has logged `line 1` to `line 100`, one per line, and nothing else, and goes on running. It has no children, hasn't restarted, and is under a group. */
+  /** A Log Stream that has logged `line 1` to `line 100`, one per line, and nothing else, and goes on running. It has no children, hasn't restarted, and is under a group, or the root of a flat tree. */
   counter: SourcePath
 }
 

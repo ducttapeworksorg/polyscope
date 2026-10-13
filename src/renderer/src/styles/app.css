@@ -46,6 +46,7 @@
   --type-kubernetes-logs: #b4a3e8;
   --type-docker-logs: #7fb3d5;
   --type-cloudwatch-logs: #e8a87c;
+  --type-systemd-journal: #9cd38a;
 
   --font-ui: 'Atkinson Hyperlegible Next Variable', system-ui, sans-serif;
   --font-mono: 'Red Hat Mono Variable', ui-monospace, monospace;
@@ -100,6 +101,7 @@
   --type-kubernetes-logs: #6a52b8;
   --type-docker-logs: #2f78a8;
   --type-cloudwatch-logs: #b05a1e;
+  --type-systemd-journal: #3d7a2a;
 
   color-scheme: light;
 }
@@ -1004,6 +1006,10 @@ body.is-resizing {
 
 .source-group--cloudwatchLogs {
   --group-hue: var(--type-cloudwatch-logs);
+}
+
+.source-group--systemdJournal {
+  --group-hue: var(--type-systemd-journal);
 }
 
 .source-group + .source-group {

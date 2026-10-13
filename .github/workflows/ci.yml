@@ -294,6 +294,32 @@ jobs:
           kubectl -n polyscope-test get all -o wide
           kubectl -n polyscope-files get all -o wide
 
+  # systemd Journal against the runner's own journal, seeded with transient units started with systemd-run
+  # (tests/journal/seed.sh); the runner's user may read the system journal, and sudo for the restart test.
+  integration-journal:
+    name: integration (systemd Journal)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      # It prints POLYSCOPE_TEST_JOURNAL_COUNTER=…, the counter unit the tests read.
+      - name: Seed the journal
+        run: tests/journal/seed.sh >> "$GITHUB_ENV"
+
+      - run: npm ci
+
+      # The Log Source contract suite and the core façade tests, against the journal as well as stand-in commands.
+      - run: npx vitest run src/main/core/journal src/main/core/systemd-journal
+
+      - name: Show the seeded units
+        if: failure()
+        run: systemctl list-units --all --no-pager 'polyscope-*'
+
   # Docker Logs against the runner's own Docker Engine, as well as the in-process stand-in the build job tests against,
   # seeded with a Compose project and standalone containers (tests/docker/seed.sh), through a Docker context that
   # fronts it with TLS asking for a client certificate (tests/docker/tls.sh), and through an ssh:// one reaching it over

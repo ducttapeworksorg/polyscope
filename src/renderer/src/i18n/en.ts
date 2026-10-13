@@ -32,6 +32,8 @@ export const en = {
   'sourceType.dockerLogs.hint': 'Container logs from a Docker Engine, grouped by Compose project',
   'sourceType.cloudwatchLogs': 'CloudWatch Logs',
   'sourceType.cloudwatchLogs.hint': 'Log groups in an AWS region: Lambda, ECS, API Gateway…',
+  'sourceType.systemdJournal': 'systemd Journal',
+  'sourceType.systemdJournal.hint': 'The journal of a Linux machine’s systemd units: nginx, sshd, your own services…',
 
   'sourceDialog.addTitle': 'Add Source',
   'sourceDialog.editTitle': 'Edit {name}',
@@ -179,6 +181,10 @@ export const en = {
   'dockerSource.context.missing': 'Not a context the Docker CLI knows any more.',
   'dockerSource.defaultName': 'Docker',
   'dockerGroup.standalone': 'Standalone',
+  'journalSource.target': 'Target',
+  'journalSource.target.thisMachine': 'This machine',
+  'journalSource.target.thisMachine.hint': 'Reads the system journal of the machine Polyscope runs on, as journalctl does. Your user needs to be in the systemd-journal or adm group.',
+  'journalSource.defaultName': 'This machine',
   'kubernetesSource.context': 'Context',
   'kubernetesSource.context.choose': 'Choose a context',
   'kubernetesSource.context.hint': 'From your kubeconfig. Auth plugins like aws or kubelogin work as they do for kubectl.',
@@ -217,6 +223,7 @@ export const en = {
   'container.image': 'Image: {image}',
   'container.started': 'Started: {time}',
   'container.exited': 'Exited: {time}',
+  'unit.description': 'Description: {description}',
   'logGroup.stored': 'Stored: {size}',
   'logGroup.retention': 'Retention (days): {count}',
   'logGroup.keptForever': 'Retention: never expires',
@@ -249,6 +256,7 @@ export const en = {
   'tree.emptyNamespace': 'No Workloads or pods in this namespace',
   'tree.noContainers': 'No containers in this engine',
   'tree.noLogGroups': 'No log groups in this region',
+  'tree.noUnits': 'No units have logged to this journal',
   'tree.emptyLogNode': 'Nothing here',
   'tree.noPods': 'This Workload has no pods',
   'tree.retry': 'Retry',
@@ -535,6 +543,7 @@ export const en = {
   'error.SFTP_UNAVAILABLE': 'The server’s SFTP subsystem is turned off, so its files can’t be read. ({message})',
   'error.UNSUPPORTED_DOCKER_HOST': 'Polyscope can’t reach a Docker Engine at {message}: only unix://, npipe://, tcp:// and ssh:// hosts.',
   'error.DOCKER_NOT_FOUND': 'The host has no docker command for Polyscope to reach its engine through. ({message})',
+  'error.NO_JOURNAL': 'There’s no systemd journal to read here. ({message})',
   'error.UNSUPPORTED_SSH_OPTION': 'Your ~/.ssh/config asks for something Polyscope doesn’t support: {message}',
   'error.UNKNOWN': 'Couldn’t complete that: {message}'
 } satisfies Record<string, string> &

@@ -1,6 +1,6 @@
 # Sources
 
-A **Source** is one place Polyscope reads from: a folder, a folder on a server, a bucket, a blob container, a Workload's files, a namespace's logs, a Docker engine's container logs, or an AWS region's CloudWatch logs. You configure each one once, give it a name, and it stays in the sidebar, grouped by its Source Type.
+A **Source** is one place Polyscope reads from: a folder, a folder on a server, a bucket, a blob container, a Workload's files, a namespace's logs, a Docker engine's container logs, an AWS region's CloudWatch logs, or a Linux machine's systemd journal. You configure each one once, give it a name, and it stays in the sidebar, grouped by its Source Type.
 
 To add one, choose **+** next to **Sources** at the top of the sidebar, pick a **Source Type**, and fill in the rest. **Test connection** checks the settings without saving anything.
 
@@ -252,6 +252,30 @@ The identity the Source signs in as needs these IAM actions, on the log groups i
 The AWS managed policy **CloudWatchLogsReadOnlyAccess** includes them. When one is missing, the Source or the log names it, like `logs:FilterLogEvents`.
 
 In VS Code, a CloudWatch log opens in a Polyscope viewer tab, a secret key is kept in VS Code's SecretStorage, and under Remote-SSH, WSL or Dev Containers the Source uses the remote machine's AWS config, credentials and SSO sessions, as an S3 Source does.
+
+## systemd Journal
+
+The journal of a Linux machine's systemd units: nginx, sshd, a database, your own services, and anything else systemd runs, read as `journalctl -u <unit>` reads it. It never starts, stops or changes a unit.
+
+- **Target**: **This machine**, the one Polyscope runs on. It's offered only on Linux.
+
+A new Source is named **This machine**. **Test connection** checks that `journalctl` runs and the system journal can be read.
+
+### Permissions
+
+Reading the whole system journal takes a user in the `systemd-journal` or `adm` group (on Fedora and RHEL, `wheel` works too). Add yourself with `sudo usermod -aG systemd-journal $USER`, then sign out and in again. Without it, the Source says so and names the groups. Polyscope never uses `sudo`.
+
+### The tree
+
+The tree is one flat list of the system units that have journal entries of their own, by name, so a unit's type shows as the end of its name (`.service`, `.timer`, `.socket`…). Units that have never logged anything are left out. Each loaded unit shows its active state as a coloured dot (**active**, **failed**, **inactive**, or **activating** and the like on the way), with its description in the tooltip; **failed** units come first. Units systemd no longer has loaded, like a finished transient unit, have no dot. Choose **Refresh** on the Source's row to pick up units that have logged since.
+
+### Reading and following
+
+Click a unit to read its journal, with the same toolbar as any log: **Last N lines**, **Timestamps** (each entry's journal timestamp, in UTC), **Wrap** and **Follow**. Each entry is a line (an entry of several lines gives as many, each with its timestamp), and systemd's own messages about the unit, like `Started …` and `Failed with result 'exit-code'`, are among them. An entry's priority shows as a log level before its message: **CRIT** (emerg, alert and crit), **ERROR**, **WARNING** and **DEBUG**; notice and info, a service's ordinary output, show none.
+
+The journal is one log across a unit's restarts, so a Follow carries on when the unit restarts, and there's no **Previous** toggle and no restart count.
+
+A unit's journal goes back as far as the journal keeps it, across reboots where it's kept on disk; there's no picking one boot. Per-user units (`journalctl --user`) aren't read, and there's no filtering by journal field.
 
 ## Environments
 

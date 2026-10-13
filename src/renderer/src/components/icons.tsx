@@ -123,6 +123,15 @@ export const CloudWatchLogsIcon = () => (
   </svg>
 )
 
+/** A gear beside lines of log, for systemd Journal (never systemd's logo). */
+export const SystemdJournalIcon = () => (
+  <svg {...base}>
+    <circle cx="5" cy="5.5" r="2" />
+    <path d="M5 1.75v1.75M5 7.5v1.75M1.25 5.5H3M7 5.5h1.75" />
+    <path d="M10 4.25h4.25M10 7h4.25M2.25 11h12M2.25 13.75h8" />
+  </svg>
+)
+
 /** Lines of text, for a Log Stream. */
 export const LogIcon = () => (
   <svg {...base}>
