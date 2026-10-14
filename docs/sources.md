@@ -44,6 +44,8 @@ A folder on a server, read over SFTP: an app's logs under `/var/log` or `/opt/ap
 
 Each Source keeps one SSH connection open while it's connected, shared by all its tabs and Follows. If the connection drops, say while your laptop slept, the next thing you browse or read reconnects it. **Disconnect** closes it.
 
+![An SSH Files Source on a server's /var/log, with its nginx logs open](images/ssh-files.png)
+
 ### What Polyscope reads from your SSH config
 
 Polyscope reads `~/.ssh/config`, and the files it `Include`s, the way `ssh` does: the first value found for a host wins, and `Host` patterns can use `*`, `?` and `!`. It uses only these options:
@@ -138,6 +140,8 @@ The proxy and CA bundle are for reaching the storage account. Signing in through
 
 Gzip and zstd blobs open decompressed, and a blob over the Large File threshold opens end-first, read in ranges. Blobs don't grow, so they can't be followed.
 
+![An Azure Blob Storage container of archived logs, by service and day, with a gzipped log open decompressed](images/azure-blob.png)
+
 In VS Code, a connection string or SAS is kept in VS Code's SecretStorage, and under Remote-SSH, WSL or Dev Containers, **Azure CLI** signs in with the remote machine's `az login` and environment, as an S3 Source uses its AWS profiles.
 
 ## Kubernetes Files
@@ -225,6 +229,8 @@ Each container shows its **Container Status** as a coloured dot, with the status
 
 A container that has restarted shows how many times, as in Kubernetes Logs. Its tooltip also gives its image and when it started, or when it exited. Right-click a row for **Copy name**, to paste into `docker logs`, say.
 
+![A Docker Logs Source's Compose project, each service with its Container Status, and one service's log followed live](images/docker-logs.png)
+
 ### Reading and following
 
 Click a container to read its log, with the same toolbar as any log: **Last N lines**, **Timestamps**, **Wrap** and **Follow**. stdout and stderr show together, in the order they were written. A container with a TTY has its log shown as it was written. See [Reading files and logs](reading.md#logs).
@@ -257,6 +263,8 @@ The Source lists its log groups by name, 50 at a time, with **Load more…** for
 ### Reading and following
 
 Clicking a log group expands it. Right-click it and choose **Open log** to open it as **one log**: the events of all its streams, interleaved by time. Each line starts with a short form of its stream's name, so you can tell instances apart: the end of a Lambda stream's name, like `[0123abcd]`, or an ECS task's id, cut to its first 8 characters. To read one instance or task alone, click its stream under the log group.
+
+![An ECS service's log group opened as one log, each line starting with the task it came from](images/cloudwatch-logs.png)
 
 Logs open with the same toolbar as any log: **Last N lines**, **Timestamps** (each event's CloudWatch timestamp), **Wrap** and **Follow**. An event with several lines, like a stack trace, keeps them, each with the event's timestamp. **Load earlier** adds the lines before the first one shown. There's no **Previous** toggle, and no restarts.
 
@@ -314,6 +322,8 @@ The tree is one flat list of the system units that have journal entries of their
 Click a unit to read its journal, with the same toolbar as any log: **Last N lines**, **Timestamps** (each entry's journal timestamp, in UTC), **Wrap** and **Follow**. Each entry is a line (an entry of several lines gives as many, each with its timestamp), and systemd's own messages about the unit, like `Started …` and `Failed with result 'exit-code'`, are among them. An entry's priority shows as a log level before its message: **CRIT** (emerg, alert and crit), **ERROR**, **WARNING** and **DEBUG**; notice and info, a service's ordinary output, show none.
 
 The journal is one log across a unit's restarts, so a Follow carries on when the unit restarts, and there's no **Previous** toggle and no restart count.
+
+![A server's systemd units with their active states, and a failed unit's journal, its errors and warnings marked](images/systemd-journal.png)
 
 A unit's journal goes back as far as the journal keeps it, across reboots where it's kept on disk; there's no picking one boot. Per-user units (`journalctl --user`) aren't read, and there's no filtering by journal field.
 
