@@ -31,7 +31,7 @@ Related reading:
 
 ## At a glance
 
-Polyscope is a read-only viewer for files and logs from several kinds of backend: local folders, S3-compatible buckets, files inside Kubernetes pods, and Kubernetes container logs. It ships in two forms that share almost all their code:
+Polyscope is a read-only viewer for files and logs from several kinds of backend: local folders, folders on servers over SSH, S3-compatible buckets, Azure blob containers, files inside Kubernetes pods, and the logs of Kubernetes and Docker containers, CloudWatch Logs and systemd's journal. It ships in two forms that share almost all their code:
 
 - **The desktop app**: an Electron app for Windows, macOS and Linux.
 - **The Extension Copy**: a VS Code extension that runs the same core and the same UI components inside VS Code (ADR 0005).
@@ -54,7 +54,7 @@ flowchart TB
   end
   Core["Core — src/main/core<br/>Sources, Follows, Large Files, settings, secrets"]
   Shared["Shared contract — src/shared<br/>CoreApi, types, settings rules"]
-  Backends[("Local disk · SSH servers · S3 · Kubernetes API")]
+  Backends[("Local disk · SSH servers · S3 · Azure Blob · Kubernetes API · Docker Engine · CloudWatch Logs · journalctl")]
 
   App --> Preload --> Main --> Core
   Ext --> PostMsg --> ExtHost --> Core
@@ -470,7 +470,7 @@ The three `tsconfig.*.json` projects enforce most of this: `tsconfig.web.json` (
 | Sources and group order | Core (`registry-store`) | `sources.json` in the data folder | Yes |
 | Environments | Core (`environment-store`) | `environments.json` | Yes |
 | Settings | Core (`settings-store`) | `settings.json` | Yes |
-| Secrets (S3 secret keys, Azure Blob Storage connection strings and SASs, SSH key passphrases and passwords) | Core (`secret-store`) | `secrets.json`, encrypted with `safeStorage`; VS Code `SecretStorage` in the extension | Yes |
+| Secrets (S3 and CloudWatch Logs secret keys, Azure Blob Storage connection strings and SASs, SSH key passphrases and passwords) | Core (`secret-store`) | `secrets.json`, encrypted with `safeStorage`; VS Code `SecretStorage` in the extension | Yes |
 | Large File cache | Core (`large-file-cache`) | `large-file-cache/` in the data folder, LRU-capped by `cacheSizeCap` | Yes (reused if the file hasn't changed) |
 | App log | Host (`app-log.ts`) | `logs/` in the data folder | Yes, rotated |
 | Connections, Follows, open Large Files | Core, in memory | — | No: every Source starts Disconnected |
@@ -498,7 +498,7 @@ Failures *inside* a tree are data, not exceptions: `expand` returns an `ErrorNod
 - **Secrets stay in the core**, encrypted at rest by the OS. On Linux without a keyring, `safeStorage` falls back to obfuscation, and the UI warns about it (`secretStorageIsWeak`).
 - **Webview Content Security Policy.** The extension's webviews load only their own bundle, with a nonce (`webview-page.ts`).
 - **No telemetry.** The app log is only read back by "Copy diagnostics", which redacts secrets and the home folder path first. See [Privacy](privacy.md).
-- **Credentials work as the user's tools do.** Kubernetes uses the kubeconfig (including exec plugins, hence loading the login shell's PATH). S3 uses typed keys or AWS profiles, Azure Blob Storage a connection string, a SAS or Azure's default credentials. Proxies and custom CAs are configured per Source or come from the environment.
+- **Credentials work as the user's tools do.** Kubernetes uses the kubeconfig (including exec plugins, hence loading the login shell's PATH). S3 and CloudWatch Logs use typed keys or AWS profiles, Azure Blob Storage a connection string, a SAS or Azure's default credentials, Docker Logs the Docker CLI's contexts, and SSH `~/.ssh/config`, `known_hosts` and the SSH agent, never writing to any of them. Proxies and custom CAs are configured per Source or come from the environment.
 
 ## Build, packaging and distribution
 
@@ -534,11 +534,11 @@ flowchart LR
 | Unit | Vitest | `src/**/*.test.ts` beside the code | Pure logic: `workspace.ts`, `follow-feed`, line highlighting, redaction, update decisions, pod status… |
 | Core integration | Vitest | `src/main/core/*.test.ts` | The core through `createCore()`, against a temp folder. Fake time and fake backends where needed |
 | Backend contract | Vitest | `file-source-contract.ts`, `log-source-contract.ts` | The same suite run against every `FileSource`/`LogSource` implementation |
-| Real backends | Vitest | `s3-*.test.ts`, `azure-blob-*.test.ts`, `kubernetes-*.test.ts` | Against RustFS, Azurite and kind in CI. Skipped unless `POLYSCOPE_TEST_*` variables are set |
+| Real backends | Vitest | `s3-*.test.ts`, `azure-blob-*.test.ts`, `kubernetes-*.test.ts`, `ssh-*.test.ts`, `docker-*.test.ts`, `journal-*.test.ts`, `systemd-journal-*.test.ts` | Against RustFS, Azurite, kind, OpenSSH's `sshd`, the runner's Docker engine and its systemd journal in CI. Skipped unless `POLYSCOPE_TEST_*` variables are set; the SSH, Docker and journal tests run against in-process stand-ins then, and CloudWatch Logs' always do |
 | Desktop end-to-end | Playwright (Electron) | `tests/smoke/` | Drives the built app |
 | Extension end-to-end | `@vscode/test-electron` | `tests/extension/` | Drives a real VS Code, in both `ownViewer` modes, and again after a simulated reload |
 
-Because the core has no Electron dependency, most behaviour is tested by calling `createCore()` directly in Node. That's the fastest place to test it and where a new test usually belongs. `kubernetes-test-api-server.ts` and `test-network.ts` provide local stand-ins where a real backend isn't needed.
+Because the core has no Electron dependency, most behaviour is tested by calling `createCore()` directly in Node. That's the fastest place to test it and where a new test usually belongs. `kubernetes-test-api-server.ts`, `ssh-test-server.ts`, `docker-test-engine.ts`, `cloudwatch-test-endpoint.ts`, `journal-test-host.ts` and `test-network.ts` provide local stand-ins where a real backend isn't needed.
 
 ## Where does it go?
 

@@ -25,7 +25,7 @@ To watch a growing file on a Local Filesystem, SSH Files or Kubernetes Files Sou
 
 ## Logs
 
-A container's log, or a CloudWatch log, opens with a toolbar:
+A container's log, a CloudWatch log, or a systemd unit's journal opens with a toolbar:
 
 - **Last N lines**: how much of the log to fetch and keep: 1K, 10K (the default, set in **Settings**), 50K, 100K, **All**, or a number you type. Choosing **All** for a log over the Large File threshold asks first.
 - **Load earlier**, for CloudWatch logs: add the lines before the first one shown, as many as **Last N lines** says.
