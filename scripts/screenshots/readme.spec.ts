@@ -4,8 +4,9 @@
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test'
-import { seedFolder, startCluster } from './samples'
+import { _electron as electron, expect, test, type ElectronApplication, type Locator, type Page } from '@playwright/test'
+import { cloudWatchSegment } from '../../src/shared/core-api'
+import { seedFolder, startAzureAccount, startCloudWatch, startCluster, startDockerEngine, startSshHost } from './samples'
 
 const images = join(__dirname, '..', '..', 'docs', 'images')
 
@@ -13,6 +14,10 @@ let dir: string
 let app: ElectronApplication
 let window: Page
 let cluster: Awaited<ReturnType<typeof startCluster>>
+let docker: Awaited<ReturnType<typeof startDockerEngine>>
+let cloudWatch: Awaited<ReturnType<typeof startCloudWatch>>
+let sshHost: Awaited<ReturnType<typeof startSshHost>>
+let azure: Awaited<ReturnType<typeof startAzureAccount>>
 
 // ---- Driving the app --------------------------------------------------------------------------------------------
 
@@ -49,6 +54,71 @@ async function addKubernetesLogs(name: string, environment: string) {
   await expect(dialog).toBeHidden()
 }
 
+/** Picks a way to sign in, clicking its option as a user would: the radio itself is hidden beneath. */
+const pick = (dialog: Locator, option: string) => dialog.locator('label.segmented__option', { hasText: option }).click()
+
+async function addDockerLogs(environment: string) {
+  const dialog = await openAddSource('dockerLogs')
+  await expect(dialog.getByLabel('Name', { exact: true })).toHaveValue('Docker')
+  await dialog.getByLabel('Environment').selectOption({ label: environment })
+  await dialog.getByRole('button', { name: 'Add Source' }).click()
+  await expect(dialog).toBeHidden()
+}
+
+async function addCloudWatchLogs(environment: string) {
+  const dialog = await openAddSource('cloudwatchLogs')
+  await expect(dialog.getByLabel('Region', { exact: true })).toHaveValue('eu-west-1')
+  await dialog.getByLabel('Environment').selectOption({ label: environment })
+  await dialog.getByRole('button', { name: 'Add Source' }).click()
+  await expect(dialog).toBeHidden()
+}
+
+/** An SSH Files or systemd Journal Source on the SSH config's `web-01`, signing in with its IdentityFile. */
+async function addOnWeb01(type: 'sshFiles' | 'systemdJournal', environment: string, path?: string) {
+  const dialog = await openAddSource(type)
+  if (type === 'systemdJournal') await pick(dialog, 'Host over SSH')
+  await dialog.getByRole('combobox', { name: 'Host', exact: true }).fill('web-01')
+  if (path) await dialog.getByLabel('Path').fill(path)
+  await pick(dialog, 'Key file')
+  await dialog.getByLabel('Environment').selectOption({ label: environment })
+  await dialog.getByRole('button', { name: 'Add Source' }).click()
+  await expect(dialog).toBeHidden()
+}
+
+async function addAzureBlob(environment: string) {
+  const dialog = await openAddSource('azureBlob')
+  await dialog.getByLabel('Storage account', { exact: true }).fill(azure.account)
+  await dialog.getByLabel('Container', { exact: true }).fill(azure.container)
+  // The field, not the sign-in choice of the same name.
+  await dialog.getByLabel('Connection string').and(dialog.locator('input[type="password"]')).fill(azure.connectionString)
+  await dialog.getByLabel('Environment').selectOption({ label: environment })
+  await dialog.getByRole('button', { name: 'Add Source' }).click()
+  await expect(dialog).toBeHidden()
+}
+
+/** Expands the Source Type groups named, and collapses the rest. */
+async function showGroups(...shown: string[]) {
+  for (const group of await window.locator('section').filter({ has: window.locator('.source-group__toggle') }).all()) {
+    const toggle = group.locator('.source-group__toggle')
+    const expanded = (await toggle.getAttribute('aria-expanded')) === 'true'
+    if (expanded !== shown.includes((await group.getAttribute('aria-label')) ?? '')) await toggle.click()
+  }
+}
+
+async function closeAllTabs() {
+  const tab = window.getByRole('tab').first()
+  if ((await tab.count()) === 0) return
+  await tab.click({ button: 'right' })
+  await window.getByRole('menuitem', { name: 'Close All' }).click()
+  await expect(window.getByRole('tab')).toHaveCount(0)
+}
+
+async function turnOn(name: string) {
+  const button = window.getByRole('button', { name, exact: true })
+  if ((await button.getAttribute('aria-pressed')) !== 'true') await button.click()
+  await expect(button).toHaveAttribute('aria-pressed', 'true')
+}
+
 async function setLargeFileThreshold(megabytes: string) {
   await window.getByRole('button', { name: 'Settings', exact: true }).click()
   const settings = window.getByRole('dialog', { name: 'Settings' })
@@ -63,13 +133,29 @@ test.beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'polyscope-screenshots-'))
   await seedFolder(join(dir, 'logs'))
   cluster = await startCluster(dir)
+  docker = await startDockerEngine()
+  cloudWatch = await startCloudWatch(dir)
+  sshHost = await startSshHost(dir)
+  azure = await startAzureAccount()
   app = await electron.launch({
     // The project itself, rather than its built main script, so the app reads its version from package.json for the
     // status bar, rather than reporting Electron's.
     args: [join(__dirname, '..', '..'), `--user-data-dir=${join(dir, 'user-data')}`],
-    env: { ...process.env, KUBECONFIG: cluster.kubeconfig }
+    // A home of the samples' own, so nothing from your ~/.ssh, ~/.aws or ~/.docker shows, nor your SSH agent's keys.
+    env: {
+      ...process.env,
+      HOME: sshHost.home,
+      USERPROFILE: sshHost.home,
+      SSH_AUTH_SOCK: '',
+      KUBECONFIG: cluster.kubeconfig,
+      ...docker.env,
+      ...cloudWatch.env
+    }
   })
   window = await app.firstWindow()
+  // The Azure Source's connection string is stored, in the throwaway user data. Launched here, Electron finds no keyring
+  // on Linux, so it's let obfuscate it instead.
+  await app.evaluate(({ safeStorage }) => safeStorage.setUsePlainTextEncryption(true))
   // The app maximizes its window as it first shows it, which would undo the sizing below.
   await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isMaximized())).toBe(true)
   // The same size on every machine, on the sharpest screen it fits, whatever screen it opens on.
@@ -92,6 +178,10 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await app?.close()
   await cluster?.close()
+  await docker?.close()
+  await cloudWatch?.close()
+  await sshHost?.close()
+  await azure?.close()
   await rm(dir, { recursive: true, force: true })
 })
 
@@ -169,4 +259,70 @@ test('screenshots', async () => {
   await window.getByRole('tab', { name: 'app.log' }).click()
   await window.getByRole('button', { name: 'Switch to the light theme' }).click()
   await shot('light-theme')
+  await window.getByRole('button', { name: 'Switch to the dark theme' }).click()
+
+  // The newer Source Types, each shown on its own: the other groups collapsed, and the tabs before closed.
+  await closeAllTabs()
+  await addOnWeb01('sshFiles', 'prod', '/var/log')
+  await addAzureBlob('prod')
+  await addDockerLogs('dev')
+  await addCloudWatchLogs('prod')
+  await addOnWeb01('systemdJournal', 'prod')
+
+  // SSH Files: a server's /var/log, its nginx logs open.
+  await showGroups('SSH Files')
+  await row('web-01:/var/log').click()
+  await row('nginx').click()
+  await row('error.log').dblclick()
+  await expect(window.getByRole('tab', { name: /error\.log/ })).toBeVisible()
+  await row('access.log').first().dblclick()
+  await expect(window.getByRole('tab', { name: /access\.log/ })).toBeVisible()
+  await shot('ssh-files')
+
+  // Azure Blob Storage: a container of archived logs by service and day, a gzipped one open decompressed.
+  await closeAllTabs()
+  await showGroups('Azure Blob Storage')
+  await row('shoplogs/archive').click()
+  await row('checkout-api').click()
+  await row('2026').click()
+  await row('09').click()
+  await row('29').click()
+  await row('access.log.gz').dblclick()
+  await expect(window.getByRole('tab', { name: /access\.log\.gz/ })).toBeVisible()
+  await row('app.log.gz').dblclick()
+  await expect(window.getByRole('tab', { name: /app\.log\.gz/ })).toBeVisible()
+  await shot('azure-blob')
+
+  // Docker Logs: a Compose project's services, with their Container Status, and a service's log followed live.
+  await closeAllTabs()
+  await showGroups('Docker Logs')
+  await row('Docker').click()
+  await row('shop').click()
+  await row('web').click()
+  await row('checkout').click()
+  await window.getByRole('button', { name: 'Timestamps' }).click()
+  await turnOn('Follow')
+  docker.drip()
+  await window.waitForTimeout(2_500)
+  await shot('docker-logs')
+
+  // CloudWatch Logs: an ECS service's log group, opened as one log of all its tasks' streams.
+  await closeAllTabs()
+  await showGroups('CloudWatch Logs')
+  await row('eu-west-1').click()
+  const checkout = row(cloudWatchSegment('/ecs/checkout'))
+  await checkout.click()
+  await checkout.click({ button: 'right' })
+  await window.getByRole('menuitem', { name: 'Open log' }).click()
+  await expect(window.getByRole('tab', { name: /checkout/ })).toBeVisible()
+  await window.getByRole('button', { name: 'Timestamps' }).click()
+  await shot('cloudwatch-logs')
+
+  // systemd Journal: a server's units, with their active states, and a failed one's journal.
+  await closeAllTabs()
+  await showGroups('systemd Journal')
+  await row('web-01').last().click()
+  await row('backup.service').click()
+  await window.getByRole('button', { name: 'Timestamps' }).click()
+  await shot('systemd-journal')
 })
