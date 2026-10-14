@@ -1,11 +1,15 @@
 import { spawn } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
 import type { LogStreamNode, NodeHealth, NodeStatus, SourcePath } from '@shared/core-api'
+import type { ClientChannel } from 'ssh2'
 import { CoreError } from './core-error'
 import type { LogConnection, LogFollowOptions, LogReadOptions, LogSource, LogStreamInfo } from './log-source'
+import type { SshConnection } from './ssh-connection'
 
-// `journalctl` and `systemctl` are only ever run directly, never through a shell, with arguments Polyscope builds itself:
-// a unit's name only once it's checked against systemd's rules for unit names, and only as part of an `--unit=` argument.
+// `journalctl` and `systemctl` are only ever run with arguments Polyscope builds itself: a unit's name only once it's
+// checked against systemd's rules for unit names, and only as part of an `--unit=` argument. On this machine they're
+// spawned directly, never through a shell; on a host over SSH, whose server runs every command through the user's
+// shell, each argument is quoted for it.
 
 /** A command running on the machine whose journal is read. */
 export interface RunningCommand {
@@ -40,6 +44,71 @@ export const thisMachine: JournalHost = {
       child.on('close', (code) => resolve({ code, stderr }))
     })
     return { onOutput: (listener) => child.stdout.on('data', listener), exited, stop: () => child.kill() }
+  }
+}
+
+/** A word quoted for a POSIX shell: in single quotes, each of its own ended, escaped and begun again. */
+const shellQuoted = (word: string) => `'${word.replaceAll("'", `'\\''`)}'`
+
+/**
+ * Whether the user's shell couldn't find `command`, from its exit code and what it said: 127 from a POSIX shell (`sh: 1:
+ * journalctl: not found`, `bash: journalctl: command not found`), and csh's `journalctl: Command not found.` or fish's
+ * `fish: Unknown command: journalctl` whatever the code.
+ */
+const notFound = (command: string, code: number | null, said: string) =>
+  code === 127 || new RegExp(`${command}: command not found|unknown command:? '?${command}`, 'i').test(said)
+
+/**
+ * A host reached over SSH: its commands run on exec channels of the one connection, as the user signed in, each
+ * channel closed to stop its command. `host` is what to call it in failures.
+ */
+export function journalHostOver(connection: SshConnection, host: string): JournalHost {
+  return {
+    name: host,
+    start(command, args) {
+      const listeners: ((chunk: Buffer) => void)[] = []
+      let channel: ClientChannel | undefined
+      let stopped = false
+      const stop = (running: ClientChannel) => {
+        // A command that ignores its output going nowhere, like journalctl --follow before it next logs, is told to end too.
+        running.signal('TERM')
+        running.close()
+      }
+      const exited = connection.exec([command, ...args].map(shellQuoted).join(' ')).then(
+        (opened) =>
+          new Promise<{ code: number | null; stderr: string }>((resolve, reject) => {
+            channel = opened
+            const stderr: Buffer[] = []
+            opened.on('data', (chunk: Buffer) => {
+              for (const listener of listeners) listener(chunk)
+            })
+            opened.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
+            opened.on('error', () => undefined)
+            // ssh2 tells how the command exited as the channel closes: its exit code, or null and the signal that ended it,
+            // or undefined if it never exited, as when the connection drops. ('exit' may come before this listens.)
+            opened.on('close', (code?: number | null, signal?: string) => {
+              const said = Buffer.concat(stderr).toString('utf8')
+              if (stopped) return resolve({ code: null, stderr: said })
+              // Closed without exiting: the connection dropped under it, and what it gave is only part of its output.
+              if (code === undefined) return reject(new CoreError('UNREACHABLE', `${host}: the connection closed`))
+              if (notFound(command, code, said)) {
+                return reject(new CoreError('NO_JOURNAL', `There’s no ${command} on ${host} for ${connection.user}, so no systemd journal to read`))
+              }
+              if (code === null) return reject(new CoreError('UNKNOWN', `${command} on ${host} was ended by ${signal ?? 'a signal'}`))
+              resolve({ code, stderr: said })
+            })
+            if (stopped) stop(opened)
+          })
+      )
+      return {
+        onOutput: (listener) => void listeners.push(listener),
+        exited,
+        stop() {
+          stopped = true
+          if (channel) stop(channel)
+        }
+      }
+    }
   }
 }
 

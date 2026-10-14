@@ -203,14 +203,31 @@ export interface NewCloudWatchLogsSource {
   environmentId?: string
 }
 
-/** Whose journal a systemd Journal Source reads: this machine's, the one the core runs on (only on Linux). */
-export type JournalTarget = 'thisMachine'
+/**
+ * Whose journal a systemd Journal Source reads: this machine's, the one the core runs on (only on Linux), or a host's
+ * reached over SSH, as an SSH Files Source reaches its server.
+ */
+export type JournalTarget = 'thisMachine' | 'ssh'
 
 export interface NewSystemdJournalSource {
   type: 'systemdJournal'
   name: string
   /** This machine unless given. */
   target?: JournalTarget
+  /** Over SSH: the host, or a Host alias from the user's `~/.ssh/config`, as an SSH Files Source's; ignored on this machine. */
+  host?: string
+  /** Over SSH: the user to sign in as; when blank, the SSH config's User for the host. */
+  user?: string
+  /** Over SSH: when left out, the SSH config's Port for the host, or else 22. */
+  port?: number
+  /** Over SSH: how to sign in, `agent` when left out. */
+  auth?: SshAuth
+  /** Over SSH: the private key file that signs in with `keyFile`; when blank, the SSH config's IdentityFile for the host. */
+  keyFile?: string
+  /** Over SSH: the key file's passphrase, kept as an SSH Files Source's is; blank or left out when editing keeps the stored one. */
+  passphrase?: string
+  /** Over SSH: the password that signs in with `password`, kept like a passphrase; blank or left out when editing keeps it. */
+  password?: string
   /** The Environment the Source is labelled with; unlabelled when left out. */
   environmentId?: string
 }
@@ -398,6 +415,20 @@ export interface CloudWatchLogsSourceInfo extends SourceIdentity {
 export interface SystemdJournalSourceInfo extends SourceIdentity {
   type: 'systemdJournal'
   target: JournalTarget
+  /** Over SSH: a host name or address, or an alias from `~/.ssh/config`; blank on this machine. */
+  host: string
+  /** Blank to use the SSH config's, and on this machine. */
+  user: string
+  /** Left out to use the SSH config's, or else 22. */
+  port?: number
+  /** How it signs in over SSH. */
+  auth: SshAuth
+  /** Blank unless it signs in with a key file, and then blank for the SSH config's IdentityFile. */
+  keyFile: string
+  /** Whether a passphrase is stored for the key file; the passphrase itself never leaves the core. */
+  passphraseSet: boolean
+  /** Whether a password is stored; the password itself never leaves the core. */
+  passwordSet: boolean
 }
 
 export interface KubernetesFilesSourceInfo extends SourceIdentity {

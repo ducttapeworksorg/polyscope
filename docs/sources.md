@@ -1,6 +1,6 @@
 # Sources
 
-A **Source** is one place Polyscope reads from: a folder, a folder on a server, a bucket, a blob container, a Workload's files, a namespace's logs, a Docker engine's container logs, an AWS region's CloudWatch logs, or a Linux machine's systemd journal. You configure each one once, give it a name, and it stays in the sidebar, grouped by its Source Type.
+A **Source** is one place Polyscope reads from: a folder, a folder on a server, a bucket, a blob container, a Workload's files, a namespace's logs, a Docker engine's container logs, an AWS region's CloudWatch logs, or a Linux host's systemd journal. You configure each one once, give it a name, and it stays in the sidebar, grouped by its Source Type.
 
 To add one, choose **+** next to **Sources** at the top of the sidebar, pick a **Source Type**, and fill in the rest. **Test connection** checks the settings without saving anything.
 
@@ -255,15 +255,19 @@ In VS Code, a CloudWatch log opens in a Polyscope viewer tab, a secret key is ke
 
 ## systemd Journal
 
-The journal of a Linux machine's systemd units: nginx, sshd, a database, your own services, and anything else systemd runs, read as `journalctl -u <unit>` reads it. It never starts, stops or changes a unit.
+The journal of a Linux host's systemd units: nginx, sshd, a database, your own services, and anything else systemd runs, read as `journalctl -u <unit>` reads it. It never starts, stops or changes a unit.
 
-- **Target**: **This machine**, the one Polyscope runs on. It's offered only on Linux.
+- **Target**:
+  - **Host over SSH**: a server's journal, reached over SSH. Its **Host**, **Port**, **User** and **Sign in with** fields are [SSH Files](#ssh-files)' own, and work the same way: `~/.ssh/config` aliases and `ProxyJump`, the SSH agent, key files and passwords, and the same [host key](#host-keys) check, sharing the keys you trusted for SSH Files. Passphrases and passwords are kept, copied and forgotten as an SSH Files Source's are.
+  - **This machine**: the one Polyscope runs on. It's offered only on Linux.
 
-A new Source is named **This machine**. **Test connection** checks that `journalctl` runs and the system journal can be read.
+A new Source is named after its host, or **This machine**. **Test connection** connects and checks that `journalctl` runs and the system journal can be read. A host without `journalctl`, one not running systemd, says there's no journal on it.
+
+Over SSH, Polyscope runs only `journalctl` and `systemctl`, with arguments it builds itself, over the Source's one SSH connection: it needs no SFTP and nothing else on the server. The unit list, every log read and every Follow share that connection, as an SSH Files Source's tabs do; if it drops, the next thing you open or refresh reconnects it, and a Follow under way stops, saying so. **Disconnect** closes it.
 
 ### Permissions
 
-Reading the whole system journal takes a user in the `systemd-journal` or `adm` group (on Fedora and RHEL, `wheel` works too). Add yourself with `sudo usermod -aG systemd-journal $USER`, then sign out and in again. Without it, the Source says so and names the groups. Polyscope never uses `sudo`.
+Reading the whole system journal takes a user in the `systemd-journal` or `adm` group (on Fedora and RHEL, `wheel` works too): you, on this machine, or the user signing in, over SSH. Add one with `sudo usermod -aG systemd-journal <user>`, then sign in afresh (over SSH, **Disconnect** the Source and expand it again). Without it, the Source says so and names the groups. Polyscope never uses `sudo`.
 
 ### The tree
 
@@ -276,6 +280,8 @@ Click a unit to read its journal, with the same toolbar as any log: **Last N lin
 The journal is one log across a unit's restarts, so a Follow carries on when the unit restarts, and there's no **Previous** toggle and no restart count.
 
 A unit's journal goes back as far as the journal keeps it, across reboots where it's kept on disk; there's no picking one boot. Per-user units (`journalctl --user`) aren't read, and there's no filtering by journal field.
+
+In VS Code, a unit's journal opens in a Polyscope viewer tab. Under Remote-SSH, WSL or Dev Containers, Polyscope runs on the remote machine, so **This machine** is the remote's journal, offered when the remote runs Linux, and a host over SSH is reached from there, with the remote's SSH config, `known_hosts` and agent.
 
 ## Environments
 

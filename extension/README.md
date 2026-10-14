@@ -1,6 +1,6 @@
 # Polyscope for VS Code
 
-**Read files and logs wherever they live, without leaving VS Code.** Browse a local folder, a folder on a server, an S3 bucket, an Azure blob container, the files inside a Kubernetes pod, every container log in a namespace or on a Docker engine, or the CloudWatch logs of an AWS region, all from one sidebar and all read the same way.
+**Read files and logs wherever they live, without leaving VS Code.** Browse a local folder, a folder on a server, an S3 bucket, an Azure blob container, the files inside a Kubernetes pod, every container log in a namespace or on a Docker engine, the CloudWatch logs of an AWS region, or a Linux host's systemd journal, all from one sidebar and all read the same way.
 
 Chasing a problem across systems usually means a terminal per place: `tail -f` for a server's files, `aws s3 cp` for archived logs, `kubectl logs` and `kubectl exec … cat` for a cluster. Polyscope puts them in one tree, opens them in the editor you already know, and never writes to any of them.
 
@@ -8,7 +8,7 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 
 ## Features
 
-- **Every place in one sidebar.** Local folders, folders on servers over SSH, S3-compatible buckets, Azure blob containers, files inside pods, pod logs, Docker container logs and CloudWatch logs, each configured once as a **Source**.
+- **Every place in one sidebar.** Local folders, folders on servers over SSH, S3-compatible buckets, Azure blob containers, files inside pods, pod logs, Docker container logs, CloudWatch logs and systemd journals, each configured once as a **Source**.
 - **Logs that keep up.** Follow a container's log, or a growing file, live. Pause to read, and pick up where you left off. A crashed container's **Previous Log** is a toggle away, in the same tab.
 - **Files of any size.** A multi-gigabyte file opens end-first in a paged viewer, without downloading all of it. Compressed files (`.gz`, `.zst`) open decompressed.
 - **Always know where you are.** Label Sources with an **Environment** like *prod* or *staging*. Its colour tints every tab from that Source, so a file from prod stands out.
@@ -29,6 +29,7 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 | **Kubernetes Logs** | The logs of every container in a namespace, grouped by Workload, with pod health and restarts | Your kubeconfig, as `kubectl` does |
 | **Docker Logs** | The logs of every container on a Docker engine, or Podman, grouped by Compose project and service, with container health and restarts | Your Docker contexts, as `docker` does (local socket, TCP with TLS, or SSH) |
 | **CloudWatch Logs** | The log groups of an AWS region, each opening as one log of all its streams, or stream by stream, without calling any API billed per use | An AWS profile (SSO included), or access keys |
+| **systemd Journal** | The journal of every system unit that has logged on a Linux host, with its active state, read over SSH or on this machine | Over SSH, as SSH Files does; on this machine, your own user |
 
 ## Getting started
 
@@ -40,13 +41,13 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 
 ## Viewer tabs
 
-Followed files, container logs (Kubernetes and Docker), CloudWatch logs and Large Files open in a Polyscope viewer tab, which appends live lines and pages through a multi-gigabyte file. Turn off the `polyscope.ownViewer` setting to open everything in VS Code's editor instead: Log Streams as a snapshot of their Last N lines, with no way to switch to a container's Previous Log, Large Files only up to the "open anyway" limit in Polyscope's Settings, and no Follow.
+Followed files, container logs (Kubernetes and Docker), CloudWatch logs, systemd journals and Large Files open in a Polyscope viewer tab, which appends live lines and pages through a multi-gigabyte file. Turn off the `polyscope.ownViewer` setting to open everything in VS Code's editor instead: Log Streams as a snapshot of their Last N lines, with no way to switch to a container's Previous Log, Large Files only up to the "open anyway" limit in Polyscope's Settings, and no Follow.
 
 ![A Large File in a Polyscope viewer tab, listing every line matching a search](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vvscode-large-file.png)
 
 ## Remote development
 
-Under Remote-SSH, WSL and Dev Containers, Polyscope runs on the remote machine. A Local Filesystem Source browses the remote's disk, SSH Files Sources use the remote's `~/.ssh/config`, `known_hosts` and SSH agent, Kubernetes Sources use the remote's kubeconfig, with its auth plugins, Azure Blob Storage Sources signing in through Azure CLI the remote's `az login`, Docker Logs Sources the remote's Docker engine and contexts, and S3 and CloudWatch Logs Sources signing in with an AWS profile the remote's AWS config, credentials and SSO sessions.
+Under Remote-SSH, WSL and Dev Containers, Polyscope runs on the remote machine. A Local Filesystem Source browses the remote's disk, SSH Files Sources, and systemd Journal Sources on a host, use the remote's `~/.ssh/config`, `known_hosts` and SSH agent, a systemd Journal Source on **This machine** reads the remote's own journal, Kubernetes Sources use the remote's kubeconfig, with its auth plugins, Azure Blob Storage Sources signing in through Azure CLI the remote's `az login`, Docker Logs Sources the remote's Docker engine and contexts, and S3 and CloudWatch Logs Sources signing in with an AWS profile the remote's AWS config, credentials and SSO sessions.
 
 ## UNC shares on Windows
 
@@ -60,7 +61,7 @@ Setting `security.restrictUNCAccess` to `false` lifts the restriction for every 
 
 ## Secrets and settings
 
-AWS secret keys (S3 and CloudWatch Logs), Azure connection strings and SASs, and SSH passwords and key passphrases, are kept in VS Code's secret storage, encrypted by your operating system's keychain where it has one. Polyscope for VS Code keeps its own Sources and settings, apart from the desktop app's. The gear at the top of the sidebar opens them.
+AWS secret keys (S3 and CloudWatch Logs), Azure connection strings and SASs, and SSH passwords and key passphrases (SSH Files, Docker Logs and systemd Journal), are kept in VS Code's secret storage, encrypted by your operating system's keychain where it has one. Polyscope for VS Code keeps its own Sources and settings, apart from the desktop app's. The gear at the top of the sidebar opens them.
 
 ![Polyscope's Settings in the VS Code sidebar](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vscode-settings.png)
 
