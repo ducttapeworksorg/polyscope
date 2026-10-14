@@ -31,6 +31,16 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 | **CloudWatch Logs** | The log groups of an AWS region, each opening as one log of all its streams, or stream by stream, without calling any API billed per use | An AWS profile (SSO included), or access keys |
 | **systemd Journal** | The journal of every system unit that has logged on a Linux host, with its active state, read over SSH or on this machine | Over SSH, as SSH Files does; on this machine, your own user |
 
+![An SSH Files Source on a server's /var/log, with its nginx logs open in VS Code's editor](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vscode-ssh-files.png)
+
+![An Azure Blob Storage container of archived logs, by service and day, with a gzipped log open decompressed](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vscode-azure-blob.png)
+
+![A Docker Logs Source's Compose project, each service with its Container Status, and one service's log followed live in a viewer tab](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vscode-docker-logs.png)
+
+![An ECS service's CloudWatch log group opened as one log, each line starting with the task it came from](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vscode-cloudwatch-logs.png)
+
+![A server's systemd units with their active states, and a failed unit's journal, its errors and warnings marked](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vscode-systemd-journal.png)
+
 ## Getting started
 
 1. Choose the Polyscope icon in the activity bar to open the Polyscope sidebar.

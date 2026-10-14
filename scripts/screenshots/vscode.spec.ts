@@ -8,7 +8,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron, expect, test, type ElectronApplication, type Frame, type Locator, type Page } from '@playwright/test'
 import { downloadAndUnzipVSCode, resolveCliPathFromVSCodeExecutablePath } from '@vscode/test-electron'
-import { seedFolder, startCluster } from './samples'
+import { cloudWatchSegment } from '../../src/shared/core-api'
+import { seedFolder, startAzureAccount, startCloudWatch, startCluster, startDockerEngine, startSshHost } from './samples'
 
 const root = join(__dirname, '..', '..')
 const images = join(root, 'docs', 'images')
@@ -17,6 +18,10 @@ let dir: string
 let app: ElectronApplication
 let window: Page
 let cluster: Awaited<ReturnType<typeof startCluster>>
+let docker: Awaited<ReturnType<typeof startDockerEngine>>
+let cloudWatch: Awaited<ReturnType<typeof startCloudWatch>>
+let sshHost: Awaited<ReturnType<typeof startSshHost>>
+let azure: Awaited<ReturnType<typeof startAzureAccount>>
 
 /** VS Code's settings for the screenshots: nothing on screen but VS Code and Polyscope. */
 const settings = {
@@ -86,7 +91,10 @@ async function openAddSource(sidebar: Frame, type: string) {
 
 /** Fills in a field, again if the dialog redraws it empty as it settles on the Source Type picked. */
 async function fill(dialog: Locator, label: string, value: string) {
-  const field = dialog.getByLabel(label, { exact: true })
+  await fillField(dialog.getByLabel(label, { exact: true }), value)
+}
+
+async function fillField(field: Locator, value: string) {
   await expect(async () => {
     await field.fill(value)
     await window.waitForTimeout(200)
@@ -112,11 +120,71 @@ async function addKubernetesLogs(sidebar: Frame, name: string, environment: stri
   await expect(dialog).toBeHidden()
 }
 
+/** Picks a way to sign in, clicking its option as a user would: the radio itself is hidden beneath. */
+const pick = (dialog: Locator, option: string) => dialog.locator('label.segmented__option', { hasText: option }).click()
+
+async function addDockerLogs(sidebar: Frame, environment: string) {
+  const dialog = await openAddSource(sidebar, 'dockerLogs')
+  await expect(dialog.getByLabel('Name', { exact: true })).toHaveValue('Docker')
+  await dialog.getByLabel('Environment').selectOption({ label: environment })
+  await dialog.getByRole('button', { name: 'Add Source' }).click()
+  await expect(dialog).toBeHidden()
+}
+
+async function addCloudWatchLogs(sidebar: Frame, environment: string) {
+  const dialog = await openAddSource(sidebar, 'cloudwatchLogs')
+  await expect(dialog.getByLabel('Region', { exact: true })).toHaveValue('eu-west-1')
+  await dialog.getByLabel('Environment').selectOption({ label: environment })
+  await dialog.getByRole('button', { name: 'Add Source' }).click()
+  await expect(dialog).toBeHidden()
+}
+
+/** An SSH Files or systemd Journal Source on the SSH config's `web-01`, signing in with its IdentityFile. */
+async function addOnWeb01(sidebar: Frame, type: 'sshFiles' | 'systemdJournal', environment: string, path?: string) {
+  const dialog = await openAddSource(sidebar, type)
+  if (type === 'systemdJournal') await pick(dialog, 'Host over SSH')
+  await fillField(dialog.getByRole('combobox', { name: 'Host', exact: true }), 'web-01')
+  if (path) await dialog.getByLabel('Path').fill(path)
+  await pick(dialog, 'Key file')
+  await dialog.getByLabel('Environment').selectOption({ label: environment })
+  await dialog.getByRole('button', { name: 'Add Source' }).click()
+  await expect(dialog).toBeHidden()
+}
+
+async function addAzureBlob(sidebar: Frame, environment: string) {
+  const dialog = await openAddSource(sidebar, 'azureBlob')
+  await fill(dialog, 'Storage account', azure.account)
+  await dialog.getByLabel('Container', { exact: true }).fill(azure.container)
+  // The field, not the sign-in choice of the same name.
+  await dialog.getByLabel('Connection string').and(dialog.locator('input[type="password"]')).fill(azure.connectionString)
+  await dialog.getByLabel('Environment').selectOption({ label: environment })
+  await dialog.getByRole('button', { name: 'Add Source' }).click()
+  await expect(dialog).toBeHidden()
+}
+
+/** Expands the Source Type groups named, and collapses the rest. */
+async function showGroups(sidebar: Frame, ...shown: string[]) {
+  for (const group of await sidebar.locator('section').filter({ has: sidebar.locator('.source-group__toggle') }).all()) {
+    const toggle = group.locator('.source-group__toggle')
+    const expanded = (await toggle.getAttribute('aria-expanded')) === 'true'
+    if (expanded !== shown.includes((await group.getAttribute('aria-label')) ?? '')) await toggle.click()
+  }
+}
+
+async function closeAllEditors() {
+  await command('View: Close All Editors')
+  await expect(window.locator('.tabs-container .tab')).toHaveCount(0)
+}
+
 test.beforeAll(async () => {
   await mkdir(images, { recursive: true })
   dir = await mkdtemp(join(tmpdir(), 'polyscope-vscode-screenshots-'))
   await seedFolder(join(dir, 'logs'))
   cluster = await startCluster(dir)
+  docker = await startDockerEngine()
+  cloudWatch = await startCloudWatch(dir)
+  sshHost = await startSshHost(dir)
+  azure = await startAzureAccount()
 
   const { version } = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as { version: string }
   const vsix = join(root, 'extension', `polyscope-${version}.vsix`)
@@ -133,8 +201,18 @@ test.beforeAll(async () => {
 
   app = await electron.launch({
     executablePath: vscode,
-    args: [workspace, ...profile, '--skip-welcome', '--skip-release-notes', '--disable-telemetry', '--disable-updates', '--disable-workspace-trust'],
-    env: { ...process.env, KUBECONFIG: cluster.kubeconfig }
+    // The Azure Source's connection string goes in VS Code's secret storage: with no keyring on Linux, obfuscated.
+    args: [workspace, ...profile, '--skip-welcome', '--skip-release-notes', '--disable-telemetry', '--disable-updates', '--disable-workspace-trust', '--password-store=basic'],
+    // A home of the samples' own, so nothing from your ~/.ssh, ~/.aws or ~/.docker shows, nor your SSH agent's keys.
+    env: {
+      ...process.env,
+      HOME: sshHost.home,
+      USERPROFILE: sshHost.home,
+      SSH_AUTH_SOCK: '',
+      KUBECONFIG: cluster.kubeconfig,
+      ...docker.env,
+      ...cloudWatch.env
+    }
   })
   window = await app.firstWindow()
   // The same size on every machine, on the sharpest screen it fits, whatever screen it opens on.
@@ -166,6 +244,10 @@ async function widenSidebar(width: number) {
 test.afterAll(async () => {
   await app?.close()
   await cluster?.close()
+  await docker?.close()
+  await cloudWatch?.close()
+  await sshHost?.close()
+  await azure?.close()
   await rm(dir, { recursive: true, force: true })
 })
 
@@ -237,4 +319,72 @@ test('screenshots', async () => {
   await large.getByLabel('Search the file').press('Enter')
   await expect(large.getByText(/matching lines/).first()).toBeVisible({ timeout: 30_000 })
   await shot('vscode-large-file')
+
+  // The newer Source Types, each shown on its own: the other groups collapsed, and the editors before closed.
+  await closeAllEditors()
+  await addOnWeb01(sidebar, 'sshFiles', 'prod', '/var/log')
+  await addAzureBlob(sidebar, 'prod')
+  await addDockerLogs(sidebar, 'dev')
+  await addCloudWatchLogs(sidebar, 'prod')
+  await addOnWeb01(sidebar, 'systemdJournal', 'prod')
+
+  // SSH Files: a server's /var/log, its nginx logs open in VS Code's editor.
+  await showGroups(sidebar, 'SSH Files')
+  await row('web-01:/var/log').click()
+  await row('nginx').click()
+  await row('error.log').dblclick()
+  await expect(window.getByRole('tab', { name: /error\.log/ })).toBeVisible()
+  await row('access.log').first().dblclick()
+  await expect(window.getByRole('tab', { name: /access\.log/ })).toBeVisible()
+  await shot('vscode-ssh-files')
+
+  // Azure Blob Storage: a container of archived logs by service and day, a gzipped one open decompressed.
+  await closeAllEditors()
+  await showGroups(sidebar, 'Azure Blob Storage')
+  await row('shoplogs/archive').click()
+  await row('checkout-api').click()
+  await row('2026').click()
+  await row('09').click()
+  await row('29').click()
+  await row('access.log.gz').dblclick()
+  await expect(window.getByRole('tab', { name: /access\.log\.gz/ })).toBeVisible()
+  await row('app.log.gz').dblclick()
+  await expect(window.getByRole('tab', { name: /app\.log\.gz/ })).toBeVisible()
+  await shot('vscode-azure-blob')
+
+  // Docker Logs: a Compose project's services, with their Container Status, and a service's log followed live.
+  await closeAllEditors()
+  await showGroups(sidebar, 'Docker Logs')
+  await row('Docker').click()
+  await row('shop').click()
+  await row('web').click()
+  await row('checkout').click()
+  const service = await webview('viewer')
+  await service.getByRole('button', { name: 'Timestamps' }).click()
+  const followService = service.getByRole('button', { name: 'Follow', exact: true })
+  if ((await followService.getAttribute('aria-pressed')) !== 'true') await followService.click()
+  await expect(followService).toHaveAttribute('aria-pressed', 'true')
+  docker.drip()
+  await window.waitForTimeout(2_500)
+  await shot('vscode-docker-logs')
+
+  // CloudWatch Logs: an ECS service's log group, opened as one log of all its tasks' streams.
+  await closeAllEditors()
+  await showGroups(sidebar, 'CloudWatch Logs')
+  await row('eu-west-1').click()
+  const checkout = row(cloudWatchSegment('/ecs/checkout'))
+  await checkout.click()
+  await checkout.click({ button: 'right' })
+  await sidebar.getByRole('menuitem', { name: 'Open log' }).click()
+  await expect(window.getByRole('tab', { name: /checkout/ })).toBeVisible()
+  await (await webview('viewer')).getByRole('button', { name: 'Timestamps' }).click()
+  await shot('vscode-cloudwatch-logs')
+
+  // systemd Journal: a server's units, with their active states, and a failed one's journal.
+  await closeAllEditors()
+  await showGroups(sidebar, 'systemd Journal')
+  await row('web-01').last().click()
+  await row('backup.service').click()
+  await (await webview('viewer')).getByRole('button', { name: 'Timestamps' }).click()
+  await shot('vscode-systemd-journal')
 })
