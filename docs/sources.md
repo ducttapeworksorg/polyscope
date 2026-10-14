@@ -71,7 +71,7 @@ Polyscope reads files as the user it signs in as, without `sudo`. Most logs unde
 
 ## S3-compatible Storage
 
-A bucket on AWS S3, MinIO, Ceph, or any other S3-compatible store.
+A bucket on AWS S3, [Google Cloud Storage](#google-cloud-storage), MinIO, Ceph, or any other S3-compatible store.
 
 - **Host**: the store's address, like `https://minio.internal:9000`. Leave it blank for AWS.
 - **Bucket**, and an optional **Prefix** to browse only the keys under it, like `logs/app`.
@@ -84,6 +84,42 @@ A bucket on AWS S3, MinIO, Ceph, or any other S3-compatible store.
 - **Proxy**: like `http://proxy.corp:3128`. Otherwise `HTTPS_PROXY` and `NO_PROXY` apply.
 
 S3 objects don't grow, so they can't be followed.
+
+### Google Cloud Storage
+
+A Google Cloud Storage (GCS) bucket reads as an S3 Source, through GCS's S3-compatible XML API and an HMAC key.
+
+1. Make a service account for Polyscope, or pick one, and give it the **Storage Object Viewer** role (`roles/storage.objectViewer`) on the bucket:
+
+   ```sh
+   gcloud storage buckets add-iam-policy-binding gs://my-bucket \
+     --member=serviceAccount:polyscope@my-project.iam.gserviceaccount.com --role=roles/storage.objectViewer
+   ```
+
+2. Create an HMAC key for it, in the Google Cloud console under **Cloud Storage → Settings → Interoperability**, or with:
+
+   ```sh
+   gcloud storage hmac create polyscope@my-project.iam.gserviceaccount.com
+   ```
+
+   Keep the secret it shows: you can't see it again.
+
+3. Add an **S3-compatible Storage** Source with:
+   - **Host**: `https://storage.googleapis.com`
+   - **Bucket**: the bucket's name, without `gs://`
+   - **Region**: `auto`
+   - **Sign in with**: **Access keys**, with the HMAC key's access ID (it starts with `GOOG`) as the access key and its secret as the secret key.
+
+One thing differs from S3: an object stored with `Content-Encoding: gzip`, unless it also has `Cache-Control: no-transform`. GCS decompresses such an object as it sends it, and ignores the range asked for, but lists it at its compressed size. So it opens cut short, or, if its name ends in `.gz`, fails to decompress. Store compressed logs as plain `.gz` files without `Content-Encoding`, as `gcloud storage cp` does unless told otherwise: Polyscope decompresses them itself.
+
+### Other S3-compatible stores
+
+These also work through an S3 Source, with their access keys:
+
+- **Cloudflare R2**: **Host** `https://<account-id>.r2.cloudflarestorage.com`, **Region** `auto`.
+- **Backblaze B2**: **Host** `https://s3.<region>.backblazeb2.com`, with the bucket's region, like `us-west-004`, as **Region**.
+- **Wasabi**: **Host** `https://s3.<region>.wasabisys.com`, with the bucket's region as **Region**.
+- **DigitalOcean Spaces**: **Host** `https://<region>.digitaloceanspaces.com`, with the Space's region, like `nyc3`, as **Region**.
 
 ## Azure Blob Storage
 
