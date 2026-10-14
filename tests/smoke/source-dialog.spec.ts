@@ -186,7 +186,7 @@ test('new S3 Sources use path-style addressing', async () => {
   await expect(dialog.getByLabel('Path-style addressing')).toBeChecked()
 })
 
-test('warn that secret keys are only obfuscated when no keyring is running', async () => {
+test('warn that secret keys are only obfuscated when no keyring is running, and still save them', async () => {
   const weak = 'No keyring (GNOME Keyring or KWallet) is running'
   if (process.platform === 'linux') {
     // Chromium's basic password store is the fallback it picks when there's no keyring.
@@ -201,6 +201,13 @@ test('warn that secret keys are only obfuscated when no keyring is running', asy
   await expect(dialog.getByLabel('Secret key')).toBeVisible()
   if (process.platform === 'linux') await expect(dialog.getByText(weak)).toBeVisible()
   else await expect(dialog.getByText(weak)).toHaveCount(0)
+
+  await dialog.getByLabel('Bucket', { exact: true }).fill('logs')
+  await dialog.getByLabel('Access key', { exact: true }).fill('AKIDTEST')
+  await dialog.getByLabel('Secret key').fill('secret')
+  await dialog.getByRole('button', { name: 'Add Source' }).click()
+  await expect(dialog).toBeHidden()
+  await expect(window.getByRole('navigation').getByText('logs', { exact: true })).toBeVisible()
 })
 
 test('a new Azure Blob Storage Source is named after its account and container, and tested with its connection string', async () => {
