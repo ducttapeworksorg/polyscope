@@ -31,6 +31,7 @@ It runs on Windows, macOS and Linux, and [inside VS Code](#in-vs-code). Find out
 | **Kubernetes Logs** | The logs of every container in a namespace, grouped by Workload, with pod health and restarts | Your kubeconfig, as `kubectl` does |
 | **Docker Logs** | The logs of every container on a Docker engine, or Podman, grouped by Compose project and service, with container health and restarts | Your Docker contexts, as `docker` does (local socket, TCP with TLS, or SSH) |
 | **CloudWatch Logs** | The log groups of an AWS region, each opening as one log of all its streams, or stream by stream, without calling any API billed per use | An AWS profile (SSO included), or access keys |
+| **systemd Journal** | The journal of every system unit that has logged on a Linux host, with its active state, read over SSH or on this machine | Over SSH, as SSH Files does; on this machine, your own user |
 
 ## Quick start
 

@@ -16,6 +16,7 @@ import { kubeConfigFor } from '../../src/main/core/kubeconfig'
 import { startTestDockerEngine } from '../../src/main/core/docker-test-engine'
 import { execInPod } from '../../src/main/core/kubernetes-exec'
 import { startTestApiServer } from '../../src/main/core/kubernetes-test-api-server'
+import { standInJournal } from '../../src/main/core/journal-test-host'
 import {
   hasTestCluster,
   podsNamed,
@@ -951,6 +952,55 @@ const firstRun: [string, () => Promise<void>][] = [
         unsubscribe()
         await endpoint.close()
         await rm(awsDir, { recursive: true, force: true })
+      }
+    }
+  ],
+  [
+    // Where the extension host runs, so on the remote machine under Remote-SSH: its OS decides whether This machine is offered.
+    'a systemd Journal Source on a host over SSH, its host key trusted, opens a unit’s journal in a viewer tab, whose Follow gets what it logs, its password kept in SecretStorage',
+    async () => {
+      const { core, open, secrets } = await extension()
+      assert.equal(await core.platform(), process.platform)
+      const password = 'not-a-real-password'
+      const journal = standInJournal()
+      // In this process, as the extension host is: the core connects to it as to any host, and runs its stand-in journalctl.
+      const server = await startTestSshServer({ password, exec: journal.exec })
+      const { host, port, user } = server
+      const settings = { type: 'systemdJournal', name: 'Web', target: 'ssh', host, port, user, auth: 'password', password } as const
+      const { lines, unsubscribe } = followedLines(core)
+
+      try {
+        // As the Add Source dialog does: Test connection offers the new host's key, which the user trusts.
+        const unknown = await core.testConnection(settings).then(
+          () => assert.fail('The host’s key isn’t known yet'),
+          (error: { code: string; hostKey: HostKey }) => error
+        )
+        assert.equal(unknown.code, 'HOST_KEY_UNKNOWN')
+        await core.trustHostKey(unknown.hostKey)
+        const source = await core.addSource(settings)
+
+        try {
+          assert.equal(await secrets.get(source.id, 'password'), password)
+          assert.deepEqual((await core.connect(source.id)).map(nameOf), ['backup.service', 'nginx.service'])
+
+          await open({ kind: 'log', sourceId: source.id, path: 'nginx.service', name: 'nginx.service', pinned: true })
+          const tab = await eventually(() => activeViewerTab('nginx.service'))
+          await eventually(() => assert.ok(journal.following('nginx.service'), 'The viewer tab follows the unit'), 30_000)
+          journal.log('nginx.service', 30, 'GET /health')
+          await eventually(() =>
+            assert.ok(
+              lines.some((event) => event.kind === 'lines' && event.lines.some((line) => line.includes('GET /health'))),
+              'The viewer tab’s Follow got what the unit logged'
+            )
+          )
+          await vscode.window.tabGroups.close(tab)
+        } finally {
+          await core.deleteSource(source.id)
+        }
+        assert.equal(await secrets.get(source.id, 'password'), undefined, 'Deleting the Source forgets its password')
+      } finally {
+        unsubscribe()
+        await server.close()
       }
     }
   ],

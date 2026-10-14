@@ -99,6 +99,10 @@ export interface SshJump {
 interface SignedIn {
   client: InstanceType<typeof Client>
   readonly closed: boolean
+  /** Calls `listener` once it closes: as soon as it's known to, which may be before ssh2's 'close'. */
+  onClosed(listener: () => void): void
+  /** Marks it closed, its socket found gone before ssh2 has said so. */
+  lost(): void
 }
 
 /** Connects to one SSH server, over `sock` if given (a channel forwarded by a bastion), checks its host key and signs in. */
@@ -115,6 +119,12 @@ function signIn(target: SshTarget, options: SshConnectOptions, sock?: Duplex): P
   const address = addressOf(target)
   const client = new Client()
   let closed = false
+  const closedListeners: (() => void)[] = []
+  const markClosed = () => {
+    if (closed) return
+    closed = true
+    for (const listener of closedListeners.splice(0)) listener()
+  }
   // Set when the host key check refuses the server, as that's why connecting failed.
   let refusal: CoreError | undefined
 
@@ -146,7 +156,7 @@ function signIn(target: SshTarget, options: SshConnectOptions, sock?: Duplex): P
     // Only the first outcome counts: a connection failing goes on to emit more errors, and a close.
     let settled = false
     const fail = (error: Error & { level?: string; code?: string }) => {
-      closed = true
+      markClosed()
       client.end()
       if (settled) return
       settled = true
@@ -169,6 +179,11 @@ function signIn(target: SshTarget, options: SshConnectOptions, sock?: Duplex): P
         client,
         get closed() {
           return closed
+        },
+        onClosed: (listener) => void (closed ? queueMicrotask(listener) : closedListeners.push(listener)),
+        lost() {
+          markClosed()
+          client.end()
         }
       })
     })
@@ -229,7 +244,7 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions, 
   const address = addressOf(target)
   let sftp: Promise<SFTPWrapper> | undefined
   // A bastion is closed along with the connection through it: when that closes, so does the channel through it.
-  client.on('close', closeBastions)
+  signedIn.onClosed(closeBastions)
   // Set by close(): the connection closing after that hasn't dropped.
   let closing = false
 
@@ -258,6 +273,7 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions, 
           })
         } catch {
           // ssh2 throws once the connection's socket is gone, before it tells it closed.
+          signedIn.lost()
           closed()
         }
       }),
@@ -265,11 +281,8 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions, 
       return signedIn.closed
     },
     onDrop(listener) {
-      if (signedIn.closed) {
-        if (!closing) queueMicrotask(listener)
-        return
-      }
-      client.once('close', () => closing || listener())
+      // Told as soon as it's known to have closed: a call made meanwhile fails as the connection having closed.
+      signedIn.onClosed(() => closing || listener())
     },
     close() {
       closing = true

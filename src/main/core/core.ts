@@ -81,7 +81,7 @@ import { listNamespaces } from './kubernetes-api'
 import { createKubernetesFileSource, listWorkloads } from './kubernetes-file-source'
 import { createKubernetesLogSource } from './kubernetes-log-source'
 import { createHostKeyStore } from './host-keys'
-import { createJournalLogSource, thisMachine } from './journal-log-source'
+import { createJournalLogSource, journalHostOver, thisMachine } from './journal-log-source'
 import { languageFor } from './languages'
 import { chunksOf, openLargeFile, readLastLinesBytes, lastLinesOf, type OpenLargeFile } from './large-file'
 import { createLargeFileCache } from './large-file-cache'
@@ -143,9 +143,11 @@ function withDefaults(saved: SavedSource): SavedSource {
     case 'cloudwatchLogs':
       // Before CA bundles and proxies, every CloudWatch Logs Source went straight to its endpoint.
       return { ...source, caBundlePath: source.caBundlePath ?? '', proxyUrl: source.proxyUrl ?? '' }
+    case 'systemdJournal':
+      // Before hosts over SSH, every systemd Journal Source read this machine's journal.
+      return { ...source, host: source.host ?? '', user: source.user ?? '', auth: source.auth ?? 'agent', keyFile: source.keyFile ?? '' }
     case 'kubernetesFiles':
     case 'kubernetesLogs':
-    case 'systemdJournal':
       return source
   }
 }
@@ -163,7 +165,7 @@ type Target =
   | Pick<KubernetesLogsSourceInfo, 'type' | 'context' | 'namespace'>
   | Pick<DockerLogsSourceInfo, 'type' | 'context' | 'auth' | 'keyFile'>
   | Omit<CloudWatchLogsSourceInfo, 'id' | 'name' | 'environmentId' | 'lastNLines' | 'secretKeySet'>
-  | Pick<SystemdJournalSourceInfo, 'type' | 'target'>
+  | Pick<SystemdJournalSourceInfo, 'type' | 'target' | 'host' | 'user' | 'port' | 'auth' | 'keyFile'>
 
 type S3Settings = Extract<Target, { type: 's3' }>
 type CloudWatchSettings = Extract<Target, { type: 'cloudwatchLogs' }>
@@ -175,20 +177,26 @@ const isAwsSource = <S extends { type: SourceTypeId }>(settings: S): settings is
 
 /**
  * The name a Source's one secret is stored under, when its settings have a use for one: a Source on AWS's secret key
- * when it signs in with keys, an Azure Blob Storage Source's connection string or SAS, an SSH Files Source's (or a Docker Logs Source's, for an ssh:// host) key file passphrase or password.
+ * when it signs in with keys, an Azure Blob Storage Source's connection string or SAS, an SSH Files Source's (or a Docker
+ * Logs Source's, for an ssh:// host, or a systemd Journal Source's, on a host over SSH) key file passphrase or password.
  */
-function secretNameOf(settings: { type: SourceTypeId; auth?: string }) {
+function secretNameOf(settings: { type: SourceTypeId; auth?: string; target?: string }) {
   if (settings.type === 's3' || settings.type === 'cloudwatchLogs') return (settings.auth ?? defaultAwsAuth(settings.type)) === 'keys' ? 'secretKey' : undefined
   if (settings.type === 'azureBlob') {
     const auth = settings.auth ?? 'connectionString'
     return auth === 'azureCli' ? undefined : auth
   }
-  if (settings.type !== 'sshFiles' && settings.type !== 'dockerLogs') return undefined
+  if (settings.type === 'systemdJournal' && settings.target !== 'ssh') return undefined
+  if (settings.type !== 'sshFiles' && settings.type !== 'dockerLogs' && settings.type !== 'systemdJournal') return undefined
   const auth = settings.auth ?? (settings.type === 'sshFiles' ? 'keyFile' : 'agent')
   return auth === 'keyFile' ? 'passphrase' : auth === 'password' ? 'password' : undefined
 }
 
 const isBlank = (value: string | undefined) => !value?.trim()
+
+/** Whether a Source Type's Sources may sign in over SSH, as SSH Files Sources do, and keep a passphrase or password. */
+const signsInOverSsh = <S extends { type: SourceTypeId }>(settings: S): settings is Extract<S, { type: 'sshFiles' | 'dockerLogs' | 'systemdJournal' }> =>
+  settings.type === 'sshFiles' || settings.type === 'dockerLogs' || settings.type === 'systemdJournal'
 
 /** An http(s) address as a URL with a scheme (`scheme` unless given), or blank if it's blank; failing with `code` if it's neither. */
 function normaliseUrl(input: string, scheme: 'http' | 'https', code: 'INVALID_HOST' | 'INVALID_PROXY') {
@@ -218,22 +226,41 @@ function normaliseAbsolutePath(input: string, code: 'INVALID_CONTAINER_PATH' | '
   return `/${segments.join('/')}`
 }
 
-/** An SSH Files Source's settings, checked and trimmed. */
-function sshTargetOf(input: NewSshFilesSource): Extract<Target, { type: 'sshFiles' }> {
+/** A server to reach over SSH, as a Source's settings name it, and how to sign in to it; blanks are the SSH config's. */
+type SshServerSettings = Pick<SshFilesSourceInfo, 'host' | 'user' | 'port' | 'auth' | 'keyFile'>
+
+/**
+ * The server a Source reaches over SSH and how it signs in, as its settings name them, checked and trimmed: an SSH Files
+ * Source's, or a systemd Journal Source's on a host. `who` is what needs a host, in the failure saying it has none.
+ */
+function sshServerSettingsOf(input: Partial<SshServerSettings>, defaultAuth: SshAuth, who: string): SshServerSettings {
   const host = input.host?.trim() ?? ''
-  if (!host) throw new CoreError('HOST_REQUIRED', 'An SSH Files Source needs a host')
+  if (!host) throw new CoreError('HOST_REQUIRED', `${who} needs a host`)
   const { port } = input
   if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65_535)) {
     throw new CoreError('INVALID_PORT', `Not a port from 1 to 65535: ${String(port)}`)
   }
-  const auth = input.auth ?? 'keyFile'
+  const auth = input.auth ?? defaultAuth
   const keyFile = auth === 'keyFile' ? (input.keyFile?.trim() ?? '') : ''
   const user = input.user?.trim() ?? ''
-  return { type: 'sshFiles', host, user, ...(port !== undefined && { port }), path: normaliseAbsolutePath(input.path ?? '', 'INVALID_PATH'), auth, keyFile }
+  return { host, user, ...(port !== undefined && { port }), auth, keyFile }
 }
 
-/** A server to reach over SSH, as a Source's settings name it, and how to sign in to it; blanks are the SSH config's. */
-type SshServerSettings = Pick<SshFilesSourceInfo, 'host' | 'user' | 'port' | 'auth' | 'keyFile'>
+/** An SSH Files Source's settings, checked and trimmed. */
+function sshTargetOf(input: NewSshFilesSource): Extract<Target, { type: 'sshFiles' }> {
+  // Before agent and password sign-in, every SSH Files Source signed in with a key file.
+  const server = sshServerSettingsOf(input, 'keyFile', 'An SSH Files Source')
+  return { type: 'sshFiles', ...server, path: normaliseAbsolutePath(input.path ?? '', 'INVALID_PATH') }
+}
+
+/** Who a Source reaching a server over SSH is, in the failures saying what its settings are missing. */
+const sshWho = { sshFiles: 'An SSH Files Source', systemdJournal: 'A systemd Journal Source' } as const
+
+/** The server a Source's settings say it reaches over SSH, and what it is: an SSH Files Source's, or a systemd Journal Source's on a host. */
+function sshSettingsOf(target: Target) {
+  if (target.type === 'sshFiles' || (target.type === 'systemdJournal' && target.target === 'ssh')) return { server: target, who: sshWho[target.type] }
+  return undefined
+}
 
 /**
  * The servers a Source reaching `target` over SSH goes through, as ~/.ssh/config routes its host, bastions first and its own
@@ -301,9 +328,11 @@ function targetOf(input: NewSource): Target {
   if (input.type === 'azureBlob') return azureBlobTargetOf(input)
   if (input.type === 'cloudwatchLogs') return cloudWatchTargetOf(input)
   if (input.type === 'systemdJournal') {
-    // This machine is the only target so far, and has a journal only on Linux.
+    // As for Docker's ssh:// contexts, the agent unless told: it signs in without Polyscope holding a key or password.
+    if (input.target === 'ssh') return { type: 'systemdJournal', target: 'ssh', ...sshServerSettingsOf(input, 'agent', sshWho.systemdJournal) }
+    // This machine has a journal only on Linux.
     if (process.platform !== 'linux') throw new CoreError('NO_JOURNAL', 'Only Linux has a systemd journal, and this machine isn’t running it')
-    return { type: 'systemdJournal', target: 'thisMachine' }
+    return { type: 'systemdJournal', target: 'thisMachine', host: '', user: '', auth: 'agent', keyFile: '' }
   }
   const s3: NewS3Source = input
   // Blank for AWS itself; a store is most likely https, a proxy http.
@@ -586,7 +615,7 @@ export function createCore(options: CoreOptions = {}): Core {
     if (isAwsSource(source)) return { ...source, secretKeySet: (await secrets.get(source.id, 'secretKey')) !== undefined }
     const stored = async (name: string) => secretNameOf(source) === name && (await secrets.get(source.id, name)) !== undefined
     if (source.type === 'azureBlob') return { ...source, connectionStringSet: await stored('connectionString'), sasSet: await stored('sas') }
-    if (source.type === 'sshFiles' || source.type === 'dockerLogs') {
+    if (signsInOverSsh(source)) {
       return { ...source, passphraseSet: await stored('passphrase'), passwordSet: await stored('password') }
     }
     return source
@@ -637,11 +666,12 @@ export function createCore(options: CoreOptions = {}): Core {
       return run(backend.fileSource)
     })
 
-  const logSourceFor = async (sourceId: string, path: SourcePath) => {
-    const backend = await backendFor(sourceId)
-    if (backend.kind !== 'logs') throw new CoreError('NOT_A_LOG_STREAM', `A File Source has no Log Streams: ${path}`)
-    return backend.logSource
-  }
+  /** `run` with a Connected Source's Log Source, as withBackend runs it. */
+  const withLogSource = <T>(sourceId: string, path: SourcePath, run: (logSource: LogSource) => Promise<T>) =>
+    withBackend(sourceId, (backend) => {
+      if (backend.kind !== 'logs') throw new CoreError('NOT_A_LOG_STREAM', `A File Source has no Log Streams: ${path}`)
+      return run(backend.logSource)
+    })
 
   /**
    * The last lines of a log, as openLog gives them, along with where a Follow carries on from: the
@@ -1128,6 +1158,17 @@ export function createCore(options: CoreOptions = {}): Core {
   }
 
   /**
+   * Opens a systemd Journal Source's journal: this machine's, or a host's over SSH, signed in as an SSH Files Source signs
+   * in (with `secret`, if it has one), its commands run over the one connection the Log Source holds open.
+   */
+  const reachJournal = async (target: Extract<Target, { type: 'systemdJournal' }>, secret?: string): Promise<LogSource> => {
+    if (target.target === 'thisMachine') return createJournalLogSource(thisMachine)
+    const connection = await signInOverSsh(target, secret, sshWho.systemdJournal)
+    const logSource = createJournalLogSource(journalHostOver(connection, target.host))
+    return { ...logSource, close: () => connection.close(), onDropped: (listener) => connection.onDrop(listener) }
+  }
+
+  /**
    * Opens a Source's File or Log Source and lists its root: what connecting, or testing a connection, has to get through.
    * An S3 Source signing in with keys needs its `secret` key, and an Azure Blob Storage Source its connection string or SAS, as
    * an SSH Files Source with an encrypted key file needs its passphrase; S3 and Azure Blob Storage Sources prove they can
@@ -1146,7 +1187,7 @@ export function createCore(options: CoreOptions = {}): Core {
       backend = { kind: 'logs', logSource: engine.logSource }
       serverVersion = engine.version
     } else if (target.type === 'cloudwatchLogs') backend = { kind: 'logs', logSource: createCloudWatchLogSource(await cloudWatchTargetReadIn(target, secret)) }
-    else if (target.type === 'systemdJournal') backend = { kind: 'logs', logSource: createJournalLogSource(thisMachine) }
+    else if (target.type === 'systemdJournal') backend = { kind: 'logs', logSource: await reachJournal(target, secret) }
     else backend = { kind: 'logs', logSource: await reachKubernetes(target) }
     try {
       return { backend, nodes: await listBackend(backend, ''), ...(serverVersion !== undefined && { serverVersion }) }
@@ -1170,7 +1211,7 @@ export function createCore(options: CoreOptions = {}): Core {
           ? name === 'sas'
             ? input.sas
             : input.connectionString
-          : input.type === 'sshFiles' || input.type === 'dockerLogs'
+          : signsInOverSsh(input)
           ? name === 'password'
             ? input.password
             : input.passphrase
@@ -1194,10 +1235,12 @@ export function createCore(options: CoreOptions = {}): Core {
       await reachLocal(target)
       return { saved: { ...target, name, ...label } }
     }
-    // Nor is a cluster or an engine: it may be away, or its context not in the kubeconfig yet. A journal holds no secret.
-    if (target.type === 'kubernetesLogs' || target.type === 'kubernetesFiles' || target.type === 'systemdJournal') return { saved: { ...target, name, ...label } }
-    // A Source on AWS, an SSH Files or a Docker Logs Source isn't reached until it's connected: it may be saved while
-    // its server, or its engine's ssh:// host, is away.
+    // Nor is a cluster or an engine: it may be away, or its context not in the kubeconfig yet. This machine's journal holds no secret.
+    if (target.type === 'kubernetesLogs' || target.type === 'kubernetesFiles' || (target.type === 'systemdJournal' && target.target === 'thisMachine')) {
+      return { saved: { ...target, name, ...label } }
+    }
+    // A Source on AWS, an SSH Files, a Docker Logs or a systemd Journal Source isn't reached until it's connected: it may be
+    // saved while its server, its engine's ssh:// host, or its host, is away.
     const typed = await secretFor(input)
     if (isAwsSource(target) && target.auth === 'keys' && typed === undefined && (await secretFor(input, editing)) === undefined) {
       throw new CoreError('SECRET_KEY_REQUIRED', `${target.type === 's3' ? 'An S3' : 'A CloudWatch Logs'} Source needs a secret key`)
@@ -1207,26 +1250,28 @@ export function createCore(options: CoreOptions = {}): Core {
       // or stored and the account changed.
       azureBlobTargetWith(target, typed ?? (await secretFor(input, editing)))
     }
-    if (target.type === 'sshFiles') {
-      await sshRouteOf(target).catch((error: unknown) => {
+    const overSsh = sshSettingsOf(target)
+    if (overSsh) {
+      await sshRouteOf(overSsh.server, overSsh.who).catch((error: unknown) => {
         // A host needing what Polyscope doesn't support may not by the time it's connected: the config may change.
         if (!(error instanceof CoreError && error.code === 'UNSUPPORTED_SSH_OPTION')) throw error
       })
     }
-    if (target.type === 'sshFiles' && target.auth === 'password' && typed === undefined && (await secretFor(input, editing)) === undefined) {
-      throw new CoreError('PASSWORD_REQUIRED', 'An SSH Files Source signing in with a password needs one')
+    if (overSsh?.server.auth === 'password' && typed === undefined && (await secretFor(input, editing)) === undefined) {
+      throw new CoreError('PASSWORD_REQUIRED', `${overSsh.who} signing in with a password needs one`)
     }
     return { saved: { ...target, name, ...label }, ...(typed !== undefined && { secret: typed }) }
   }
 
   /**
    * The server a Source reaches over SSH, if it does, where ~/.ssh/config puts it: an alias and the host name it stands
-   * for are one server. An SSH Files Source's, or the host of a Docker Logs Source's `ssh://` context; none for one whose
-   * context the Docker CLI no longer has.
+   * for are one server. An SSH Files Source's, a systemd Journal Source's on a host, or the host of a Docker Logs Source's
+   * `ssh://` context; none for one whose context the Docker CLI no longer has.
    */
   const sshServerOf = async (source: SavedSource, config: Awaited<ReturnType<typeof readSshConfig>>) => {
     let named: { host: string; port?: number }
-    if (source.type === 'sshFiles') named = source
+    const overSsh = sshSettingsOf(source)
+    if (overSsh) named = overSsh.server
     else if (source.type === 'dockerLogs') {
       const endpoint = await dockerEndpointOf(source.context).catch(() => undefined)
       if (!endpoint || !('ssh' in endpoint)) return undefined
@@ -1532,34 +1577,37 @@ export function createCore(options: CoreOptions = {}): Core {
 
     async openLog(sourceId, path, options = {}) {
       await loaded
-      return (await readSnapshot(await logSourceFor(sourceId, path), sourceId, path, options)).snapshot
+      return withLogSource(sourceId, path, async (logSource) => (await readSnapshot(logSource, sourceId, path, options)).snapshot)
     },
 
     async readEarlierLog(sourceId, path, { earlier, lines, timestamps = false }) {
       await loaded
       const tailLines = checkLastNLines(lines)
       if (tailLines === 'all') throw new CoreError('INVALID_LINE_COUNT', 'Lines read further back come a number at a time, not all at once')
-      const logSource = await logSourceFor(sourceId, path)
-      if (!logSource.readLogBack) throw new CoreError('LOG_UNAVAILABLE', `Its Source Type can’t read further back: ${path}`)
-      const { text, before } = await logSource.readLogBack(path, { tailLines, before: earlier, timestamps })
+      const { text, before } = await withLogSource(sourceId, path, (logSource) => {
+        if (!logSource.readLogBack) throw new CoreError('LOG_UNAVAILABLE', `Its Source Type can’t read further back: ${path}`)
+        return logSource.readLogBack(path, { tailLines, before: earlier, timestamps })
+      })
       return { content: text.replace(/\n$/, ''), ...(before !== undefined && { earlier: before }) }
     },
 
     async followLog(sourceId, path, options = {}) {
       await loaded
-      const logSource = await logSourceFor(sourceId, path)
-      if (options.previous) throw new CoreError('NOT_FOLLOWABLE', `A Previous Log has ended: ${path}`)
-      // The snapshot has to be of the run the Follow starts from: one read while the Log Stream restarted is read again.
-      const currentRun = currentRunOf(logSource)
-      const restartsNow = async () => (currentRun ? (await currentRun(path)).restarts : 0)
-      let restarts = await restartsNow()
-      let read: Awaited<ReturnType<typeof readSnapshot>>
-      for (let tries = 1; ; tries++) {
-        read = await readSnapshot(logSource, sourceId, path, options, true)
-        const after = await restartsNow()
-        if (after === restarts || tries === 3) break
-        restarts = after
-      }
+      const { logSource, restarts, read } = await withLogSource(sourceId, path, async (logSource) => {
+        if (options.previous) throw new CoreError('NOT_FOLLOWABLE', `A Previous Log has ended: ${path}`)
+        // The snapshot has to be of the run the Follow starts from: one read while the Log Stream restarted is read again.
+        const currentRun = currentRunOf(logSource)
+        const restartsNow = async () => (currentRun ? (await currentRun(path)).restarts : 0)
+        let restarts = await restartsNow()
+        let read: Awaited<ReturnType<typeof readSnapshot>>
+        for (let tries = 1; ; tries++) {
+          read = await readSnapshot(logSource, sourceId, path, options, true)
+          const after = await restartsNow()
+          if (after === restarts || tries === 3) break
+          restarts = after
+        }
+        return { logSource, restarts, read }
+      })
       const { snapshot, lastTimestamp, lastTimestampCount } = read
       // Disconnected or reconnected while reading: this Follow would outlive the connection it was for.
       const live = liveBackendOf(sourceId)

@@ -33,7 +33,7 @@ export const en = {
   'sourceType.cloudwatchLogs': 'CloudWatch Logs',
   'sourceType.cloudwatchLogs.hint': 'Log groups in an AWS region: Lambda, ECS, API Gateway…',
   'sourceType.systemdJournal': 'systemd Journal',
-  'sourceType.systemdJournal.hint': 'The journal of a Linux machine’s systemd units: nginx, sshd, your own services…',
+  'sourceType.systemdJournal.hint': 'The journal of a Linux host’s systemd units, over SSH or on this machine: nginx, sshd, your own services…',
 
   'sourceDialog.addTitle': 'Add Source',
   'sourceDialog.editTitle': 'Edit {name}',
@@ -184,6 +184,8 @@ export const en = {
   'journalSource.target': 'Target',
   'journalSource.target.thisMachine': 'This machine',
   'journalSource.target.thisMachine.hint': 'Reads the system journal of the machine Polyscope runs on, as journalctl does. Your user needs to be in the systemd-journal or adm group.',
+  'journalSource.target.ssh': 'Host over SSH',
+  'journalSource.target.ssh.hint': 'Reads a Linux host’s system journal over SSH, set up as for SSH Files. The user signing in needs to be in the systemd-journal or adm group there.',
   'journalSource.defaultName': 'This machine',
   'kubernetesSource.context': 'Context',
   'kubernetesSource.context.choose': 'Choose a context',

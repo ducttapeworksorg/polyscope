@@ -25,13 +25,27 @@ export interface TestServerOptions {
   password?: string
   /**
    * What running a command does: piping its stdin and stdout to a socket (as `docker system dial-stdio` does to a
-   * Docker Engine's), or exiting with a code and what it wrote to stderr. A command it gives nothing for isn't found.
+   * Docker Engine's), exiting with a code and what it wrote, or running until it exits or the client ends it. A
+   * command it gives nothing for isn't found.
    */
   exec?(command: string): TestCommand | undefined
 }
 
+/** A command running on the test server, as one that runs until it's ended, like `journalctl --follow`, sees it. */
+export interface TestProcess {
+  /** Writes to its stdout. */
+  write(text: string): void
+  /** Exits with `code`, having written `stderr`. */
+  exit(code: number, stderr?: string): void
+  /** Calls `listener` once the client has closed its channel, ending it. */
+  onEnded(listener: () => void): void
+}
+
 /** What a command run on the test server does. */
-export type TestCommand = { socketPath: string } | { exitCode: number; stderr?: string }
+export type TestCommand =
+  | { socketPath: string }
+  | { exitCode: number; stdout?: string; stderr?: string }
+  | { run(process: TestProcess): void }
 
 export interface TestSshServer {
   host: string
@@ -53,6 +67,8 @@ export interface TestSshServer {
   dropConnections(): Promise<void>
   /** Where clients have had it forward channels to, as ProxyJump has a bastion do: `host:port`, in order. */
   forwarded(): string[]
+  /** The commands clients have had it run, in order. */
+  commands(): string[]
   close(): Promise<void>
 }
 
@@ -199,6 +215,30 @@ function runCommand(channel: ServerChannel, command: TestCommand) {
     socket.on('data', (data: Buffer) => channel.write(data))
     return
   }
+  if ('run' in command) {
+    let exited = false
+    const ended = new Set<() => void>()
+    channel.on('close', () => {
+      exited = true
+      for (const listener of ended) listener()
+    })
+    channel.on('error', () => undefined)
+    // Read, though nothing's done with it, so the channel closes once the client closes it.
+    channel.resume()
+    command.run({
+      write: (text) => void (exited || channel.write(text)),
+      exit(code, stderr) {
+        if (exited) return
+        exited = true
+        if (stderr) channel.stderr.write(stderr)
+        channel.exit(code)
+        channel.end()
+      },
+      onEnded: (listener) => void ended.add(listener)
+    })
+    return
+  }
+  if (command.stdout) channel.write(command.stdout)
   if (command.stderr) channel.stderr.write(command.stderr)
   channel.exit(command.exitCode)
   channel.end()
@@ -226,6 +266,7 @@ export async function startTestSshServer({
   const allowed = utils.parseKey(clientKeys.public) as ParsedKey
   const connections = new Set<Connection>()
   const forwarded: string[] = []
+  const commands: string[] = []
   const denied = new Set<string>()
 
   const server = new Server({ hostKeys: [hostKeys.private] }, (client) => {
@@ -256,7 +297,10 @@ export async function startTestSshServer({
         if (!offersSftp) return reject()
         serveSftp(acceptSftp(), root, denied)
       })
-      session.on('exec', (acceptExec, _reject, { command }) => runCommand(acceptExec(), exec?.(command) ?? notFound(command)))
+      session.on('exec', (acceptExec, _reject, { command }) => {
+        commands.push(command)
+        runCommand(acceptExec(), exec?.(command) ?? notFound(command))
+      })
     })
   })
   await new Promise<void>((resolve) => server.listen(listenOn, '127.0.0.1', resolve))
@@ -282,6 +326,7 @@ export async function startTestSshServer({
       await Promise.all(closed)
     },
     forwarded: () => [...forwarded],
+    commands: () => [...commands],
     async close() {
       for (const connection of connections) connection.end()
       await new Promise<void>((resolve) => server.close(() => resolve()))

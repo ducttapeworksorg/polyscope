@@ -1,10 +1,11 @@
-import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FollowEvent, NewSystemdJournalSource, TreeNode } from '@shared/core-api'
 import { createCore, type Core } from './core'
 import { hasTestJournal, restartTestRestarter, testCounter, testFailer, testLevels, testRestarter, testSilent } from './journal-test-seed'
+import { sshdTarget } from './ssh-test-server'
 
 const settings = (changes: Partial<NewSystemdJournalSource> = {}): NewSystemdJournalSource => ({ type: 'systemdJournal', name: 'Laptop', ...changes })
 
@@ -23,7 +24,8 @@ describe('adding a systemd Journal Source', () => {
 
     const added = await core.addSource(settings())
 
-    const expected = { id: added.id, type: 'systemdJournal', name: 'Laptop', target: 'thisMachine' }
+    const unused = { host: '', user: '', auth: 'agent', keyFile: '', passphraseSet: false, passwordSet: false }
+    const expected = { id: added.id, type: 'systemdJournal', name: 'Laptop', target: 'thisMachine', ...unused }
     expect(added).toEqual(expected)
     expect(await core.listSources()).toEqual([expected])
   })
@@ -190,6 +192,54 @@ describe.skipIf(!hasTestJournal)('a systemd Journal Source on this machine’s j
 
     expect(updates.of(followed.followId)).not.toContain('ended')
     await core.stopFollow(followed.followId)
+    updates.unsubscribe()
+  })
+})
+
+// The same journal on a host over SSH: this machine, through sshd on localhost, as CI runs it.
+describe.skipIf(!hasTestJournal || !sshdTarget)('a systemd Journal Source on a host over sshd', () => {
+  let home: string
+  let core: Core
+  let settings: NewSystemdJournalSource
+
+  beforeAll(async () => {
+    const sshd = sshdTarget!
+    settings = { type: 'systemdJournal', name: 'sshd', target: 'ssh', host: sshd.host, port: sshd.port, user: sshd.user, auth: 'keyFile', keyFile: sshd.keyFile }
+    // A home of the tests' own, so the user's real ~/.ssh is never read, and its host key unknown until trusted.
+    home = await mkdtemp(join(tmpdir(), 'polyscope-journal-sshd-'))
+    await mkdir(join(home, '.ssh'))
+    core = createCore({ dataDir: join(home, 'user-data') })
+  })
+
+  beforeEach(() => {
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('USERPROFILE', home)
+  })
+
+  afterAll(() => rm(home, { recursive: true, force: true }))
+
+  it('offers sshd’s host key to trust, then tests a connection by reading the journal', async () => {
+    const failure = (await core.testConnection(settings).catch((error: unknown) => error)) as { code: string; hostKey: never }
+    expect(failure).toMatchObject({ code: 'HOST_KEY_UNKNOWN' })
+    await core.trustHostKey(failure.hostKey)
+
+    await expect(core.testConnection(settings)).resolves.toEqual({})
+  })
+
+  it('lists the units with their states, reads a unit’s last lines, and follows it across restarts', { timeout: 30_000 }, async () => {
+    const { id } = await core.addSource(settings)
+    const root = await core.connect(id)
+
+    expect(root).toContainEqual(expect.objectContaining({ name: testCounter, status: { reason: 'active', health: 'healthy', restarts: 0 } }))
+    expect(root.find((node) => 'name' in node && node.name === testFailer)).toMatchObject({ status: { health: 'failing' } })
+    expect(await core.openLog(id, testCounter, { lastNLines: 2 })).toMatchObject({ content: 'line 99\nline 100' })
+
+    const updates = followUpdates(core)
+    const followed = await core.followLog(id, testRestarter, { lastNLines: 1 })
+    await restartTestRestarter()
+    await vi.waitFor(() => expect(updates.of(followed.followId)).toContainEqual(expect.stringMatching(/^run \d+$/)), { timeout: 10_000 })
+    await core.disconnect(id)
+    expect(updates.of(followed.followId)).toContain('ended')
     updates.unsubscribe()
   })
 })

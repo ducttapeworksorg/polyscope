@@ -33,13 +33,31 @@ test('a systemd Journal Source reads this machine’s journal, and is named afte
   await expect(dialog.getByLabel('Name', { exact: true })).toHaveValue('This machine')
 })
 
-test('systemd Journal isn’t offered off Linux', async () => {
+test('off Linux, a systemd Journal Source reads a host’s journal over SSH, and isn’t offered this machine', async () => {
   // The core goes by the platform it runs on, so the app is told it runs on macOS before the dialog asks.
   await app.evaluate(() => Object.defineProperty(process, 'platform', { value: 'darwin' }))
   const window = await app.firstWindow()
   const dialog = await openAddSource(window)
-  const types = dialog.getByLabel('Source Type')
 
-  await expect(types.locator('option[value="dockerLogs"]')).toHaveCount(1)
-  await expect(types.locator('option[value="systemdJournal"]')).toHaveCount(0)
+  await dialog.getByLabel('Source Type').selectOption('systemdJournal')
+
+  await expect(dialog.getByRole('radio', { name: 'Host over SSH' })).toBeChecked()
+  await expect(dialog.getByRole('radio', { name: 'This machine' })).toHaveCount(0)
+})
+
+test('a systemd Journal Source on a host over SSH has SSH Files’ fields, and is named after its host', async () => {
+  const window = await app.firstWindow()
+  const dialog = await openAddSource(window)
+  const name = dialog.getByLabel('Name', { exact: true })
+  await dialog.getByLabel('Source Type').selectOption('systemdJournal')
+
+  // The radio itself is hidden beneath its option, which a user clicks.
+  await dialog.locator('label.segmented__option', { hasText: 'Host over SSH' }).click()
+  await expect(dialog.getByText('systemd-journal or adm group there')).toBeVisible()
+  await expect(dialog.getByLabel('Port')).toHaveAttribute('placeholder', '22')
+  await expect(dialog.getByLabel('User')).toBeVisible()
+  await expect(dialog.getByRole('radio', { name: 'SSH agent' })).toBeChecked()
+  await dialog.getByRole('combobox', { name: 'Host', exact: true }).pressSequentially('web-1')
+
+  await expect(name).toHaveValue('web-1')
 })

@@ -11,6 +11,7 @@ import {
   type CloudWatchLogsSourceInfo,
   type DockerLogsSourceInfo,
   type FilesWorkloadKind,
+  type JournalTarget,
   type KubeContext,
   type KubernetesFilesSourceInfo,
   type NewSource,
@@ -128,22 +129,31 @@ function SshFields({ value, onChange, editing }: FieldsProps<SshSettings>) {
     const next = { ...value, ...changes }
     onChange({ ...next, name: nameFollowing(value.name, sshName(value), sshName(next)) })
   }
-  const text = (key: 'user' | 'path', label: MessageKey, hint?: MessageKey, placeholder?: string) => (
-    <label className="field">
-      <span className="field__label">{t(label)}</span>
-      <input
-        className="field__input field__input--path"
-        value={value[key]}
-        onChange={(e) => set({ [key]: e.target.value })}
-        placeholder={placeholder}
-        spellCheck={false}
-      />
-      {hint && <span className="field__hint">{t(hint)}</span>}
-    </label>
+
+  return (
+    <>
+      <SshServerFields value={value} onChange={onChange} set={set} />
+      <label className="field">
+        <span className="field__label">{t('sshSource.path')}</span>
+        <input className="field__input field__input--path" value={value.path} onChange={(e) => set({ path: e.target.value })} spellCheck={false} />
+        <span className="field__hint">{t('sshSource.path.hint')}</span>
+      </label>
+      <SshSignInFields value={value} onChange={onChange} editing={editing} />
+    </>
   )
+}
+
+/** The server a Source reaches over SSH, as an SSH Files Source does, or a systemd Journal Source on a host. */
+type SshServerSettings = Extract<NewSource, { type: 'sshFiles' | 'systemdJournal' }>
+
+/**
+ * The server a Source reaches over SSH: its host (or an ~/.ssh/config alias), port and user. `set` changes the host or
+ * user, for the Source to name itself after them.
+ */
+function SshServerFields<S extends SshServerSettings>({ value, onChange, set }: { value: S; onChange(value: S): void; set(changes: Partial<S>): void }) {
   // Only suggestions: any host can be typed in. What ~/.ssh/config says about an alias shows where it's left blank.
   const sshHosts = useListing(() => core.listSshHosts(), [])
-  const configured = sshHosts.items?.find((h) => h.alias === value.host.trim())
+  const configured = sshHosts.items?.find((h) => h.alias === value.host?.trim())
   const hostId = useId()
 
   return (
@@ -156,9 +166,9 @@ function SshFields({ value, onChange, editing }: FieldsProps<SshSettings>) {
           <ComboBox
             id={hostId}
             className="field__input--path"
-            value={value.host}
+            value={value.host ?? ''}
             options={sshHosts.items?.map((h) => h.alias) ?? []}
-            onChange={(host) => set({ host })}
+            onChange={(host) => set({ host } as Partial<S>)}
           />
           <span className="field__hint">{t('sshSource.host.hint')}</span>
         </div>
@@ -175,21 +185,32 @@ function SshFields({ value, onChange, editing }: FieldsProps<SshSettings>) {
           />
         </label>
       </div>
-      {text('user', 'sshSource.user', 'sshSource.user.hint', configured?.user)}
-      {text('path', 'sshSource.path', 'sshSource.path.hint')}
-      <SshSignInFields value={value} onChange={onChange} editing={editing} />
+      <label className="field">
+        <span className="field__label">{t('sshSource.user')}</span>
+        <input
+          className="field__input field__input--path"
+          value={value.user ?? ''}
+          onChange={(e) => set({ user: e.target.value } as Partial<S>)}
+          placeholder={configured?.user}
+          spellCheck={false}
+        />
+        <span className="field__hint">{t('sshSource.user.hint')}</span>
+      </label>
     </>
   )
 }
 
-/** How a Source signs in over SSH, as an SSH Files Source does, or a Docker Logs Source to an `ssh://` context's host. */
-type SshSignInSettings = Extract<NewSource, { type: 'sshFiles' | 'dockerLogs' }>
+/**
+ * How a Source signs in over SSH, as an SSH Files Source does, a Docker Logs Source to an `ssh://` context's host, or a
+ * systemd Journal Source to its host.
+ */
+type SshSignInSettings = Extract<NewSource, { type: 'sshFiles' | 'dockerLogs' | 'systemdJournal' }>
 
 /** The way a Source signs in over SSH: through the agent, with a key file and its passphrase, or with a password. */
 function SshSignInFields<S extends SshSignInSettings>({ value, onChange, editing }: FieldsProps<S>) {
   const auth = value.auth ?? (value.type === 'sshFiles' ? 'keyFile' : 'agent')
   // Only a secret stored for the way it signs in counts.
-  const signsInSame = (editing?.type === 'sshFiles' || editing?.type === 'dockerLogs') && editing.auth === auth
+  const signsInSame = (editing?.type === 'sshFiles' || editing?.type === 'dockerLogs' || editing?.type === 'systemdJournal') && editing.auth === auth
   const stored = signsInSame && (auth === 'password' ? editing.passwordSet : editing.passphraseSet)
   const [weakSecrets, setWeakSecrets] = useState(false)
 
@@ -929,33 +950,64 @@ function enginePath({ context }: DockerLogsSourceInfo, path: SourcePath) {
 
 type SystemdJournalSettings = Extract<NewSource, { type: 'systemdJournal' }>
 
-/** Whose journal a systemd Journal Source reads: so far only this machine's, which is only offered on Linux. */
-function SystemdJournalFields({ value, onChange }: FieldsProps<SystemdJournalSettings>) {
+/** The name a systemd Journal Source is given from its target: This machine, or its host. */
+const journalName = ({ target, host = '' }: Pick<SystemdJournalSettings, 'target' | 'host'>) =>
+  target === 'ssh' ? host.trim() : t('journalSource.defaultName')
+
+/**
+ * Whose journal a systemd Journal Source reads: this machine's, offered only on Linux, or a host's over SSH, set up as an
+ * SSH Files Source's server is.
+ */
+function SystemdJournalFields({ value, onChange, editing }: FieldsProps<SystemdJournalSettings>) {
+  const target = value.target ?? 'thisMachine'
+  // The OS the core runs on: this machine is offered only on Linux (and until it's known), and one already reading it stays offered.
+  const platform = useListing(() => core.platform(), []).items
+  const offersThisMachine = platform === null || platform === 'linux' || (editing?.type === 'systemdJournal' && editing.target === 'thisMachine')
   // A new Source is named after its target.
+  const set = (changes: Partial<SystemdJournalSettings>) => {
+    const next = { ...value, ...changes }
+    onChange({ ...next, name: nameFollowing(value.name, journalName(value), journalName(next)) })
+  }
   useEffect(() => {
-    if (!value.name.trim()) onChange({ ...value, name: t('journalSource.defaultName') })
+    if (!value.name.trim()) onChange({ ...value, name: journalName(value) })
     // Named once, when the fields appear.
   }, [])
+  // Off Linux, a new Source reads a host's journal: this machine has none.
+  useEffect(() => {
+    if (platform && !offersThisMachine && target === 'thisMachine') set({ target: 'ssh' })
+  }, [platform])
 
   return (
-    <div className="field">
-      <span className="field__label" id="journal-target-label">
-        {t('journalSource.target')}
-      </span>
-      <div className="segmented" role="radiogroup" aria-labelledby="journal-target-label">
-        <label className="segmented__option">
-          <input type="radio" name="journal-target" value="thisMachine" checked onChange={() => onChange({ ...value, target: 'thisMachine' })} />
-          {t('journalSource.target.thisMachine')}
-        </label>
+    <>
+      <div className="field">
+        <span className="field__label" id="journal-target-label">
+          {t('journalSource.target')}
+        </span>
+        <div className="segmented" role="radiogroup" aria-labelledby="journal-target-label">
+          {(['thisMachine', 'ssh'] as const satisfies JournalTarget[])
+            .filter((option) => option === 'ssh' || offersThisMachine)
+            .map((option) => (
+              <label key={option} className="segmented__option">
+                <input type="radio" name="journal-target" value={option} checked={target === option} onChange={() => set({ target: option })} />
+                {t(`journalSource.target.${option}`)}
+              </label>
+            ))}
+        </div>
+        <span className="field__hint">{t(`journalSource.target.${target}.hint`)}</span>
       </div>
-      <span className="field__hint">{t('journalSource.target.thisMachine.hint')}</span>
-    </div>
+      {target === 'ssh' && (
+        <>
+          <SshServerFields value={value} onChange={onChange} set={set} />
+          <SshSignInFields value={value} onChange={onChange} editing={editing} />
+        </>
+      )}
+    </>
   )
 }
 
-/** Where a systemd Journal Source's unit is: its machine, then the unit's name, which is how journalctl knows it. */
-function unitPath(_source: SystemdJournalSourceInfo, path: SourcePath) {
-  const machine = t('journalSource.target.thisMachine')
+/** Where a systemd Journal Source's unit is: its machine (or host, as ssh would name it), then the unit's name, which is how journalctl knows it. */
+function unitPath({ target, user, host }: SystemdJournalSourceInfo, path: SourcePath) {
+  const machine = target === 'ssh' ? `${user ? `${user}@` : ''}${host}` : t('journalSource.target.thisMachine')
   return path ? `${machine}: ${path}` : machine
 }
 
@@ -1146,18 +1198,25 @@ export const sourceTypeUi: SourceTypeUis = {
     label: 'sourceType.systemdJournal',
     hint: 'sourceType.systemdJournal.hint',
     Icon: SystemdJournalIcon,
-    blank: () => ({ type: 'systemdJournal', name: '', target: 'thisMachine' }),
-    settingsOf: ({ name, target }) => ({ type: 'systemdJournal', name, target }),
+    // This machine first, where it's offered; as for Docker's ssh:// contexts, the agent first over SSH.
+    blank: () => ({ type: 'systemdJournal', name: '', target: 'thisMachine', host: '', user: '', auth: 'agent', keyFile: '', passphrase: '', password: '' }),
+    // Everything but the passphrase or password, which the renderer never has: left blank, the stored one stays.
+    settingsOf: ({ name, target, host, port, user, auth, keyFile }) => ({
+      type: 'systemdJournal',
+      name,
+      target,
+      host,
+      ...(port !== undefined && { port }),
+      user,
+      auth,
+      keyFile,
+      passphrase: '',
+      password: ''
+    }),
     fullPath: unitPath,
     Fields: SystemdJournalFields
   }
 }
-
-/**
- * Whether a Source Type can be added where the core runs (`platform`, as Node names it, or undefined while it isn't
- * known): systemd Journal only once it's known to be Linux.
- */
-export const offeredOn = (type: SourceTypeId, platform: string | undefined) => type !== 'systemdJournal' || platform === 'linux'
 
 /**
  * Where a Source points, as a string that changes whenever anything but its name, label, secrets or remembered
