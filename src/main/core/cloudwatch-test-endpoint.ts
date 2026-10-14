@@ -211,7 +211,10 @@ export async function startTestCloudWatchEndpoint(groups: TestLogGroup[], { acce
     calls.push({ operation, at: Date.now() })
     try {
       if (endpoint.throttling) throw new AwsError('ThrottlingException', 'Rate exceeded')
-      const signedWith = /Credential=([^/]+)\//.exec(String(request.headers['authorization'] ?? ''))?.[1]
+      // The access key ID in `Credential=<key>/<date>/...`, found without a regex: an unanchored one rescans the header
+      // from every `Credential=` in it.
+      const credential = String(request.headers['authorization'] ?? '').split('Credential=')[1]
+      const signedWith = credential?.includes('/') ? credential.slice(0, credential.indexOf('/')) : undefined
       if (accessKeyId !== undefined && signedWith !== accessKeyId) {
         throw new AwsError('UnrecognizedClientException', 'The security token included in the request is invalid.')
       }
