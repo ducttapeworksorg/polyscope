@@ -26,7 +26,7 @@ const backgroundColor: Record<Theme, string> = { dark: '#1b2230', light: '#fbfcf
 
 /**
  * Whether secrets are only obfuscated at rest: on Linux with no Secret Service or KWallet, Electron's safeStorage
- * falls back to a hard-coded key. Only known once the app is ready.
+ * falls back to a hard-coded key (once `setUsePlainTextEncryption` allows it). Only known once the app is ready.
  */
 const secretStorageIsWeak = () => process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text'
 
@@ -101,6 +101,8 @@ void app.whenReady().then(async () => {
   const log = startAppLog()
   await loginShellPathLoaded
   const dataDir = app.getPath('userData')
+  // Without a keyring, Linux safeStorage refuses to encrypt unless allowed to fall back to its hard-coded key.
+  safeStorage.setUsePlainTextEncryption(true)
   const cipher = {
     encrypt: (plain: string) => safeStorage.encryptString(plain),
     decrypt: (encrypted: Buffer) => safeStorage.decryptString(encrypted)
