@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import type { AgentOptions } from 'node:https'
 import { homedir } from 'node:os'
@@ -72,6 +71,13 @@ const caDataFor = (cluster: Cluster) => {
 
 type CreateDispatcher = (cluster: Cluster | null, agentOptions: AgentOptions) => unknown
 
+/** Whether two TLS settings are the same: strings and flags equal, Buffers of the same bytes, lists of the same items. */
+const sameSetting = (a: unknown, b: unknown): boolean => {
+  if (Buffer.isBuffer(a) && Buffer.isBuffer(b)) return a.equals(b)
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((item, i) => sameSetting(item, b[i]))
+  return a === b
+}
+
 /**
  * Has `config` make one dispatcher and reuse it while its TLS settings stay the same. The client makes one per call,
  * and so a TLS context of every CA a cluster is trusted by, some 150ms of CPU each, and never reuses a connection. An
@@ -80,15 +86,13 @@ type CreateDispatcher = (cluster: Cluster | null, agentOptions: AgentOptions) =>
 function reuseDispatcher(config: KubeConfig) {
   const internals = config as unknown as { createDispatcher: CreateDispatcher }
   const create = internals.createDispatcher.bind(config)
-  let reused: { key: string; dispatcher: unknown } | undefined
+  // The settings themselves are kept to compare against, in memory only, rather than a hash of them: a passphrase is
+  // among them.
+  let reused: { settings: unknown[]; dispatcher: unknown } | undefined
   internals.createDispatcher = (cluster, agentOptions) => {
     const { ca, cert, key, pfx, passphrase, servername, rejectUnauthorized } = agentOptions
-    const hash = createHash('sha256')
-    for (const part of [cluster?.server, cluster?.proxyUrl, ca, cert, key, pfx, passphrase, servername, rejectUnauthorized]) {
-      hash.update(JSON.stringify(Buffer.isBuffer(part) ? part.toString('base64') : (part ?? null)))
-    }
-    const digest = hash.digest('hex')
-    if (reused?.key !== digest) reused = { key: digest, dispatcher: create(cluster, agentOptions) }
+    const settings = [cluster?.server, cluster?.proxyUrl, ca, cert, key, pfx, passphrase, servername, rejectUnauthorized]
+    if (!reused || !sameSetting(reused.settings, settings)) reused = { settings, dispatcher: create(cluster, agentOptions) }
     return reused.dispatcher
   }
 }
