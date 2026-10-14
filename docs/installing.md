@@ -88,7 +88,7 @@ VS Code installs it from its **Extensions** view too, from the [VS Code Marketpl
 - In the editor, open the **Extensions** view, choose **…** at its top, then **Install from VSIX…**, and pick the downloaded file.
 - Or, from a terminal: `code --install-extension polyscope-<version>.vsix` (`codium`, `cursor` or `windsurf` in those editors).
 
-In a Remote-SSH, WSL or Dev Containers window, install it from that window, so it runs on the remote machine: a Local Filesystem Source then browses the remote's disk, SSH Files Sources use the remote's `~/.ssh/config`, `known_hosts` and SSH agent, Kubernetes and S3 Sources use the remote's kubeconfig and AWS profiles, and Docker Logs Sources the remote's Docker engine and contexts (inside a dev container, that's the engine its socket is mounted from, if it is). If it's already installed on your own machine, the **Extensions** view offers to install it on the remote too.
+In a Remote-SSH, WSL or Dev Containers window, install it from that window, so it runs on the remote machine: a Local Filesystem Source then browses the remote's disk, SSH Files Sources and systemd Journal Sources on a host use the remote's `~/.ssh/config`, `known_hosts` and SSH agent, a systemd Journal Source on **This machine** reads the remote's own journal, Kubernetes Sources use the remote's kubeconfig, S3 and CloudWatch Logs Sources its AWS profiles, Azure Blob Storage Sources signing in through Azure CLI its `az login`, and Docker Logs Sources the remote's Docker engine and contexts (inside a dev container, that's the engine its socket is mounted from, if it is). If it's already installed on your own machine, the **Extensions** view offers to install it on the remote too.
 
 ### Using it
 
@@ -102,7 +102,7 @@ Files open in VS Code's own editor, read-only, so its tabs, search, highlighting
 
 ![Local logs open in VS Code's editor, their tabs tinted with the staging Environment's colour](images/vscode-local-files.png)
 
-What VS Code's editor can't do opens in a Polyscope viewer tab instead: a file you **Follow**, a container's log (a Kubernetes or Docker **Log Stream**) with its toolbar, and a **Large File**, which a viewer tab can page through without downloading all of it. Closing a viewer tab stops its Follow. VS Code reopens your editor tabs when it reloads, but not Polyscope's viewer tabs.
+What VS Code's editor can't do opens in a Polyscope viewer tab instead: a file you **Follow**, a **Log Stream** with its toolbar (a Kubernetes or Docker container's log, a CloudWatch log, or a systemd unit's journal), and a **Large File**, which a viewer tab can page through without downloading all of it. Closing a viewer tab stops its Follow. VS Code reopens your editor tabs when it reloads, but not Polyscope's viewer tabs.
 
 ![A Large File in a Polyscope viewer tab, listing every line matching a search](images/vscode-large-file.png)
 
@@ -117,7 +117,7 @@ The sidebar and viewer tabs take the colours of your VS Code theme and follow it
 
 ### Its own Sources
 
-The extension keeps its own Sources, Environments and settings, apart from the app's. Sources you've added in the app don't appear in the extension, nor the other way round. Add them again in each. S3 secret keys, and SSH passwords and key passphrases, are kept in VS Code's secret storage, which your operating system's keychain encrypts where it has one.
+The extension keeps its own Sources, Environments and settings, apart from the app's. Sources you've added in the app don't appear in the extension, nor the other way round. Add them again in each. AWS secret keys (S3 and CloudWatch Logs), Azure connection strings and SASs, and SSH passwords and key passphrases, are kept in VS Code's secret storage, which your operating system's keychain encrypts where it has one.
 
 ### Updating it
 

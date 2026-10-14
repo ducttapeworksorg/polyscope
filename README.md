@@ -1,16 +1,16 @@
 # Polyscope
 
-**One desktop app for reading files and logs, wherever they live.** Browse a folder on your machine or on a server, an S3 bucket, an Azure blob container, the files inside a Kubernetes pod, every container log in a namespace or on a Docker engine, or the CloudWatch logs of an AWS region, side by side in one editor-like window.
+**One desktop app for reading files and logs, wherever they live.** Browse a folder on your machine or on a server, an S3 bucket, an Azure blob container, the files inside a Kubernetes pod, every container log in a namespace or on a Docker engine, the CloudWatch logs of an AWS region, or a Linux host's systemd journal, side by side in one editor-like window.
 
 ![Polyscope following a container's log in a Kubernetes namespace](docs/images/kubernetes-logs.png)
 
 ## Why Polyscope
 
-Chasing a problem across systems usually means a terminal per place, each with its own tool: `tail -f` for a server's files, the AWS console or `aws s3 cp` for archived logs, `kubectl logs` and `kubectl exec … cat` for a cluster, `docker logs` per container for a Compose stack, the CloudWatch console one log stream at a time. Each shows you text in a different way, loses your place when you switch, and makes it easy to lose track of which environment you're looking at.
+Chasing a problem across systems usually means a terminal per place, each with its own tool: `tail -f` for a server's files, the AWS console or `aws s3 cp` for archived logs, `kubectl logs` and `kubectl exec … cat` for a cluster, `docker logs` per container for a Compose stack, the CloudWatch console one log stream at a time, `ssh` and `journalctl -u` for a server's services. Each shows you text in a different way, loses your place when you switch, and makes it easy to lose track of which environment you're looking at.
 
 Polyscope puts them all in one tree, read the same way:
 
-- **Every place in one sidebar.** Local folders, folders on servers over SSH, S3-compatible buckets, Azure blob containers, files inside pods, pod logs, Docker container logs and CloudWatch logs, each configured once as a **Source**.
+- **Every place in one sidebar.** Local folders, folders on servers over SSH, S3-compatible buckets, Azure blob containers, files inside pods, pod logs, Docker container logs, CloudWatch logs and systemd journals, each configured once as a **Source**.
 - **A real viewer.** Tabs, syntax and log-level highlighting, search, a minimap, line wrapping, and gzip and zstd files shown decompressed. It's the editor that powers VS Code, opened read-only.
 - **Logs that keep up.** Follow a container's log, or a growing file, live. Pause to read, and pick up where you left off. A crashed container's **Previous Log** is a toggle away, in the same tab.
 - **Files of any size.** Files over 50 MB open end-first in a paged viewer that can jump to any line and search the whole file with a regular expression, without loading it all into memory.
@@ -63,9 +63,9 @@ There's a light theme too, a click away at the top of the sidebar.
 
 Polyscope also comes as an extension for VS Code and editors built on it (VSCodium, Cursor, Windsurf). They install it from their **Extensions** view: VS Code from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=ducttapeworks.polyscope), the others from [Open VSX](https://open-vsx.org/extension/ducttapeworks/polyscope). The VS Code Marketplace only has releases; for a pre-release in VS Code, install the release's `polyscope-<version>.vsix` with **Extensions → … → Install from VSIX…**, or `code --install-extension polyscope-<version>.vsix`.
 
-The Polyscope icon in the activity bar opens the same Sources sidebar as the app. Files open read-only in VS Code's own editor, labelled with their Source and tinted with its Environment's colour. Followed files, container logs (Kubernetes and Docker) and Large Files open in a Polyscope viewer tab, which can append live lines and page through a multi-gigabyte file. Turn off the `polyscope.ownViewer` setting to open everything in VS Code's editor instead.
+The Polyscope icon in the activity bar opens the same Sources sidebar as the app. Files open read-only in VS Code's own editor, labelled with their Source and tinted with its Environment's colour. Followed files, container logs (Kubernetes and Docker), CloudWatch logs, systemd journals and Large Files open in a Polyscope viewer tab, which can append live lines and page through a multi-gigabyte file. Turn off the `polyscope.ownViewer` setting to open everything in VS Code's editor instead.
 
-The extension keeps its own Sources, Environments and settings, apart from the app's, so add your Sources again there. Under Remote-SSH, WSL and Dev Containers it runs on the remote machine, so Docker Logs reads the Docker engine there. See [Polyscope for VS Code](docs/installing.md#polyscope-for-vs-code) for more.
+The extension keeps its own Sources, Environments and settings, apart from the app's, so add your Sources again there. Under Remote-SSH, WSL and Dev Containers it runs on the remote machine, so its Sources use the remote's SSH, AWS, Azure and Kubernetes config, and Docker Logs reads the Docker engine there. See [Polyscope for VS Code](docs/installing.md#polyscope-for-vs-code) for more.
 
 ## Documentation
 

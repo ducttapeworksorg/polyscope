@@ -2,7 +2,7 @@
 
 **Read files and logs wherever they live, without leaving VS Code.** Browse a local folder, a folder on a server, an S3 bucket, an Azure blob container, the files inside a Kubernetes pod, every container log in a namespace or on a Docker engine, the CloudWatch logs of an AWS region, or a Linux host's systemd journal, all from one sidebar and all read the same way.
 
-Chasing a problem across systems usually means a terminal per place: `tail -f` for a server's files, `aws s3 cp` for archived logs, `kubectl logs` and `kubectl exec … cat` for a cluster. Polyscope puts them in one tree, opens them in the editor you already know, and never writes to any of them.
+Chasing a problem across systems usually means a terminal per place: `tail -f` for a server's files, `aws s3 cp` for archived logs, `kubectl logs` and `kubectl exec … cat` for a cluster, `docker logs` per container, the CloudWatch console one log stream at a time, `journalctl -u` for a server's services. Polyscope puts them in one tree, opens them in the editor you already know, and never writes to any of them.
 
 ![The Polyscope sidebar in VS Code, following a container's log in a Kubernetes namespace](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vscode-kubernetes-logs.png)
 
@@ -23,7 +23,7 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 | --- | --- | --- |
 | **Local Filesystem** | A folder on this machine, or a UNC share on Windows | Your own file permissions |
 | **SSH Files** | A folder on a server, read over SFTP, through bastions if your `~/.ssh/config` says so | Your SSH agent, a key file, or a password |
-| **S3-compatible Storage** | A bucket, or the keys under a prefix, on AWS S3, MinIO, Ceph and others | Access keys, or an AWS profile (SSO included) |
+| **S3-compatible Storage** | A bucket, or the keys under a prefix, on AWS S3, Google Cloud Storage, MinIO, Ceph and others ([more](https://github.com/ducttapeworksorg/polyscope/blob/main/docs/sources.md#other-s3-compatible-stores)) | Access keys (HMAC keys for GCS), or an AWS profile (SSO included) |
 | **Azure Blob Storage** | A container in a storage account, or the blobs under a prefix, Data Lake Gen2 accounts included | A connection string, a SAS, or your Azure CLI sign-in (`az login`) |
 | **Kubernetes Files** | A folder inside every pod of one Deployment, StatefulSet or DaemonSet | Your kubeconfig, as `kubectl` does |
 | **Kubernetes Logs** | The logs of every container in a namespace, grouped by Workload, with pod health and restarts | Your kubeconfig, as `kubectl` does |
@@ -43,7 +43,7 @@ Chasing a problem across systems usually means a terminal per place: `tail -f` f
 
 Followed files, container logs (Kubernetes and Docker), CloudWatch logs, systemd journals and Large Files open in a Polyscope viewer tab, which appends live lines and pages through a multi-gigabyte file. Turn off the `polyscope.ownViewer` setting to open everything in VS Code's editor instead: Log Streams as a snapshot of their Last N lines, with no way to switch to a container's Previous Log, Large Files only up to the "open anyway" limit in Polyscope's Settings, and no Follow.
 
-![A Large File in a Polyscope viewer tab, listing every line matching a search](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vvscode-large-file.png)
+![A Large File in a Polyscope viewer tab, listing every line matching a search](https://raw.githubusercontent.com/ducttapeworksorg/polyscope/main/docs/images/vscode-large-file.png)
 
 ## Remote development
 

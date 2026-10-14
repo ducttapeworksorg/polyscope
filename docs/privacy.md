@@ -11,6 +11,7 @@ Only:
 - for an Azure Blob Storage Source, the storage account's blob endpoint (`<account>.blob.core.windows.net`, or the one you set); signing in through Azure CLI, Microsoft Entra ID to get a token, through `az`, the `AZURE_*` variables' service principal, or a managed identity's endpoint on an Azure VM;
 - for a CloudWatch Logs Source, the region's CloudWatch Logs endpoint (`logs.<region>.amazonaws.com`, or the one you set), and only its `DescribeLogGroups`, `DescribeLogStreams`, `GetLogEvents` and `FilterLogEvents` APIs, none of which AWS charges per call; never Live Tail or Logs Insights. It reads your AWS config and credentials files, and never writes to them;
 - for a Docker Logs Source, the Docker engine its context reaches: the local engine's socket or named pipe, a `tcp://` address, over TLS when the context has TLS material, or, for an `ssh://` context, its host over SSH, signed in and its host key checked as for an SSH Files Source, where it runs `docker system dial-stdio`. It reads your Docker CLI config folder (`DOCKER_CONFIG`, or `~/.docker`) to find contexts, and never writes to it;
+- for a systemd Journal Source on a host, that host over SSH, signed in and its host key checked as for an SSH Files Source, where it runs only `journalctl` and `systemctl`; on this machine, it runs them here, and connects to nothing;
 - GitHub Releases, to check for updates.
 
 ## What it stores
