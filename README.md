@@ -25,7 +25,7 @@ It runs on Windows, macOS and Linux, and [inside VS Code](#in-vs-code). Find out
 | --- | --- | --- |
 | **Local Filesystem** | A folder on this machine, or a UNC share on Windows | Your own file permissions |
 | **SSH Files** | A folder on a server, read over SFTP, through bastions if your `~/.ssh/config` says so | Your SSH agent, a key file, or a password |
-| **S3-compatible Storage** | A bucket, or the keys under a prefix, on AWS S3, MinIO, Ceph and others | Access keys, or an AWS profile (SSO included) |
+| **S3-compatible Storage** | A bucket, or the keys under a prefix, on AWS S3, Google Cloud Storage, MinIO, Ceph and others ([more](docs/sources.md#other-s3-compatible-stores)) | Access keys (HMAC keys for GCS), or an AWS profile (SSO included) |
 | **Azure Blob Storage** | A container in a storage account, or the blobs under a prefix, Data Lake Gen2 accounts included | A connection string, a SAS, or your Azure CLI sign-in (`az login`) |
 | **Kubernetes Files** | A folder inside every pod of one Deployment, StatefulSet or DaemonSet | Your kubeconfig, as `kubectl` does |
 | **Kubernetes Logs** | The logs of every container in a namespace, grouped by Workload, with pod health and restarts | Your kubeconfig, as `kubectl` does |
