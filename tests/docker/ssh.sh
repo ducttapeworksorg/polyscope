@@ -1,7 +1,8 @@
 #!/bin/sh
-# Reaches the default context's Docker Engine over SSH, as an `ssh://` context does: an OpenSSH sshd on 127.0.0.1:2222,
-# running as this user with keys generated here, so `docker system dial-stdio` runs as this user, who must be able to
-# use the engine. A Docker context, polyscope-test-ssh, names it. Run it after seed.sh, then the tests with
+# Reaches the default context's Docker Engine over SSH, as an `ssh://` context does: an OpenSSH sshd on 127.0.0.1:2222
+# ($POLYSCOPE_TEST_DOCKER_SSH_PORT if it's set, so it can run beside tests/ssh/sshd.sh, which takes 2222 too), running
+# as this user with keys generated here, so `docker system dial-stdio` runs as this user, who must be able to use the
+# engine. A Docker context, polyscope-test-ssh, names it. Run it after seed.sh, then the tests with
 # POLYSCOPE_TEST_DOCKER_SSH_CONTEXT=polyscope-test-ssh, with POLYSCOPE_TEST_DOCKER_SSH_DIR set as it was here: the folder
 # (/tmp/polyscope-docker-ssh unless it's set) holding the key that signs in (client_key) and a known_hosts line for the
 # server's host key. Nothing in ~/.ssh is touched. `ssh.sh --down` stops sshd and removes the context and the folder.
@@ -9,7 +10,7 @@ set -eu
 
 context=polyscope-test-ssh
 dir="${POLYSCOPE_TEST_DOCKER_SSH_DIR:-/tmp/polyscope-docker-ssh}"
-port=2222
+port="${POLYSCOPE_TEST_DOCKER_SSH_PORT:-2222}"
 
 if [ -f "$dir/sshd.pid" ]; then kill "$(cat "$dir/sshd.pid")" 2> /dev/null || true; fi
 docker context rm -f "$context" > /dev/null 2>&1 || true
