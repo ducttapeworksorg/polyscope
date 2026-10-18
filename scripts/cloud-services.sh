@@ -27,6 +27,9 @@ if [ "${1:-}" = --session-start ]; then
     echo 'export PATH="/opt/node24/bin:$PATH"' >> "$CLAUDE_ENV_FILE"
     echo "if [ -f $env ]; then . $env; fi" >> "$CLAUDE_ENV_FILE"
   fi
+  # The VM has no display, which VS Code wants; CI gives its extension tests one the same way.
+  echo "Run the extension tests as CI does, with a display of their own:" \
+    "xvfb-run --auto-servernum npm run test:extension."
   if [ -f "$dir/pid" ] && kill -0 "$(cat "$dir/pid")" 2> /dev/null; then
     echo "The integration test backends are still starting (scripts/cloud-services.sh, logging to $dir/log)."
     exit 0
