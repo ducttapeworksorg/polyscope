@@ -64,9 +64,26 @@ wait_for() {
 dependencies() {
   # npm ci again only when the lockfile changed since it last ran.
   hash=$(sha256sum package-lock.json)
-  [ -f node_modules/.package-lock.sha256 ] && [ "$(cat node_modules/.package-lock.sha256)" = "$hash" ] && return 0
-  npm ci
-  echo "$hash" > node_modules/.package-lock.sha256
+  if [ ! -f node_modules/.package-lock.sha256 ] || [ "$(cat node_modules/.package-lock.sha256)" != "$hash" ]; then
+    npm ci
+    echo "$hash" > node_modules/.package-lock.sha256
+  fi
+  electron
+}
+
+# Electron's binary, which its install script fetches with Node's fetch: that ignores the session's proxy unless told,
+# and may not trust the proxy's CA, so curl fetches it if Node can't. Doing nothing when it's there already.
+electron() {
+  NODE_USE_ENV_PROXY=1 NODE_OPTIONS=--use-system-ca node node_modules/electron/install.js && return 0
+  version=$(node -p "require('./node_modules/electron/package.json').version")
+  zip="electron-v$version-linux-x64.zip"
+  rm -rf "$dir/electron" node_modules/electron/dist
+  mkdir -p "$dir/electron"
+  curl -fsSL -o "$dir/electron/$zip" "https://github.com/electron/electron/releases/download/v$version/$zip"
+  # Checked against the checksums the electron package ships, as its install script checks them.
+  echo "$(node -p "require('./node_modules/electron/checksums.json')['$zip']")  $dir/electron/$zip" | sha256sum -c -
+  unzip -q "$dir/electron/$zip" -d node_modules/electron/dist
+  printf electron > node_modules/electron/path.txt
 }
 
 engine() {
@@ -139,7 +156,17 @@ journal() {
 # As in CI's integration (Kubernetes) job; a cluster left from before is made afresh, its pods gone with the VM.
 kubernetes() {
   kind delete cluster --name polyscope > /dev/null 2>&1 || true
-  kind create cluster --name polyscope --wait 180s
+  # Kubernetes 1.35 on refuses a cgroup v1 host unless its kubelet is told to run on one anyway.
+  config="$dir/kind.yaml"
+  printf 'kind: Cluster\napiVersion: kind.x-k8s.io/v1alpha4\n' > "$config"
+  if [ "$(stat -fc %T /sys/fs/cgroup)" != cgroup2fs ]; then
+    printf 'kubeadmConfigPatches:\n  - |\n    kind: KubeletConfiguration\n    failCgroupV1: false\n' >> "$config"
+  fi
+  if ! kind create cluster --name polyscope --config "$config" --wait 180s; then
+    # What kubeadm, the kubelet and the control plane said, to see why.
+    kind export logs --name polyscope "$dir/kind-logs" || true
+    return 1
+  fi
   # The seed's images, given to the cluster from the engine, so its pods never pull through the session's proxy.
   for image in busybox:1.36 debian:bookworm-slim registry.k8s.io/pause:3.10; do
     docker image inspect "$image" > /dev/null 2>&1 || docker pull "$image"
