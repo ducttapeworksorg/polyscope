@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readFile, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import type {
   AzureBlobSourceInfo,
   CloudWatchLogsSourceInfo,
@@ -24,6 +24,8 @@ import type {
   KubernetesLogsSourceInfo,
   LargeFileEvent,
   LargeFileSearchEvent,
+  SaveCopyEvent,
+  SaveCopyStarted,
   LastNLines,
   LocalSourceInfo,
   LogCapabilities,
@@ -92,6 +94,7 @@ import { currentRunOf, type LogReadOptions, type LogSource } from './log-source'
 import { readCaBundle } from './network-agents'
 import { createRegistryStore, emptyRegistry, type SavedSource } from './registry-store'
 import { createS3FileSource, type S3Target } from './s3-file-source'
+import { saveCopy as startSaveCopy, type SavingCopy } from './save-copy'
 import { createSecretStore, type SecretStore } from './secret-store'
 import { createSettingsStore } from './settings-store'
 import { findSshAgent } from './ssh-agent'
@@ -464,6 +467,20 @@ function offered(node: LogNode, capabilities: LogCapabilities): LogNode {
   return shown
 }
 
+/**
+ * What a host saving copies of files reads them with, saving each where the user chose in a dialog of its own. Left
+ * out of the core API the renderer reaches, so the renderer can't have the core write anywhere it likes.
+ */
+export interface CoreSaves {
+  /**
+   * Starts saving a copy of a Connected File Source's file, its bytes as stored, to `target`, an absolute path on this
+   * computer; how it goes comes as SaveCopyEvents with the returned `saveId`, until cancelSaveCopy or it's done.
+   * A file that isn't there fails at once, as does a Local file to be saved over itself (SAVE_OVER_SOURCE).
+   * Disconnecting its Source fails it.
+   */
+  saveCopy(sourceId: string, path: SourcePath, target: string): Promise<SaveCopyStarted>
+}
+
 /** What a Connected Source reads from: files, or Log Streams. */
 type Backend = { kind: 'files'; fileSource: FileSource } | { kind: 'logs'; logSource: LogSource }
 
@@ -504,6 +521,12 @@ async function readUpTo(
   return { bytes: new Uint8Array(Buffer.concat(parts)), whole: true }
 }
 
+/** Whether two paths on this computer are the same file, through any links; not if either isn't there. */
+const sameFile = async (a: string, b: string) => {
+  const [realA, realB] = await Promise.all([realpath(a).catch(() => null), realpath(b).catch(() => null)])
+  return realA !== null && realA === realB
+}
+
 const inMemory = { encrypt: (plain: string) => Buffer.from(plain), decrypt: (encrypted: Buffer) => encrypted.toString() }
 
 /**
@@ -521,7 +544,7 @@ export interface CoreFiles {
   isOverOpenAnywayLimit(sourceId: string, path: SourcePath): Promise<boolean>
 }
 
-export type Core = CoreApi & CoreEvents & CoreFiles
+export type Core = CoreApi & CoreEvents & CoreFiles & CoreSaves
 
 export function createCore(options: CoreOptions = {}): Core {
   const store = options.dataDir ? createRegistryStore(options.dataDir) : null
@@ -871,6 +894,10 @@ export function createCore(options: CoreOptions = {}): Core {
   const searches = new Map<string, { largeFileId: string; search: LargeFileSearch }>()
   const searchListeners = new Set<(event: LargeFileSearchEvent) => void>()
 
+  // Copies of files being saved, by id, each with the Source it's of.
+  const saves = new Map<string, { sourceId: string; saving: SavingCopy }>()
+  const saveListeners = new Set<(event: SaveCopyEvent) => void>()
+
   const largeFileFor = (largeFileId: string) => {
     const open = largeFiles.get(largeFileId)
     if (!open) throw new CoreError('LARGE_FILE_NOT_OPEN', `No Large File open with id ${largeFileId}`)
@@ -879,7 +906,7 @@ export function createCore(options: CoreOptions = {}): Core {
 
   /**
    * Stops what's going on against a Source's connection, as it's gone (disconnected, replaced, or `lost` when it
-   * dropped): its Follows, and Large Files still caching.
+   * dropped): its Follows, Large Files still caching, and copies of files being saved.
    */
   const stopActivity = (sourceId: string, { lost = false } = {}) => {
     stopFollows(sourceId, lost ? 'connectionLost' : 'disconnected')
@@ -887,6 +914,11 @@ export function createCore(options: CoreOptions = {}): Core {
       if (open.sourceId !== sourceId) continue
       if (lost) open.large.abort('UNREACHABLE', 'The connection to the server dropped while the file was being cached')
       else open.large.abort('SOURCE_DISCONNECTED', 'The Source was disconnected while the file was being cached')
+    }
+    for (const save of saves.values()) {
+      if (save.sourceId !== sourceId) continue
+      if (lost) save.saving.abort('UNREACHABLE', 'The connection to the server dropped while the copy was being saved')
+      else save.saving.abort('SOURCE_DISCONNECTED', 'The Source was disconnected while the copy was being saved')
     }
   }
 
@@ -1591,6 +1623,35 @@ export function createCore(options: CoreOptions = {}): Core {
       }
     },
 
+    async saveCopy(sourceId, path, target) {
+      await loaded
+      if (typeof target !== 'string' || !isAbsolute(target)) throw new CoreError('INVALID_PATH', `Not an absolute path to save to: ${String(target)}`)
+      const source = sourceFor(sourceId)
+      return withFileSource(sourceId, path, async (fileSource) => {
+        await fileToRead(fileSource, path)
+        if (source.type === 'local' && (await sameFile(join(source.rootPath, path), target))) {
+          throw new CoreError('SAVE_OVER_SOURCE', `A copy can’t be saved over the file itself: ${target}`)
+        }
+        const saveId = randomUUID()
+        const saving = startSaveCopy({
+          fileSource,
+          path,
+          target,
+          onStatus: (status) => {
+            if (status.state !== 'saving') saves.delete(saveId)
+            const event = { ...status, saveId }
+            for (const listener of saveListeners) listener(event)
+          }
+        })
+        saves.set(saveId, { sourceId, saving })
+        return { saveId, target }
+      })
+    },
+
+    async cancelSaveCopy(saveId) {
+      saves.get(saveId)?.saving.cancel()
+    },
+
     async openLog(sourceId, path, options = {}) {
       await loaded
       return withLogSource(sourceId, path, async (logSource) => (await readSnapshot(logSource, sourceId, path, options)).snapshot)
@@ -1765,6 +1826,12 @@ export function createCore(options: CoreOptions = {}): Core {
       const subscription = (event: LargeFileSearchEvent) => listener(event)
       searchListeners.add(subscription)
       return () => searchListeners.delete(subscription)
+    },
+
+    onSaveCopyEvent(listener) {
+      const subscription = (event: SaveCopyEvent) => listener(event)
+      saveListeners.add(subscription)
+      return () => saveListeners.delete(subscription)
     }
   }
 }

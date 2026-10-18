@@ -45,6 +45,7 @@ export const core: CoreApi & CoreEvents = {
   searchLargeFile: call('searchLargeFile'),
   cancelLargeFileSearch: call('cancelLargeFileSearch'),
   closeLargeFile: call('closeLargeFile'),
+  cancelSaveCopy: call('cancelSaveCopy'),
   openLog: call('openLog'),
   readEarlierLog: call('readEarlierLog'),
   followLog: call('followLog'),
@@ -68,7 +69,8 @@ export const core: CoreApi & CoreEvents = {
   onConnectionEvent: (listener) => window.polyscope.onConnectionEvent(listener),
   onFollowEvent: (listener) => window.polyscope.onFollowEvent(listener),
   onLargeFileEvent: (listener) => window.polyscope.onLargeFileEvent(listener),
-  onLargeFileSearchEvent: (listener) => window.polyscope.onLargeFileSearchEvent(listener)
+  onLargeFileSearchEvent: (listener) => window.polyscope.onLargeFileSearchEvent(listener),
+  onSaveCopyEvent: (listener) => window.polyscope.onSaveCopyEvent(listener)
 }
 
 /** A user-facing message for a failure the core reported, thrown or not. */

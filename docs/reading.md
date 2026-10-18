@@ -23,6 +23,15 @@ Polyscope highlights a file by its name: YAML, JSON, XML, source code, and logs,
 
 To watch a growing file on a Local Filesystem, SSH Files or Kubernetes Files Source, turn on **Follow** from its tab's menu, or right-click it in the sidebar. New lines appear as they're written.
 
+### Save a copy
+
+To keep a file on your computer, say to attach it to a bug report or keep it before it rotates away, right-click it in the sidebar, or use the button at the top of the file, and choose **Save a copy…**. It works for files from every kind of Source. Polyscope asks where to save it, suggesting the file's name in your Downloads folder.
+
+- The copy has the file's bytes exactly as they're stored: a `.gz` or `.zst` file stays compressed.
+- A bar at the foot of the window shows how it's going. A large file is read a piece at a time, so it doesn't fill up memory. **Cancel** stops the save.
+- A save that's cancelled, or that fails partway (say, when the connection drops), leaves nothing behind and says why. A file you chose to replace stays as it was.
+- Only the place you chose is written to. Polyscope never changes the Source itself.
+
 ## Logs
 
 A container's log, a CloudWatch log, or a systemd unit's journal opens with a toolbar:

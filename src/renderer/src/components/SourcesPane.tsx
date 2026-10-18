@@ -18,12 +18,14 @@ interface Props {
   onOpenLog(source: SourceInfo, node: LogStreamNode, options?: { pinned: boolean }): void
   /** Follows a file of a Local, Kubernetes Files or SSH Files Source in a log view; without it, files offer no Follow. */
   onFollowFile?(source: SourceInfo, node: EntryNode): void
+  /** Saves a copy of a file, asking where; without it, files offer no "Save a copy…". */
+  onSaveFile?(source: SourceInfo, node: EntryNode): void
   /** Opens the extension's VS Code settings, from the Settings dialog of an Extension Copy. */
   onOpenExtensionSettings?(): void
 }
 
 /** The Sources sidebar, with the Settings and Environments dialogs it opens. */
-export function SourcesPane({ ref, model, update, onOpenFile, onOpenLog, onFollowFile, onOpenExtensionSettings }: Props) {
+export function SourcesPane({ ref, model, update, onOpenFile, onOpenLog, onFollowFile, onSaveFile, onOpenExtensionSettings }: Props) {
   const { settings, sources, environments } = model
   return (
     <>
@@ -39,6 +41,7 @@ export function SourcesPane({ ref, model, update, onOpenFile, onOpenLog, onFollo
         onOpenFile={onOpenFile}
         onOpenLog={onOpenLog}
         onFollowFile={onFollowFile}
+        onSaveFile={onSaveFile}
         onOpenSettings={() => model.setSettingsOpen(true)}
         showDetails={settings.showTreeDetails}
         onToggleDetails={() => void model.toggleTreeDetails()}

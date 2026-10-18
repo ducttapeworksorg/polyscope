@@ -1,7 +1,7 @@
 // The messages between an Extension Copy's webviews and its extension host, standing in for the desktop app's IPC.
 // Everything here crosses `postMessage`, so must survive JSON.
 
-import type { ConnectionEvent, FollowEvent, LargeFileEvent, LargeFileSearchEvent, SourcePath } from '@shared/core-api'
+import type { ConnectionEvent, FollowEvent, LargeFileEvent, LargeFileSearchEvent, SaveCopyEvent, SourcePath } from '@shared/core-api'
 import type { Settings } from '@shared/settings'
 import type { UpdateStatus } from '@shared/updates'
 import type { PolyscopeBridge } from '../../preload/bridge'
@@ -35,7 +35,7 @@ export interface ExtensionBridge extends PolyscopeBridge {
 }
 
 /** The bridge's calls: everything but its subscriptions and what it says about itself. */
-export type BridgeCall = Exclude<keyof ExtensionBridge, `on${string}` | 'copy'>
+export type BridgeCall = Exclude<keyof ExtensionBridge, `on${string}` | 'copy' | 'saveCopy'>
 
 /** What each of the bridge's events carries. */
 export interface BridgeEvents {
@@ -44,6 +44,7 @@ export interface BridgeEvents {
   followEvent: FollowEvent
   largeFileEvent: LargeFileEvent
   largeFileSearchEvent: LargeFileSearchEvent
+  saveCopyEvent: SaveCopyEvent
   updateStatus: UpdateStatus
   ownViewerChanged: boolean
 }

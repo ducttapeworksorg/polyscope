@@ -4,7 +4,7 @@ import type { Theme } from '@shared/settings'
 import { createAppLog, type AppLog } from './app-log'
 import { createCore } from './core/core'
 import { createSecretStore } from './core/secret-store'
-import { forwardCoreEvents, registerCoreIpc, registerDiagnosticsIpc, registerShellIpc, registerUpdateIpc } from './ipc'
+import { forwardCoreEvents, registerCoreIpc, registerDiagnosticsIpc, registerSaveCopyIpc, registerShellIpc, registerUpdateIpc } from './ipc'
 import { loadLoginShellPath } from './login-shell-path'
 import { createUpdateEngine } from './update-engines'
 import { createUpdater } from './updates'
@@ -117,6 +117,7 @@ void app.whenReady().then(async () => {
   registerCoreIpc(core, log)
   registerShellIpc(() => mainWindow, { secretStorageIsWeak: weakSecrets })
   registerDiagnosticsIpc(log)
+  registerSaveCopyIpc(core, log, () => mainWindow)
   // Only an installed build updates itself; one run from source is whatever was checked out.
   const updater = app.isPackaged ? createUpdater({ engine: createUpdateEngine(log), log }) : null
   registerUpdateIpc(updater, () => mainWindow)

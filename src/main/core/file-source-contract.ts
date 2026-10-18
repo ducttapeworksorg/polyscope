@@ -1,6 +1,11 @@
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import type { SourcePath } from '@shared/core-api'
+import type { SaveCopyStatus, SourcePath } from '@shared/core-api'
 import type { FileEntry, FileSource } from './file-source'
+import { largeFileReading } from './large-file'
+import { saveCopy } from './save-copy'
 
 /** What a File Source under test starts with: each file's content by path, or null for an empty folder. */
 export type SeedTree = Record<SourcePath, string | Uint8Array | null>
@@ -208,6 +213,38 @@ export function describeFileSourceContract(name: string, seed: (tree: SeedTree) 
       it('reports a file that does not exist', () =>
         withSource({ 'a.log': 'a' }, async (source) => {
           await expect(source.read('missing.log', { offset: 0, length: 1 })).rejects.toMatchObject({ code: 'NOT_FOUND' })
+        }))
+    })
+
+    describe('saving a copy', () => {
+      /** Saves a copy of `path` into a new folder on this computer, returning the copy's bytes and what's left in the folder. */
+      const saved = async (source: FileSource, path: SourcePath) => {
+        const dir = await mkdtemp(join(tmpdir(), 'polyscope-save-'))
+        try {
+          const target = join(dir, 'copy')
+          const statuses: SaveCopyStatus[] = []
+          await saveCopy({ fileSource: source, path, target, onStatus: (status) => statuses.push(status) }).done
+          expect(statuses.at(-1)).toMatchObject({ state: 'saved' })
+          return { bytes: new Uint8Array(await readFile(target)), left: await readdir(dir) }
+        } finally {
+          await rm(dir, { recursive: true, force: true })
+        }
+      }
+
+      it('copies a file byte for byte, a range at a time, leaving only the copy', () => {
+        // Over one read's worth, ending partway through the last.
+        const content = bytes(2 * largeFileReading.cacheChunk + 1234)
+        return withSource({ 'logs/data.bin': content }, async (source) => {
+          const { bytes: copy, left } = await saved(source, 'logs/data.bin')
+          expect(copy.length).toBe(content.length)
+          expect(Buffer.from(copy).equals(Buffer.from(content))).toBe(true)
+          expect(left).toEqual(['copy'])
+        })
+      }, 120_000) // megabytes read through a pod's shell take a while
+
+      it('copies an empty file', () =>
+        withSource({ 'empty.log': '' }, async (source) => {
+          expect((await saved(source, 'empty.log')).bytes).toEqual(new Uint8Array())
         }))
     })
   })
