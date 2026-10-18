@@ -100,18 +100,22 @@ const linesOf = (event: LogEvent, merged: boolean, timestamps: boolean) => event
 
 /**
  * Where lines read back end, as readLogBack's `before`: the time of the first line read, and how many lines at that
- * time were read already (counting from the last line before that time), so the next read back skips them.
+ * time were read already (counting from the last line before that time), so the next read back skips them; and the
+ * Since they were read with, if any, so it reads back no further than that.
  */
-const placeText = (time: number, seen: number) => `${time}/${seen}`
+const placeText = (time: number, seen: number, since: number | undefined) => `${time}/${seen}${since === undefined ? '' : `/${since}`}`
 
 const placeOf = (before: string) => {
-  const [, time, seen] = /^(\d+)\/(\d+)$/.exec(before) ?? []
+  const [, time, seen, since] = /^(\d+)\/(\d+)(?:\/(\d+))?$/.exec(before) ?? []
   if (time === undefined) throw new CoreError('LOG_UNAVAILABLE', `Not a place in a CloudWatch log: ${before}`)
-  return { time: Number(time), seen: Number(seen) }
+  return { time: Number(time), seen: Number(seen), since: since === undefined ? undefined : Number(since) }
 }
 
-/** The last lines logged before `end` (of all of them, when left out): at least `needed` of them, unless there are fewer. */
-type LinesBefore = (end: number | undefined, needed: number) => Promise<{ lines: Line[] }>
+/**
+ * The last lines logged before `end` (of all of them, when left out), and since `since` (from the start, when left
+ * out): at least `needed` of them, unless there are fewer.
+ */
+type LinesBefore = (end: number | undefined, needed: number, since: number | undefined) => Promise<{ lines: Line[] }>
 
 /** A Log Source over a region's log groups (those starting with the prefix), each a group of its log streams. */
 export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize = cloudWatchPageSize } = {}): LogSource {
@@ -215,12 +219,13 @@ export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize =
   /** A stream's lines before a time, read back from it a page at a time. */
   const streamLinesBefore =
     (group: string, stream: string): LinesBefore =>
-    async (end, needed) => {
+    async (end, needed, since) => {
       let lines: Line[] = []
       let token: string | undefined
       while (lines.length < needed) {
         const limit = Math.min(needed - lines.length, eventsLimit)
-        const page = await eventsPage(group, stream, { startFromHead: false, limit, ...(end !== undefined && { endTime: end }), ...(token && { nextToken: token }) })
+        const span = { ...(since !== undefined && { startTime: since }), ...(end !== undefined && { endTime: end }) }
+        const page = await eventsPage(group, stream, { startFromHead: false, limit, ...span, ...(token && { nextToken: token }) })
         lines = [...(page.events ?? []).flatMap((event) => eventLines(event, false)), ...lines]
         // Back at its start, CloudWatch gives back the token it was given.
         if (!page.nextBackwardToken || page.nextBackwardToken === token) break
@@ -257,19 +262,21 @@ export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize =
 
   /**
    * A log group's lines before a time, its streams' merged: read back over a recent window, then wider and wider ones
-   * further back, until there are enough of them or the window reaches back to the group's start.
+   * further back, until there are enough of them or the window reaches back to the group's start, or to the Since.
    */
   const groupLinesBefore =
     (group: string, created: number): LinesBefore =>
-    async (before, needed) => {
-      const start = created - backfill
+    async (before, needed, since) => {
+      const start = Math.max(created - backfill, since ?? -Infinity)
       let end = before ?? Date.now() + ahead
+      // A Since still to come: nothing has been logged since it.
+      if (since !== undefined && since >= end) return { lines: [] }
       let width = firstWindow
       let lines: Line[] = []
       for (;;) {
         const from = Math.min(before ?? Date.now(), end) - width
         const atStart = from <= start
-        lines = [...(await lastInSpan(group, atStart ? 0 : from, end, needed - lines.length)), ...lines]
+        lines = [...(await lastInSpan(group, atStart ? (since ?? 0) : from, end, needed - lines.length)), ...lines]
         if (lines.length >= needed || atStart) return { lines }
         end = from
         width *= windowGrowth
@@ -277,19 +284,19 @@ export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize =
     }
 
   /**
-   * The log's last `tailLines` lines before where `before` says, and where the lines before them end: a line more is
-   * read, to tell whether there are any.
+   * The log's last `tailLines` lines before where `before` says, and since the Since it or `sinceTime` says, and where
+   * the lines before them end: a line more is read, to tell whether there are any.
    */
-  const readBack = async (linesBefore: LinesBefore, { tailLines, before, timestamps = false }: LogReadBackOptions): Promise<LogReadBack> => {
-    const { time, seen } = before === undefined ? { time: undefined, seen: 0 } : placeOf(before)
-    const { lines } = await linesBefore(time === undefined ? undefined : time + 1, tailLines + seen + 1)
+  const readBack = async (linesBefore: LinesBefore, { tailLines, before, timestamps = false, sinceTime }: LogReadBackOptions): Promise<LogReadBack> => {
+    const { time, seen, since } = before === undefined ? { time: undefined, seen: 0, since: sinceTime === undefined ? undefined : Date.parse(sinceTime) } : placeOf(before)
+    const { lines } = await linesBefore(time === undefined ? undefined : time + 1, tailLines + seen + 1, since)
     const unseen = Math.max(0, lines.length - seen)
     const from = Math.max(0, unseen - tailLines)
     const read = lines.slice(from, unseen)
     const text = read.map((line) => lineText(line, timestamps)).join('')
     if (from === 0) return { text }
     const first = read[0]!.timestamp
-    return { text, before: placeText(first, lines.slice(from).filter((line) => line.timestamp === first).length) }
+    return { text, before: placeText(first, lines.slice(from).filter((line) => line.timestamp === first).length, since) }
   }
 
   /** How a log's lines are read back: a stream's, or its log group's merged. */
@@ -300,18 +307,18 @@ export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize =
     return groupLinesBefore(group, creationTime)
   }
 
-  /** The log's lines from its start, until about `limitBytes`. */
-  const firstLines = async (group: string, stream: string | undefined, limitBytes: number, timestamps: boolean) => {
+  /** The log's lines from its start, or since `startTime`, until about `limitBytes`. */
+  const firstLines = async (group: string, stream: string | undefined, limitBytes: number, timestamps: boolean, startTime: number | undefined) => {
     let text = ''
     let bytes = 0
     let token: string | undefined
     for (;;) {
-      const nextToken = token && { nextToken: token }
+      const from = { ...(startTime !== undefined && { startTime }), ...(token && { nextToken: token }) }
       // At a stream's end, CloudWatch gives back the token it was given; at a group's, none.
       const { events = [], next } =
         stream === undefined ?
-          await groupPage(group, { ...nextToken }).then((page) => ({ ...page, next: page.nextToken }))
-        : await eventsPage(group, stream, { startFromHead: true, ...nextToken }).then((page) => ({ ...page, next: page.nextForwardToken }))
+          await groupPage(group, from).then((page) => ({ ...page, next: page.nextToken }))
+        : await eventsPage(group, stream, { startFromHead: true, ...from }).then((page) => ({ ...page, next: page.nextForwardToken }))
       for (const line of events.flatMap((event) => linesOf(event, stream === undefined, timestamps))) {
         text += line
         bytes += Buffer.byteLength(line)
@@ -431,7 +438,7 @@ export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize =
   })()
 
   const logSource: LogSource = {
-    capabilities: { previousLog: false, restarts: false, status: false, since: false },
+    capabilities: { previousLog: false, restarts: false, status: false, since: true },
 
     async listPage(path, cursor): Promise<LogPage> {
       const { group, stream } = partsOf(path)
@@ -469,12 +476,11 @@ export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize =
       return { name: segmentOf(stream ?? group) }
     },
 
-    async readLog(path, options: LogReadOptions = {}) {
-      const timestamps = options.timestamps === true
-      if (options.tailLines !== undefined) return (await logSource.readLogBack!(path, { tailLines: options.tailLines, timestamps })).text
+    async readLog(path, { tailLines, limitBytes = Infinity, timestamps = false, sinceTime }: LogReadOptions = {}) {
+      if (tailLines !== undefined) return (await logSource.readLogBack!(path, { tailLines, timestamps, ...(sinceTime !== undefined && { sinceTime }) })).text
       const { group, stream } = logAt(path)
       if (stream === undefined) await checkGroup(group)
-      return firstLines(group, stream, options.limitBytes ?? Infinity, timestamps)
+      return firstLines(group, stream, limitBytes, timestamps, sinceTime === undefined ? undefined : Date.parse(sinceTime))
     },
 
     async readLogBack(path, options) {

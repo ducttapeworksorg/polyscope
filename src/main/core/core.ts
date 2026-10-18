@@ -721,9 +721,9 @@ export function createCore(options: CoreOptions = {}): Core {
     let text: string
     let earlier: string | undefined
     try {
-      // From a Source Type that can read further back, the read also tells where the lines before these end; lines
-      // since a time are read as they are, with none before them to read.
-      if (lastNLines !== 'all' && logSource.readLogBack && !previous && sinceTime === undefined) ({ text, before: earlier } = await logSource.readLogBack(path, { ...read, tailLines: lastNLines }))
+      // From a Source Type that can read further back, the read also tells where the lines before these end, back as
+      // far as the Since if there is one.
+      if (lastNLines !== 'all' && logSource.readLogBack && !previous) ({ text, before: earlier } = await logSource.readLogBack(path, { ...read, tailLines: lastNLines }))
       else if (lastNLines !== 'all') text = await logSource.readLog(path, { ...read, tailLines: lastNLines })
       else if (options.allowLarge) text = await logSource.readLog(path, read)
       else text = await readUpToLarge(logSource, path, read)
