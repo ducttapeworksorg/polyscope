@@ -7,7 +7,6 @@
 // Given a token, it turns away requests that don't bear it.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { vi } from 'vitest'
 import { startTlsFront } from './test-network'
 
 /** What `counter` logs, with when, a second apart: `line 1` to `line 3`, then `line 4` while it's followed. */
@@ -216,11 +215,6 @@ export const standInCluster = (server: string, caPath: string | undefined, proxy
     '    cluster: fake',
     '    user: fake'
   ].join('\n')
-
-/** Keeps the proxy settings of wherever the tests run out of the way. */
-export const ignoreAmbientProxy = () => {
-  for (const name of ['HTTPS_PROXY', 'https_proxy', 'NO_PROXY', 'no_proxy']) vi.stubEnv(name, '')
-}
 
 /**
  * Starts the stand-in; `url` is its https address on 127.0.0.1, `caPath` a PEM file of the root CA that trusts it, and

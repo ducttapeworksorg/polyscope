@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { connect as connectTls, createServer as createTlsServer } from 'node:tls'
 // @peculiar/x509 needs the Reflect metadata API, and leaves providing it to its users.
 import 'reflect-metadata'
+import { vi } from 'vitest'
 import {
   BasicConstraintsExtension,
   ExtendedKeyUsage,
@@ -208,4 +209,14 @@ export async function startProxy({ hosts = {} }: { hosts?: Record<string, string
   })
   const listening = await listen(server)
   return { url: `http://127.0.0.1:${listening.port}`, tunnels, close: listening.close }
+}
+
+/**
+ * Keeps the proxy settings of wherever the tests run out of the way, so a test sees only those it sets. Both spellings:
+ * Node's agents take the lowercase ones over the uppercase when both are set, kubectl the other way round.
+ */
+export const ignoreAmbientProxy = () => {
+  for (const name of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy']) {
+    vi.stubEnv(name, undefined)
+  }
 }

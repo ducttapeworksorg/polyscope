@@ -8,7 +8,7 @@ import { MB } from '@shared/settings'
 import { createCore, type Core } from './core'
 import { kubeConfigFor } from './kubeconfig'
 import { execInPod } from './kubernetes-exec'
-import { filesDeployments, ignoreAmbientProxy, standInCluster, startTestApiServer } from './kubernetes-test-api-server'
+import { filesDeployments, standInCluster, startTestApiServer } from './kubernetes-test-api-server'
 import {
   hasRestrictedContext,
   hasTestCluster,
@@ -19,6 +19,7 @@ import {
   testKubernetesFilesSource,
   testNamespace
 } from './kubernetes-test-cluster'
+import { ignoreAmbientProxy } from './test-network'
 
 let dir: string
 
