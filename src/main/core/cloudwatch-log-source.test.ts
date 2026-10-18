@@ -4,7 +4,7 @@ import { allowedCloudWatchOperations, startTestCloudWatchEndpoint, type TestClou
 import { describeLogSourceContract } from './log-source-contract'
 import { cloudWatchSegment as segment } from '@shared/core-api'
 
-const capabilities = { previousLog: false, restarts: false, status: false, since: false }
+const capabilities = { previousLog: false, restarts: false, status: false, since: true }
 
 const at = (ms: number) => Date.UTC(2026, 9, 12, 10, 0, 0, ms)
 

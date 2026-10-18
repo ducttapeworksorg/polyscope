@@ -936,6 +936,9 @@ const firstRun: [string, () => Promise<void>][] = [
           try {
             assert.deepEqual((await core.connect(source.id)).map(nameOf), [orders])
             assert.equal((await core.openLog(source.id, orders)).content, '[abc] START RequestId: 1')
+            // Its log says it offers Since, so the viewer tab's toolbar, the app's own, shows the control.
+            const since = await core.openLog(source.id, orders, { since: new Date(now - 500).toISOString() })
+            assert.deepEqual([since.offersSince, since.content, since.earlier], [true, '', undefined])
 
             await open({ kind: 'log', sourceId: source.id, path: orders, name: orders, pinned: true })
             const tab = await eventually(() => activeViewerTab(orders))

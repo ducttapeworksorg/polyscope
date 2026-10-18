@@ -518,6 +518,40 @@ describe('a CloudWatch log group opened as one merged log', () => {
   })
 })
 
+describe('a CloudWatch log read since a time', () => {
+  const orders = segment('/aws/lambda/orders')
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'], now: at(60_000) })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  async function connected() {
+    await endpointWith()
+    const core = createCore()
+    const source = await core.addSource(settings())
+    await core.connect(source.id)
+    return { core, source }
+  }
+
+  it('shows only a log group’s events since then, across all its streams, at most the last N of them', async () => {
+    const { core, source } = await connected()
+    const since = async (time: number, lastNLines: number | 'all') => (await core.openLog(source.id, orders, { since: new Date(time).toISOString(), lastNLines })).content
+
+    expect(await since(at(5_000), 'all')).toBe(
+      ['[bbb] START RequestId: 2', '[ccc] START RequestId: 3', '[ccc] Error: boom', '[ccc]     at handler (index.js:1:1)', '[ccc] END RequestId: 3'].join('\n')
+    )
+    expect(await since(at(5_000), 1_000)).toBe(await since(at(5_000), 'all'))
+    expect(await since(at(1_000), 3)).toBe('[ccc] Error: boom\n[ccc]     at handler (index.js:1:1)\n[ccc] END RequestId: 3')
+    expect(await since(at(9_001), 'all')).toBe('')
+    expect(await since(at(9_001), 10)).toBe('')
+    expect(await since(at(10 * 60 * 60_000), 10)).toBe('')
+  })
+})
+
 describe('following CloudWatch logs', () => {
   const orders = segment('/aws/lambda/orders')
   const ccc = `${orders}/${segment('2026/10/12/[$LATEST]ccc')}`
@@ -554,6 +588,23 @@ describe('following CloudWatch logs', () => {
 
     expect(followed.content).toBe('[ccc] END RequestId: 3')
     await vi.waitFor(() => expect(linesOf(followed.followId)).toEqual(['[ddd] START RequestId: 4']), { timeout: 5_000 })
+    await core.disconnect(source.id)
+  })
+
+  it('goes on from the last event since a time, repeating none of them', async () => {
+    const { core, source, linesOf } = await connected()
+    const since = new Date(at(8_500)).toISOString()
+
+    const group = await core.followLog(source.id, orders, { lastNLines: 1_000, since })
+    const stream = await core.followLog(source.id, ccc, { lastNLines: 1_000, since })
+    log(0, 1, 'START RequestId: 5')
+
+    expect(group.content).toBe('[ccc] Error: boom\n[ccc]     at handler (index.js:1:1)\n[ccc] END RequestId: 3')
+    expect(stream.content).toBe('Error: boom\n    at handler (index.js:1:1)\nEND RequestId: 3')
+    await vi.waitFor(() => expect(linesOf(group.followId)).toEqual(['[ccc] START RequestId: 5']), { timeout: 5_000 })
+    await vi.waitFor(() => expect(linesOf(stream.followId)).toEqual(['START RequestId: 5']), { timeout: 5_000 })
+    await pause(300)
+    expect([linesOf(group.followId), linesOf(stream.followId)]).toEqual([['[ccc] START RequestId: 5'], ['START RequestId: 5']])
     await core.disconnect(source.id)
   })
 
@@ -740,6 +791,23 @@ describe('loading further back in a CloudWatch log', () => {
     const { core, source } = await connected([{ name: 'sparse', createdAt: at(-400 * day), streams: [{ name: 'only', events }] }])
 
     expect(await allOf(core, source.id, 'sparse', 2)).toBe(events.map(({ message }) => `[only] ${message}`).join('\n'))
+  })
+
+  it('reads back no further than the Since, offering nothing earlier once it gets there', async () => {
+    const { core, source } = await connected()
+    const orders = segment('/aws/lambda/orders')
+    const since = new Date(at(5_000)).toISOString()
+
+    const log = await core.openLog(source.id, orders, { lastNLines: 2, since })
+    expect(log).toMatchObject({ offersSince: true, content: '[ccc]     at handler (index.js:1:1)\n[ccc] END RequestId: 3' })
+    const back = await core.readEarlierLog(source.id, orders, { earlier: log.earlier!, lines: 2 })
+    expect(back.content).toBe('[ccc] START RequestId: 3\n[ccc] Error: boom')
+    // `[aaa] START RequestId: 1` was logged before the Since.
+    expect(await core.readEarlierLog(source.id, orders, { earlier: back.earlier!, lines: 2 })).toEqual({ content: '[bbb] START RequestId: 2' })
+    expect((await core.openLog(source.id, orders, { lastNLines: 5, since })).earlier).toBeUndefined()
+    const path = `${orders}/${segment('2026/10/12/[$LATEST]ccc')}`
+    const stream = await core.openLog(source.id, path, { lastNLines: 2, since: new Date(at(8_500)).toISOString() })
+    expect(await core.readEarlierLog(source.id, path, { earlier: stream.earlier!, lines: 2 })).toEqual({ content: 'Error: boom' })
   })
 
   it('has nothing further back to read when all of a log is shown', async () => {

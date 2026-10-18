@@ -40,13 +40,18 @@ export interface LogReadBackOptions {
   before?: string
   /** Starts each line with when it was logged, as for readLog. */
   timestamps?: boolean
+  /**
+   * Only lines logged since this RFC 3339 time, as for readLog; the `before` it gives reads back no further than that.
+   * Left out with a `before`, which keeps the Since it was read with. Asked only of a Source Type with Since.
+   */
+  sinceTime?: string
 }
 
 /** Lines read back, and where the lines before them end. */
 export interface LogReadBack {
   /** Lines ending in '\n', at most as many as asked for. */
   text: string
-  /** Where the lines before these end, to read them with; left out at the log's start. */
+  /** Where the lines before these end, to read them with; left out at the log's start, or at the Since it was read with. */
   before?: string
 }
 
