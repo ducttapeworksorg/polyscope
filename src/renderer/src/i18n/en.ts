@@ -284,6 +284,7 @@ export const en = {
   'saveCopy.progress': '{saved} of {total}',
   'saveCopy.saved': 'Saved a copy of {name} to {target}',
   'saveCopy.failed': 'Couldn’t save a copy of {name}',
+  'saveCopy.notWhereItRuns': 'Polyscope saves copies on the machine it runs on. Choose a place there.',
   'saveCopy.cancel': 'Cancel',
   'saveCopy.dismiss': 'Dismiss',
 

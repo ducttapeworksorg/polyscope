@@ -60,6 +60,8 @@ export function createWebviewBridge({ post, listen }: Channel): ExtensionBridge 
     secretStorageIsWeak: call('secretStorageIsWeak'),
     copyDiagnostics: call('copyDiagnostics'),
     copyText: call('copyText'),
+    saveCopy: call('saveCopy'),
+    saveLogCopy: call('saveLogCopy'),
     appVersion: call('appVersion'),
     getUpdateStatus: call('getUpdateStatus'),
     checkForUpdates: call('checkForUpdates'),

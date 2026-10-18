@@ -1,9 +1,12 @@
 import { mkdir } from 'node:fs/promises'
 import { homedir, release } from 'node:os'
 import { join } from 'node:path'
-import { commands, ConfigurationTarget, env, EventEmitter, ExtensionMode, Uri, version, window, workspace, type ExtensionContext } from 'vscode'
+import { commands, ConfigurationTarget, env, EventEmitter, ExtensionMode, ProgressLocation, Uri, version, window, workspace, type ExtensionContext } from 'vscode'
+import type { CoreErrorCode, CoreResult, SaveCopyStarted } from '@shared/core-api'
 import { createAppLog } from '../main/app-log'
+import { resultOf } from '../main/core-call'
 import { createCore, type Core } from '../main/core/core'
+import { suggestedName } from '../main/core/save-copy'
 import type { SecretStore } from '../main/core/secret-store'
 import { formatDiagnostics, osDescription } from '../main/diagnostics'
 import { t } from '../renderer/src/i18n'
@@ -12,6 +15,7 @@ import type { HostShell } from './bridge/host'
 import type { OpenRequest } from './bridge/protocol'
 import { createFileProvider } from './file-provider'
 import { polyscopeLogUri, polyscopeScheme, polyscopeUri } from './polyscope-uri'
+import { watchSave } from './save-progress'
 import { createVsCodeSecretStore } from './secret-storage'
 import { registerSidebarView } from './sidebar-view'
 import { createTabDecorations, type TabDecorations } from './tab-decorations'
@@ -33,6 +37,8 @@ export interface TestApi {
   tabDecorations: TabDecorations
   /** Answers the notifications the extension shows from now on in the user's place, with one of their actions or none. */
   answerNotifications(answer: (message: string, actions: string[]) => string | undefined): void
+  /** Answers the Save dialogs the extension shows from now on in the user's place, with a place or none, given what's suggested. */
+  answerSaveDialogs(answer: (suggested: Uri) => Uri | undefined): void
 }
 
 /** Whether `polyscope.ownViewer` is on: Follows, Log Streams and Large Files open in Polyscope's viewer tabs. */
@@ -60,6 +66,7 @@ export async function activate(context: ExtensionContext): Promise<TestApi | und
   const core = startCore(secrets)
 
   let notify = async (message: string, ...actions: string[]) => window.showWarningMessage(message, ...actions)
+  let askWhere = async (suggested: Uri) => window.showSaveDialog({ defaultUri: suggested })
   const ownViewerChanged = new EventEmitter<boolean>()
   const tabDecorations = createTabDecorations(core)
   context.subscriptions.push(
@@ -97,6 +104,8 @@ export async function activate(context: ExtensionContext): Promise<TestApi | und
       await env.clipboard.writeText(report)
     },
     copyText: async (text) => env.clipboard.writeText(text),
+    saveCopy: (sourceId, path) => saveWith('saveCopy', suggestedName(path), (target) => core.saveCopy(sourceId, path, target)),
+    saveLogCopy: (name, text) => saveWith('saveLogCopy', suggestedName(name), (target) => core.saveLogCopy(text, target)),
     appVersion: async () => context.extension.packageJSON.version as string,
     async openExtensionSettings() {
       await commands.executeCommand('workbench.action.openSettings', `@ext:${context.extension.id}`)
@@ -111,6 +120,41 @@ export async function activate(context: ExtensionContext): Promise<TestApi | und
       return () => subscription.dispose()
     }
   }
+  /**
+   * Asks where to save a copy named `name`, suggesting it where VS Code's own Save As would: in the workspace's
+   * folder, else the home folder of the machine the extension runs on, which under Remote-SSH, WSL or a Dev Container
+   * is the remote one. Then saves it there with `start`, showing how it goes in a notification with Cancel, and how
+   * it ended unless cancelled, logging a failure to start as `call`'s. Null if no place was picked.
+   */
+  async function saveWith(call: string, name: string, start: (target: string) => Promise<SaveCopyStarted>): Promise<CoreResult<SaveCopyStarted | null>> {
+    const folder = workspace.workspaceFolders?.[0]?.uri ?? Uri.file(homedir())
+    const picked = await askWhere(name ? Uri.joinPath(folder, name) : folder)
+    if (!picked) return { ok: true, value: null }
+    const failed = ({ code, message }: { code: CoreErrorCode; message: string }) => {
+      void window.showErrorMessage(`${t('saveCopy.failed', { name })}: ${t(`error.${code}`, { message })}`)
+      return { ok: false as const, code, message }
+    }
+    // Only a place on the machine the extension runs on, which the dialog's "Show Local" under a remote isn't.
+    if (picked.scheme !== 'file') return failed({ code: 'SAVE_UNWRITABLE', message: t('saveCopy.notWhereItRuns') })
+
+    const saving = watchSave(core)
+    const result = await resultOf(log, call, () => start(picked.fsPath))
+    if (!result.ok) {
+      saving.stop()
+      return failed(result)
+    }
+    const { saveId, target } = result.value
+    void window
+      .withProgress({ location: ProgressLocation.Notification, title: t('saveCopy.saving', { name }), cancellable: true }, (progress, cancel) =>
+        saving.follow(saveId, { report: (update) => progress.report(update), onCancel: (listener) => void cancel.onCancellationRequested(listener) })
+      )
+      .then((ended) => {
+        if (ended.state === 'saved') void window.showInformationMessage(t('saveCopy.saved', { name, target }))
+        if (ended.state === 'failed') failed(ended)
+      })
+    return result
+  }
+
   const webviewOptions: WebviewOptions = { core, log, shell, webviewRoot: Uri.joinPath(context.extensionUri, 'dist', 'webview') }
 
   /** The Source's name, to label its tabs by; none if it's gone, which VS Code's editor then shows. */
@@ -165,8 +209,11 @@ export async function activate(context: ExtensionContext): Promise<TestApi | und
   const answerNotifications: TestApi['answerNotifications'] = (answer) => {
     notify = async (message, ...actions) => answer(message, actions)
   }
+  const answerSaveDialogs: TestApi['answerSaveDialogs'] = (answer) => {
+    askWhere = async (suggested) => answer(suggested)
+  }
   return context.extensionMode === ExtensionMode.Test
-    ? { core, secrets, startCore: () => startCore(createVsCodeSecretStore(context.secrets)), open, shell, tabDecorations, answerNotifications }
+    ? { core, secrets, startCore: () => startCore(createVsCodeSecretStore(context.secrets)), open, shell, tabDecorations, answerNotifications, answerSaveDialogs }
     : undefined
 }
 

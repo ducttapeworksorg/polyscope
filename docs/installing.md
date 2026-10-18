@@ -113,6 +113,8 @@ VS Code's **Polyscope: Own Viewer** setting (`polyscope.ownViewer`, on by defaul
 - A restarted container's **Previous Log** can't be opened: it's switched to with the **Previous** toggle in a log's toolbar, which VS Code's editor doesn't have.
 - A Large File opens only if it's within Polyscope's "open anyway" limit. A bigger one is refused, with an offer to turn the setting back on.
 
+**Save a copy…** is on a file's right-click menu in Polyscope's sidebar, in a Large File's viewer tab, and in a log's viewer tab, where it saves the lines the tab holds, as in the app (see [Save a copy](reading.md#save-a-copy)). VS Code's Save dialog asks where, suggesting the file's name in your workspace's folder, or in your home folder if there's none; under Remote-SSH, WSL or a Dev Container, that's on the remote machine, where VS Code's own **Save As** would put it, and the copy is saved there. A VS Code notification shows how a save is going, with **Cancel**; a cancelled save leaves nothing behind. Files open in VS Code's editor are saved with its own **Save As**.
+
 The sidebar and viewer tabs take the colours of your VS Code theme and follow it when it changes. Environment and status colours stay Polyscope's.
 
 ### Its own Sources

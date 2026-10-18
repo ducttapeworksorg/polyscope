@@ -20,7 +20,7 @@ const opener =
 
 /**
  * The Polyscope sidebar in VS Code: the desktop app's Sources pane, opening what's picked where the extension host
- * decides. Files offer Follow only while `polyscope.ownViewer` is on, as VS Code's editor can't follow.
+ * decides; the extension host asks where to save a copy of a file. Files offer Follow only while `polyscope.ownViewer` is on, as VS Code's editor can't follow.
  */
 function Sidebar() {
   const model = useSources()
@@ -39,6 +39,8 @@ function Sidebar() {
       onOpenFile={opener('file')}
       onOpenLog={opener('log')}
       onFollowFile={ownViewer ? opener('follow') : undefined}
+      // VS Code's notification shows how it goes.
+      onSaveFile={(source, node) => void bridge.saveCopy(source.id, node.path)}
       onOpenExtensionSettings={() => void bridge.openExtensionSettings()}
     />
   )

@@ -12,6 +12,7 @@ import { useSettings } from '../src/components/use-settings'
 import { useTabs } from '../src/components/use-tabs'
 import { core } from '../src/core-client'
 import { t } from '../src/i18n'
+import { logCopyOf } from '../src/log-copy'
 import { tabName } from '../src/workspace'
 import { bridge } from './bridge'
 
@@ -95,6 +96,12 @@ function ViewerTab() {
         panelId={viewerPanelId}
         // In VS Code's editor rather than this tab's, which then closes.
         onOpenAnyway={() => void bridge.open({ ...request, kind: 'file', pinned: true, inEditor: true })}
+        // Saved as the desktop app saves them, VS Code's notification showing how it goes.
+        onSaveCopy={(tab) => void bridge.saveCopy(tab.source.id, tab.file.path)}
+        onSaveLogCopy={(tab, lines) => {
+          const copy = logCopyOf(tab, lines, new Date())
+          if (copy) void bridge.saveLogCopy(copy.name, copy.text)
+        }}
       >
         <div className="viewer__empty">
           <ApertureMark />
