@@ -292,6 +292,7 @@ Besides the core, the main process owns what needs the OS: native folder and fil
 3. Registers the **sidebar webview view** (`sidebar-view.ts`), which shows Polyscope's Sources pane.
 4. Opens **viewer webview tabs** (`viewer-tab.ts`) for Follows, Log Streams and Large Files, which VS Code's editor can't show (ADR 0005).
 5. Decorates `polyscope://` tabs with their Environment's colour (`tab-decorations.ts`, `environment-colors.ts`).
+6. Saves copies of files and log views' lines where VS Code's Save dialog says, showing each in a progress notification with Cancel (`save-progress.ts`).
 
 Its `open()` function decides where each thing the sidebar asks for goes, depending on `polyscope.ownViewer`:
 
@@ -315,7 +316,7 @@ flowchart LR
 The bridge carries calls and events between the UI and its host. The UI only ever sees one interface, **`PolyscopeBridge`** (`src/preload/bridge.ts`), as `window.polyscope`:
 
 - `invokeCore(method, args)`: call any `CoreApi` method.
-- Shell helpers: `pickFolder`, `pickFile`, `copyText`, `copyDiagnostics`, `secretStorageIsWeak`, `saveCopy` and `saveLogCopy` (desktop only, for now), which ask where and start saving a copy of a file, or of a log view's lines.
+- Shell helpers: `pickFolder`, `pickFile`, `copyText`, `copyDiagnostics`, `secretStorageIsWeak`, `saveCopy` and `saveLogCopy`, which ask where and start saving a copy of a file, or of a log view's lines.
 - Updates: `appVersion`, `getUpdateStatus`, `checkForUpdates`, `applyUpdate`.
 - Subscriptions: `onSettingsChanged`, `onConnectionEvent`, `onFollowEvent`, `onLargeFileEvent`, `onLargeFileSearchEvent`, `onSaveCopyEvent`, `onUpdateStatus`, each returning an unsubscribe function.
 - `copy`: `'desktop'` or `'extension'`, for the few places the UI differs.
@@ -328,6 +329,7 @@ It has two implementations:
 | Transport | `ipcRenderer.invoke('core', method, args)` / `webContents.send` | `postMessage` with `{ kind: 'call', id, method, args }` / `{ kind: 'reply', id, … }` / `{ kind: 'event', … }` (`protocol.ts`) |
 | Host side | `src/main/ipc.ts` | `src/extension/bridge/host.ts` (`serveBridge`) |
 | Extras | — | `ExtensionBridge` adds `open`, `retitle`, `ownViewer`, `openExtensionSettings` |
+| Save a copy | `registerSaveCopyIpc` asks with Electron's Save dialog; the renderer shows progress | `HostShell.saveCopy` asks with VS Code's Save dialog and shows progress and Cancel in a VS Code notification (`save-progress.ts`) |
 
 Both host sides call the core through the same function, **`callCore`** (`src/main/core-call.ts`). It checks the method name against `coreMethods`, calls it, and returns a `CoreResult`: `{ ok: true, value }` or `{ ok: false, code, message }`, plus the `hostKey` a HOST_KEY_UNKNOWN failure offers to trust. Errors travel as values because a thrown `Error` loses its `code` crossing IPC. The extension's host side also remembers the Follows and Large Files each webview started, and lets them go when that webview closes.
 

@@ -70,6 +70,8 @@ beforeEach(async () => {
     appVersion: async () => '1.2.3',
     openExtensionSettings: async () => {},
     open: async () => {},
+    saveCopy: async () => ({ ok: true, value: null }),
+    saveLogCopy: async () => ({ ok: true, value: null }),
     retitle: async () => {},
     sourcesChanged: () => {},
     ownViewer: async () => true,
@@ -139,6 +141,25 @@ describe('the host’s own calls over the bridge', () => {
     await bridge.open(request)
 
     expect(opened).toEqual([request])
+  })
+
+  it('pass saving a copy of a file or a log’s lines to the host, which asks where, and carry back how it started', async () => {
+    const asked: unknown[][] = []
+    shell.saveCopy = async (...args) => {
+      asked.push(['saveCopy', ...args])
+      return { ok: true, value: { saveId: 's1', target: '/picked/app.log' } }
+    }
+    shell.saveLogCopy = async (...args) => {
+      asked.push(['saveLogCopy', ...args])
+      return { ok: true, value: null }
+    }
+
+    expect(await bridge.saveCopy('abc', 'logs/app.log')).toEqual({ ok: true, value: { saveId: 's1', target: '/picked/app.log' } })
+    expect(await bridge.saveLogCopy('web-2026-10-18-090507.log', 'a\nb\n')).toEqual({ ok: true, value: null })
+    expect(asked).toEqual([
+      ['saveCopy', 'abc', 'logs/app.log'],
+      ['saveLogCopy', 'web-2026-10-18-090507.log', 'a\nb\n']
+    ])
   })
 
   it('say whether the host opens what needs it in Polyscope’s own viewer', async () => {

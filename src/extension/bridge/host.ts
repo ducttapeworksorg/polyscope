@@ -1,4 +1,4 @@
-import type { CoreApi, CoreEvents, CoreMethod } from '@shared/core-api'
+import type { CoreApi, CoreEvents, CoreMethod, CoreResult, SaveCopyStarted, SourcePath } from '@shared/core-api'
 import { isRecord } from '@shared/settings'
 import type { AppLog } from '../../main/app-log'
 import { callCore } from '../../main/core-call'
@@ -10,6 +10,10 @@ export interface HostShell {
   pickFile(filters: { name: string; extensions: string[] }[]): Promise<string | null>
   copyDiagnostics(): Promise<void>
   copyText(text: string): Promise<void>
+  /** "Save a copy…" of a file: asks where with VS Code's Save dialog, then saves it there, showing how in a notification. */
+  saveCopy(sourceId: string, path: SourcePath): Promise<CoreResult<SaveCopyStarted | null>>
+  /** "Save a copy…" of a log view's lines, suggesting `name`, as saveCopy saves a file. */
+  saveLogCopy(name: string, text: string): Promise<CoreResult<SaveCopyStarted | null>>
   appVersion(): Promise<string>
   openExtensionSettings(): Promise<void>
   open(request: OpenRequest): Promise<void>
@@ -95,6 +99,8 @@ export function serveBridge({ core, log, shell, post }: Options) {
     secretStorageIsWeak: async () => false,
     copyDiagnostics: () => shell.copyDiagnostics(),
     copyText: (text) => shell.copyText(text),
+    saveCopy: (sourceId, path) => shell.saveCopy(sourceId, path),
+    saveLogCopy: (name, text) => shell.saveLogCopy(name, text),
     appVersion: () => shell.appVersion(),
     openExtensionSettings: () => shell.openExtensionSettings(),
     // The editor's marketplace updates an Extension Copy.

@@ -2,9 +2,9 @@
 // Run twice against the same VS Code profile, the second time as if the window had been reloaded.
 
 import assert from 'node:assert/strict'
-import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { basename, delimiter, join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import * as vscode from 'vscode'
 import { cloudWatchSegment, type FollowEvent, type HostKey } from '@shared/core-api'
@@ -829,6 +829,65 @@ const firstRun: [string, () => Promise<void>][] = [
         unsubscribe()
         const { largeFileThreshold, openAnywayLimit, cacheSizeCap } = before
         await core.updateSettings({ largeFileThreshold, openAnywayLimit, cacheSizeCap })
+      }
+    }
+  ],
+  [
+    'Save a copy from the sidebar asks where in VS Code’s Save dialog, suggesting the file’s name in the workspace’s folder, and saves its bytes as stored',
+    async () => {
+      const { core, shell, answerSaveDialogs } = await extension()
+      const [source] = await core.listSources()
+      const saved = await mkdtemp(join(tmpdir(), 'polyscope-saved-'))
+      const suggested: vscode.Uri[] = []
+      const target = vscode.Uri.file(join(saved, 'app.log.gz'))
+      answerSaveDialogs((uri) => {
+        suggested.push(uri)
+        return target
+      })
+
+      try {
+        const result = await shell.saveCopy(source!.id, 'app.log.gz')
+
+        assert.ok(result.ok && result.value, 'The save started')
+        assert.equal(result.value.target, target.fsPath)
+        const [workspaceFolder] = vscode.workspace.workspaceFolders ?? []
+        assert.deepEqual(suggested.map(String), [vscode.Uri.joinPath(workspaceFolder!.uri, 'app.log.gz').toString()])
+        // Still compressed: its bytes as stored.
+        await eventually(async () => assert.deepEqual(await readFile(target.fsPath), gzipSync(log)))
+
+        answerSaveDialogs(() => undefined)
+        assert.deepEqual(await shell.saveCopy(source!.id, 'hello.txt'), { ok: true, value: null }, 'Nothing is saved without a place')
+        answerSaveDialogs(() => vscode.Uri.parse('vscode-local:/elsewhere/hello.txt'))
+        const elsewhere = await shell.saveCopy(source!.id, 'hello.txt')
+        assert.equal(elsewhere.ok, false, 'Nothing is saved off the machine the extension runs on')
+        assert.deepEqual(await readdir(saved), ['app.log.gz'])
+      } finally {
+        answerSaveDialogs(() => undefined)
+        await rm(saved, { recursive: true, force: true })
+      }
+    }
+  ],
+  [
+    'Save a copy of a log’s lines, as a viewer tab asks with those it holds, saves them under the name it suggests',
+    async () => {
+      const { shell, answerSaveDialogs } = await extension()
+      const saved = await mkdtemp(join(tmpdir(), 'polyscope-saved-'))
+      const suggested: string[] = []
+      answerSaveDialogs((uri) => {
+        suggested.push(basename(uri.fsPath))
+        return vscode.Uri.file(join(saved, basename(uri.fsPath)))
+      })
+
+      try {
+        // As the viewer tab asks, with the lines its editor holds.
+        const result = await shell.saveLogCopy('app-2026-10-18-090507.log', log)
+
+        assert.ok(result.ok && result.value, 'The save started')
+        assert.deepEqual(suggested, ['app-2026-10-18-090507.log'])
+        await eventually(async () => assert.equal(await readFile(join(saved, 'app-2026-10-18-090507.log'), 'utf8'), log))
+      } finally {
+        answerSaveDialogs(() => undefined)
+        await rm(saved, { recursive: true, force: true })
       }
     }
   ],

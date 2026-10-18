@@ -82,7 +82,7 @@ export function App() {
         onOpenFile={tabsModel.openFile}
         onOpenLog={tabsModel.openLog}
         onFollowFile={(source, node) => void tabsModel.followFile(source, node)}
-        {...(saveCopy && { onSaveFile: (source, node) => void saveCopy(source, node.path, node.name) })}
+        onSaveFile={(source, node) => void saveCopy(source, node.path, node.name)}
       />
       <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />
 
@@ -110,8 +110,8 @@ export function App() {
           connection={activeConnection}
           onReconnect={() => activeTab && void sourcesModel.connect(activeTab.source)}
           panelId={viewerPanelId}
-          {...(saveCopy && { onSaveCopy: (tab) => void saveCopy(tab.source, tab.file.path, tab.file.name) })}
-          {...(saveLogCopy && { onSaveLogCopy: (tab, lines) => void saveLogCopy(tab, lines) })}
+          onSaveCopy={(tab) => void saveCopy(tab.source, tab.file.path, tab.file.name)}
+          onSaveLogCopy={(tab, lines) => void saveLogCopy(tab, lines)}
         >
           <div className="viewer__empty">
             <ApertureMark />

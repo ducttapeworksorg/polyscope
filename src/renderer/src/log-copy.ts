@@ -30,6 +30,14 @@ export function logCopyName({ source, file }: { source: Pick<SourceInfo, 'type'>
   return `${what}${file.previous ? '-previous' : ''}-${stampOf(at)}.log`
 }
 
+/**
+ * What "Save a copy…" of a log tab saves: its name, as logCopyName gives it, and its lines as text; none for a tab
+ * that isn't a log view.
+ */
+export function logCopyOf({ source, file }: OpenTab, lines: readonly string[], at: Date): { name: string; text: string } | null {
+  return file.view === 'log' ? { name: logCopyName({ source, file }, at), text: logCopyText(lines) } : null
+}
+
 /** The text a copy of a log view's lines is saved as: one per line, each ending in a line break; none if it has none. */
 export function logCopyText(lines: readonly string[]): string {
   if (lines.length === 0 || (lines.length === 1 && lines[0] === '')) return ''

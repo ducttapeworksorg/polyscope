@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SourceInfo } from '@shared/core-api'
-import { logCopyName, logCopyText } from './log-copy'
+import { logCopyName, logCopyOf, logCopyText } from './log-copy'
+import type { OpenTab } from './workspace'
 
 const source = (type: SourceInfo['type']) => ({ type }) as SourceInfo
 const at = new Date(2026, 9, 18, 9, 5, 7)
@@ -48,5 +49,13 @@ describe('the text of a copy of a log', () => {
 
   it('keeps a blank line among others', () => {
     expect(logCopyText(['a', '', 'b'])).toBe('a\n\nb\n')
+  })
+})
+
+describe('what a log tab’s copy is', () => {
+  it('is its lines under its suggested name, or nothing for a tab that isn’t a log view', () => {
+    const file = { view: 'log', of: 'file', path: 'logs/app.log', name: 'app.log', previous: false }
+    expect(logCopyOf({ source: source('local'), file } as unknown as OpenTab, ['a', 'b'], at)).toEqual({ name: 'app-2026-10-18-090507.log', text: 'a\nb\n' })
+    expect(logCopyOf({ source: source('local'), file: { ...file, view: 'editor' } } as unknown as OpenTab, ['a'], at)).toBeNull()
   })
 })

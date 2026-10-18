@@ -6,6 +6,7 @@ import type { UpdateStatus } from '@shared/updates'
 import type { AppLog } from './app-log'
 import { callCore, resultOf } from './core-call'
 import type { CoreSaves } from './core/core'
+import { suggestedName } from './core/save-copy'
 import { formatDiagnostics, osDescription } from './diagnostics'
 import type { Updater } from './updates'
 
@@ -22,12 +23,6 @@ export function forwardCoreEvents(core: CoreEvents, getWindow: () => BrowserWind
   core.onLargeFileEvent((event) => getWindow()?.webContents.send('core:largeFileEvent', event))
   core.onLargeFileSearchEvent((event) => getWindow()?.webContents.send('core:largeFileSearchEvent', event))
   core.onSaveCopyEvent((event) => getWindow()?.webContents.send('core:saveCopyEvent', event))
-}
-
-/** A name to suggest saving as, from one the renderer or a Source gave: with nothing in it read as a folder here. */
-const suggestedName = (name: string) => {
-  const own = name.slice(name.lastIndexOf('/') + 1).replace(/[\\/]/g, '_')
-  return own === '.' || own === '..' ? '' : own
 }
 
 /**

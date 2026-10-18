@@ -113,6 +113,12 @@ export function saveCopy({ fileSource, path, target, onStatus }: SaveCopyOptions
   }
 }
 
+/** A name to suggest saving as, from one a webview or a Source gave: with nothing in it read as a folder here. */
+export const suggestedName = (name: string) => {
+  const own = name.slice(name.lastIndexOf('/') + 1).replace(/[\\/]/g, '_')
+  return own === '.' || own === '..' ? '' : own
+}
+
 /** Bytes held here, read as a File Source's one file would be: say the lines a log view shows. */
 const heldBytes = (bytes: Uint8Array): SaveCopyOptions['fileSource'] => ({
   stat: async () => ({ kind: 'file', size: bytes.length, modifiedTime: Date.now() }),

@@ -18,15 +18,15 @@ export interface PolyscopeBridge {
   copyText(text: string): Promise<void>
   /**
    * "Save a copy…": asks where to save a Connected File Source's file, suggesting its name, then starts saving a copy
-   * of it there, telling how it goes through `onSaveCopyEvent`; null if no place was picked. Left out where files
-   * can't be saved yet: an Extension Copy.
+   * of it there, telling how it goes through `onSaveCopyEvent`; null if no place was picked. An Extension Copy shows
+   * how it goes in a VS Code notification instead.
    */
-  saveCopy?(sourceId: string, path: SourcePath): Promise<CoreResult<SaveCopyStarted | null>>
+  saveCopy(sourceId: string, path: SourcePath): Promise<CoreResult<SaveCopyStarted | null>>
   /**
    * "Save a copy…" of a log: asks where to save `text`, the lines its view shows, suggesting `name`, then starts saving
-   * it there as saveCopy does. Left out where logs can't be saved yet: an Extension Copy.
+   * it there as saveCopy does.
    */
-  saveLogCopy?(name: string, text: string): Promise<CoreResult<SaveCopyStarted | null>>
+  saveLogCopy(name: string, text: string): Promise<CoreResult<SaveCopyStarted | null>>
   /** This copy's version, e.g. `0.1.0`. */
   appVersion(): Promise<string>
   getUpdateStatus(): Promise<UpdateStatus>
