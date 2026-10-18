@@ -66,7 +66,8 @@ const join = (parent: SourcePath, name: string) => (parent ? `${parent}/${name}`
  * The Workloads, pods and containers of one namespace, as a Log Source whose Log Streams are containers. Paths start
  * with a group (`deployments`, `cronjobs`…), then name each object on the way down, e.g. `cronjobs/nightly/<job>/<pod>/<container>`.
  * A CronJob with one Job, a Workload with one pod and a pod with one container carry it folded in, paths keeping every level.
- * It has every capability: containers restart and keep a Previous Log, and pods have a Pod Status.
+ * It has every capability: containers restart and keep a Previous Log, pods have a Pod Status, and logs can be read
+ * from a time on (Since).
  */
 export function createKubernetesLogSource(config: KubeConfig, namespace: string): LogSource & { checkNamespace(): Promise<void> } {
   const apis = apisFor(config)
@@ -275,21 +276,22 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     return { name: node.name, hasPreviousLog: restarts > 0, kubernetes: { pod: path.split('/').at(-2)!, container: node.name, restarts } }
   }
 
-  /** Opens a connection following a container's log; resolves once the API server answers with the log. */
-  const openLogConnection = async (pod: string, container: string, options: LogFollowOptions, onText: (text: string) => void) => {
+  /**
+   * Asks the API server for a container's log, with the query given; resolves with the response once it answers with
+   * the log. Not through the client, which can't read a log since a time.
+   */
+  const logResponse = async (pod: string, container: string, query: Record<string, string | number | boolean | undefined>) => {
     const cluster = config.getCurrentCluster()
     if (!cluster) throw new CoreError('UNKNOWN', 'The kubeconfig context has no cluster')
     const url = new URL(`${cluster.server.replace(/\/+$/, '')}/api/v1/namespaces/${namespace}/pods/${encodeURIComponent(pod)}/log`)
     url.searchParams.set('container', container)
-    url.searchParams.set('follow', 'true')
-    url.searchParams.set('timestamps', 'true')
-    if (options.sinceTime !== undefined) url.searchParams.set('sinceTime', options.sinceTime)
+    for (const [name, value] of Object.entries(query)) if (value !== undefined) url.searchParams.set(name, String(value))
     // The kubeconfig's TLS settings, credentials (exec plugins included) and proxy, as for any other call.
     const requestOptions: RequestOptions = {}
     await call(() => config.applyToHTTPSOptions(requestOptions))
     const https = url.protocol === 'https:'
     if (!https && requestOptions.agent instanceof HttpsAgent) delete requestOptions.agent
-    return new Promise<LogConnection>((resolve, reject) => {
+    return new Promise<{ response: IncomingMessage; stop(): void }>((resolve, reject) => {
       const request = (https ? httpsRequest : httpRequest)(url, { ...requestOptions, method: 'GET' }, (response) => {
         if (response.statusCode !== 200) {
           const status = response.statusCode ?? 500
@@ -299,17 +301,7 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
           )
           return
         }
-        response.setEncoding('utf8')
-        const ended = new Promise<void>((done, fail) => {
-          response.on('data', onText)
-          response.on('end', done)
-          response.on('error', (error) => fail(asCoreError(error)))
-          // Closed before its end: the connection dropped, or the stream was stopped.
-          response.on('close', () => fail(new CoreError('UNREACHABLE', 'The log stream was cut off')))
-        })
-        // Settled whether or not anyone is still waiting on it, say after stopping.
-        ended.catch(() => undefined)
-        resolve({ ended, stop: () => request.destroy() })
+        resolve({ response, stop: () => request.destroy() })
       })
       request.on('error', (error) => reject(asCoreError(error)))
       // A quiet log sends nothing for long stretches; keep-alive probes are what notice a connection that died meanwhile.
@@ -318,18 +310,36 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     })
   }
 
+  /** Opens a connection following a container's log; resolves once the API server answers with the log. */
+  const openLogConnection = async (pod: string, container: string, { sinceTime }: LogFollowOptions, onText: (text: string) => void) => {
+    const { response, stop } = await logResponse(pod, container, { follow: true, timestamps: true, sinceTime })
+    response.setEncoding('utf8')
+    const ended = new Promise<void>((done, fail) => {
+      response.on('data', onText)
+      response.on('end', done)
+      response.on('error', (error) => fail(asCoreError(error)))
+      // Closed before its end: the connection dropped, or the stream was stopped.
+      response.on('close', () => fail(new CoreError('UNREACHABLE', 'The log stream was cut off')))
+    })
+    // Settled whether or not anyone is still waiting on it, say after stopping.
+    ended.catch(() => undefined)
+    return { ended, stop } satisfies LogConnection
+  }
+
   return {
-    capabilities: { previousLog: true, restarts: true, status: true, since: false },
+    capabilities: { previousLog: true, restarts: true, status: true, since: true },
     listChildren,
     logStreamAt,
 
-    async readLog(path, { previous = false, ...options }: LogReadOptions = {}) {
+    async readLog(path, { tailLines, limitBytes, timestamps, previous = false, sinceTime }: LogReadOptions = {}) {
       const { pod, container } = (await logStreamAt(path)).kubernetes
+      // The kubelet takes the last lines, then those of them since the time: the last lines of those since it, either way.
+      const { response } = await logResponse(pod, container, { tailLines, limitBytes, timestamps, previous, sinceTime })
       let text: string
       try {
-        text = await core.readNamespacedPodLog({ name: pod, namespace, container, previous, ...options })
+        text = await bodyOf(response)
       } catch (error) {
-        throw logError(error)
+        throw asCoreError(error)
       }
       // A current log that reads so is what the container itself logged.
       if (previous && removedRunPattern.test(text)) throw previousLogGone(path)
