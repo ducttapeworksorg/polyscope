@@ -8,13 +8,14 @@ import { allowedCloudWatchOperations, startTestCloudWatchEndpoint, type TestClou
 import { ssoProfiles } from './aws-test-sso'
 import { createCore } from './core'
 import { createSecretStore } from './secret-store'
-import { startProxy, startTlsFront } from './test-network'
+import { ignoreAmbientProxy, startProxy, startTlsFront } from './test-network'
 import { cloudWatchNameOf, cloudWatchSegment as segment } from '@shared/core-api'
 
 let dir: string
 let endpoint: TestCloudWatchEndpoint | undefined
 
 beforeEach(async () => {
+  ignoreAmbientProxy()
   dir = await mkdtemp(join(tmpdir(), 'polyscope-cloudwatch-'))
   await awsFiles()
 })
@@ -273,7 +274,6 @@ describe('a CloudWatch Logs Source’s endpoint, trust and proxy settings', () =
       const { url, tunnels } = await proxy()
       vi.stubEnv('HTTPS_PROXY', url)
       vi.stubEnv('NO_PROXY', undefined)
-      vi.stubEnv('no_proxy', undefined)
       const { endpoint, caBundlePath, host } = await behindTls()
 
       expect(await connects({ endpoint, caBundlePath })).toEqual(listed)

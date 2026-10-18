@@ -7,12 +7,13 @@ import { MB } from '@shared/settings'
 import { ssoProfiles } from './aws-test-sso'
 import { createCore } from './core'
 import { createSecretStore } from './secret-store'
-import { startProxy, startTlsFront } from './test-network'
+import { ignoreAmbientProxy, startProxy, startTlsFront } from './test-network'
 import { hasTestStore, seedPrefix, testS3Source } from './s3-test-store'
 
 let dir: string
 
 beforeEach(async () => {
+  ignoreAmbientProxy()
   dir = await mkdtemp(join(tmpdir(), 'polyscope-s3-'))
 })
 
@@ -550,7 +551,6 @@ describe.skipIf(!hasTestStore)('an S3 Source in a corporate network, against the
     const { url, tunnels } = await proxy()
     vi.stubEnv('HTTPS_PROXY', url)
     vi.stubEnv('NO_PROXY', undefined)
-    vi.stubEnv('no_proxy', undefined)
     const tls = await behindTls()
     const settings = { ...testS3Source('Bucket', await seeded()), ...tls }
 

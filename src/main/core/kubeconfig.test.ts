@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCore } from './core'
-import { ignoreAmbientProxy, standInCluster, startTestApiServer } from './kubernetes-test-api-server'
+import { standInCluster, startTestApiServer } from './kubernetes-test-api-server'
+import { ignoreAmbientProxy } from './test-network'
 
 // The OS's certificate store, which a company's own root CA is installed into.
 const os = vi.hoisted(() => ({ cas: [] as string[] }))

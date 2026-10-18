@@ -7,7 +7,7 @@ import type { ContainerRole, FollowEvent, LogGroupNode, LogNode, NewKubernetesLo
 import { createCore, type Core } from './core'
 import { kubeConfigFor } from './kubeconfig'
 import { createKubernetesLogSource } from './kubernetes-log-source'
-import { ignoreAmbientProxy, standInCluster, startTestApiServer } from './kubernetes-test-api-server'
+import { standInCluster, startTestApiServer } from './kubernetes-test-api-server'
 import {
   counterLines,
   hasRestrictedContext,
@@ -17,7 +17,7 @@ import {
   testKubernetesLogsSource,
   tickerNamespace
 } from './kubernetes-test-cluster'
-import { startProxy } from './test-network'
+import { ignoreAmbientProxy, startProxy } from './test-network'
 
 let dir: string
 
