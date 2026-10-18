@@ -32,6 +32,8 @@ interface Props {
   onOpenLog(source: SourceInfo, node: LogStreamNode, options?: { pinned: boolean }): void
   /** Follows a file of a Local, Kubernetes Files or SSH Files Source in a log view; without it, files offer no Follow. */
   onFollowFile?(source: SourceInfo, node: EntryNode): void
+  /** Saves a copy of a file, asking where; without it, files offer no "Save a copy…". */
+  onSaveFile?(source: SourceInfo, node: EntryNode): void
   onOpenSettings(): void
   /** Whether tree rows show their size and modified time. */
   showDetails: boolean
@@ -95,7 +97,7 @@ const disconnected: ConnectionState = { state: 'disconnected' }
 const settingsShortcut = navigator.userAgent.includes('Mac') ? '⌘,' : 'Ctrl+,'
 
 export function Sidebar(props: Props) {
-  const { sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile, onOpenLog, onFollowFile, onOpenSettings } = props
+  const { sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile, onOpenLog, onFollowFile, onSaveFile, onOpenSettings } = props
   const { showDetails, onToggleDetails, theme, onToggleTheme, environments, onManageEnvironments, ref } = props
   const { collapsedGroups, onToggleGroup } = props
   const [dialog, setDialog] = useState<Dialog | null>(null)
@@ -324,6 +326,7 @@ export function Sidebar(props: Props) {
                     onOpenFile={onOpenFile}
                     onOpenLog={onOpenLog}
                     onFollowFile={onFollowFile}
+                    onSaveFile={onSaveFile}
                     sourceRowProps={sourceRowProps(source)}
                     treeProps={treeProps(source, group)}
                     showDetails={showDetails}

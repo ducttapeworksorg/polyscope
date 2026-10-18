@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import type { ConnectionEvent, FollowEvent, LargeFileEvent, LargeFileSearchEvent } from '@shared/core-api'
+import type { ConnectionEvent, FollowEvent, LargeFileEvent, LargeFileSearchEvent, SaveCopyEvent } from '@shared/core-api'
 import type { Settings } from '@shared/settings'
 import type { UpdateStatus } from '@shared/updates'
 import type { PolyscopeBridge } from './bridge'
@@ -12,6 +12,7 @@ const bridge: PolyscopeBridge = {
   secretStorageIsWeak: () => ipcRenderer.invoke('shell:secretStorageIsWeak'),
   copyDiagnostics: () => ipcRenderer.invoke('diagnostics:copy'),
   copyText: (text) => ipcRenderer.invoke('shell:copyText', text),
+  saveCopy: (sourceId, path) => ipcRenderer.invoke('shell:saveCopy', sourceId, path),
   appVersion: () => ipcRenderer.invoke('updates:appVersion'),
   getUpdateStatus: () => ipcRenderer.invoke('updates:status'),
   checkForUpdates: () => ipcRenderer.invoke('updates:check'),
@@ -45,6 +46,11 @@ const bridge: PolyscopeBridge = {
     const forward = (_event: IpcRendererEvent, event: LargeFileSearchEvent) => listener(event)
     ipcRenderer.on('core:largeFileSearchEvent', forward)
     return () => ipcRenderer.off('core:largeFileSearchEvent', forward)
+  },
+  onSaveCopyEvent: (listener) => {
+    const forward = (_event: IpcRendererEvent, event: SaveCopyEvent) => listener(event)
+    ipcRenderer.on('core:saveCopyEvent', forward)
+    return () => ipcRenderer.off('core:saveCopyEvent', forward)
   }
 }
 

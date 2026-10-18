@@ -1,6 +1,7 @@
 import { useEffect, useRef, type CSSProperties } from 'react'
 import type { ConnectionState } from '@shared/core-api'
 import { ApertureMark } from './components/icons'
+import { SaveCopies } from './components/SaveCopies'
 import { SidebarResizer, sidebarMinWidth, useSidebarWidth, workbenchMinWidth } from './components/SidebarResizer'
 import { SourcesPane } from './components/SourcesPane'
 import { StatusBar } from './components/StatusBar'
@@ -8,6 +9,7 @@ import { Tabs } from './components/Tabs'
 import { TabView } from './components/TabView'
 import { useSources } from './components/use-sources'
 import { useTabs } from './components/use-tabs'
+import { useSaveCopies } from './components/use-save-copies'
 import { useAppVersion, useUpdateStatus } from './components/use-update-status'
 import { environmentOf } from './environments'
 import { t } from './i18n'
@@ -21,6 +23,8 @@ export function App() {
   const { settings, sources, environments, connections, setSettingsOpen } = sourcesModel
   const { tabs, activeTab, setWorkspace } = tabsModel
   const update = useUpdateStatus()
+  const saveCopies = useSaveCopies()
+  const { saveCopy } = saveCopies
   const version = useAppVersion()
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth()
   const sidebarRef = useRef<HTMLElement>(null)
@@ -78,6 +82,7 @@ export function App() {
         onOpenFile={tabsModel.openFile}
         onOpenLog={tabsModel.openLog}
         onFollowFile={(source, node) => void tabsModel.followFile(source, node)}
+        {...(saveCopy && { onSaveFile: (source, node) => void saveCopy(source, node.path, node.name) })}
       />
       <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />
 
@@ -105,12 +110,14 @@ export function App() {
           connection={activeConnection}
           onReconnect={() => activeTab && void sourcesModel.connect(activeTab.source)}
           panelId={viewerPanelId}
+          {...(saveCopy && { onSaveCopy: (tab) => void saveCopy(tab.source, tab.file.path, tab.file.name) })}
         >
           <div className="viewer__empty">
             <ApertureMark />
             <p>{tabsModel.opening ? t('viewer.opening', { name: tabsModel.opening }) : t(sources.length ? 'viewer.empty.noTabs' : 'viewer.empty.noSources')}</p>
           </div>
         </TabView>
+        <SaveCopies saves={saveCopies.saves} onCancel={saveCopies.cancel} onDismiss={saveCopies.dismiss} />
       </main>
 
       <StatusBar

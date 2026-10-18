@@ -1,9 +1,11 @@
 import { homedir } from 'node:os'
-import { app, clipboard, dialog, ipcMain, type BrowserWindow, type FileFilter, type OpenDialogOptions } from 'electron'
-import type { CoreApi, CoreEvents } from '@shared/core-api'
+import { join } from 'node:path'
+import { app, clipboard, dialog, ipcMain, type BrowserWindow, type FileFilter, type OpenDialogOptions, type SaveDialogOptions } from 'electron'
+import type { CoreApi, CoreEvents, CoreResult, SaveCopyStarted } from '@shared/core-api'
 import type { UpdateStatus } from '@shared/updates'
 import type { AppLog } from './app-log'
-import { callCore } from './core-call'
+import { callCore, resultOf } from './core-call'
+import type { CoreSaves } from './core/core'
 import { formatDiagnostics, osDescription } from './diagnostics'
 import type { Updater } from './updates'
 
@@ -19,6 +21,26 @@ export function forwardCoreEvents(core: CoreEvents, getWindow: () => BrowserWind
   core.onFollowEvent((event) => getWindow()?.webContents.send('core:followEvent', event))
   core.onLargeFileEvent((event) => getWindow()?.webContents.send('core:largeFileEvent', event))
   core.onLargeFileSearchEvent((event) => getWindow()?.webContents.send('core:largeFileSearchEvent', event))
+  core.onSaveCopyEvent((event) => getWindow()?.webContents.send('core:saveCopyEvent', event))
+}
+
+/**
+ * "Save a copy…": asks where to save a Source's file, suggesting its name in the Downloads folder, then has the core
+ * save it there. The renderer names the file to save, never where it goes: only the dialog the user answers does.
+ */
+export function registerSaveCopyIpc(core: CoreSaves, log: AppLog, getWindow: () => BrowserWindow | null): void {
+  ipcMain.handle('shell:saveCopy', async (_event, sourceId: unknown, path: unknown): Promise<CoreResult<SaveCopyStarted | null>> => {
+    if (typeof sourceId !== 'string' || typeof path !== 'string') return { ok: false, code: 'UNKNOWN', message: 'Not a file to save' }
+    // Only its name, with nothing in it read as a folder here: the Source mustn't pick where it's suggested.
+    const name = path.slice(path.lastIndexOf('/') + 1).replace(/[\\/]/g, '_')
+    const downloads = app.getPath('downloads')
+    const window = getWindow()
+    const options: SaveDialogOptions = { defaultPath: name && name !== '.' && name !== '..' ? join(downloads, name) : downloads }
+    const result = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return { ok: true, value: null }
+    const target = result.filePath
+    return resultOf(log, 'saveCopy', () => core.saveCopy(sourceId, path, target))
+  })
 }
 
 const isFileFilter = (value: unknown): value is FileFilter =>

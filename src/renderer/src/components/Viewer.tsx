@@ -20,6 +20,8 @@ interface Props {
   openAnywayLimit: number
   /** Opens a Large File's tab in the editor instead. */
   onOpenAnyway(key: string): void
+  /** Saves a copy of the active tab's Large File, asking where; without it, the Large File Viewer offers no "Save a copy…". */
+  onSaveCopy?(): void
   /** Where followed logs' new lines come from. */
   followFeed: FollowFeed
   /** Told how many lines a followed log's view holds after new ones are added, by Follow. */
@@ -80,7 +82,7 @@ function appendLines(model: monaco.editor.ITextModel, lines: string[], cap: Last
  * One read-only Monaco editor; each tab keeps its own model and scroll/cursor state. Binary files, logs
  * too large to show whole, and logs that couldn't be read get a placeholder.
  */
-export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileThreshold, openAnywayLimit, onOpenAnyway, followFeed, onLineCount, onDroppedLines, minimap }: Props) {
+export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileThreshold, openAnywayLimit, onOpenAnyway, onSaveCopy, followFeed, onLineCount, onDroppedLines, minimap }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const modelsRef = useRef(new Map<string, TabModel>())
@@ -241,6 +243,7 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
           onPlace={(place) => keepPlace(large.largeFileId, place)}
           openAnywayLimit={openAnywayLimit}
           onOpenAnyway={() => activeTab && onOpenAnyway(activeTab.key)}
+          {...(onSaveCopy && { onSaveCopy })}
         />
       )}
       {activeTab && tooLarge && (

@@ -12,15 +12,20 @@ export async function callCore(core: CoreApi, log: Pick<AppLog, 'warn' | 'error'
   if (!isCoreMethod(method) || !Array.isArray(args)) {
     return { ok: false, code: 'UNKNOWN', message: `Unknown core call: ${String(method)}` }
   }
+  const call = core[method] as (...a: unknown[]) => Promise<unknown>
+  return resultOf(log, method, () => call(...args))
+}
+
+/** Runs what a host does with the core for a caller across a process boundary, its errors as values as callCore's are. */
+export async function resultOf<T>(log: Pick<AppLog, 'warn' | 'error'>, name: string, run: () => Promise<T>): Promise<CoreResult<T>> {
   try {
-    const call = core[method] as (...a: unknown[]) => Promise<unknown>
-    return { ok: true, value: await call(...args) }
+    return { ok: true, value: await run() }
   } catch (error) {
     if (error instanceof CoreError) {
-      log.warn(`${method} failed (${error.code})`, error.message)
+      log.warn(`${name} failed (${error.code})`, error.message)
       return { ok: false, code: error.code, message: error.message, ...(error.hostKey && { hostKey: error.hostKey }) }
     }
-    log.error(`${method} failed`, error)
+    log.error(`${name} failed`, error)
     return { ok: false, code: 'UNKNOWN', message: error instanceof Error ? error.message : String(error) }
   }
 }

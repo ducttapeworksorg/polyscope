@@ -1519,6 +1519,32 @@ body.is-resizing {
   color: var(--danger);
 }
 
+.save-copies {
+  border-top: 1px solid var(--line);
+}
+
+.save-copies__row:last-child {
+  border-bottom: none;
+}
+
+.save-copies__row .workbench__banner-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.save-copies__bar {
+  width: 160px;
+  flex: none;
+}
+
+.save-copies__amount {
+  flex: none;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
 .viewer {
   position: relative;
   flex: 1;

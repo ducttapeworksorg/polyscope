@@ -1,4 +1,4 @@
-import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
@@ -748,4 +748,34 @@ test('open a Large File at its end, then scroll to any line once it is cached', 
   await expect(window.getByTestId('editor')).toBeVisible({ timeout: 60_000 })
   await expect(view).toBeHidden()
   expect(consoleErrors).toEqual([])
+})
+
+test('save a copy of a file from the sidebar and from its toolbar, a compressed one as stored', async () => {
+  const compressed = gzipSync('INFO archived line\n'.repeat(500))
+  await writeFile(join(dir, 'root', 'logs', 'old.log.gz'), compressed)
+  const saves = join(dir, 'saves')
+  await mkdir(saves)
+  // The Save dialog is the OS's: it answers with where the test says, as the user would pick.
+  const answerSaveDialog = (filePath: string) =>
+    app.evaluate(({ dialog }, filePath) => {
+      dialog.showSaveDialog = (async () => ({ canceled: false, filePath })) as typeof dialog.showSaveDialog
+    }, filePath)
+  const window = await app.firstWindow()
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  const saved = window.getByRole('region', { name: 'Saved copies' })
+
+  await answerSaveDialog(join(saves, 'old.log.gz'))
+  await window.getByRole('treeitem', { name: /^old\.log\.gz/ }).click({ button: 'right' })
+  await window.getByRole('menu', { name: 'Actions for old.log.gz' }).getByRole('menuitem', { name: 'Save a copy…' }).click()
+  await expect(saved.getByRole('status')).toContainText(`Saved a copy of old.log.gz to ${join(saves, 'old.log.gz')}`)
+  expect((await readFile(join(saves, 'old.log.gz'))).equals(compressed)).toBe(true)
+
+  await answerSaveDialog(join(saves, 'copy of app.log'))
+  await window.getByRole('treeitem', { name: /^app\.log/ }).click()
+  await window.getByRole('button', { name: 'Save a copy…' }).click()
+  await expect(saved.getByText('Saved a copy of app.log')).toBeVisible()
+  expect(await readFile(join(saves, 'copy of app.log'), 'utf8')).toBe('INFO hello from polyscope\n')
+  expect((await readdir(saves)).sort()).toEqual(['copy of app.log', 'old.log.gz'])
 })

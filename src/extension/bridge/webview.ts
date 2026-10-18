@@ -17,6 +17,7 @@ export function createWebviewBridge({ post, listen }: Channel): ExtensionBridge 
     followEvent: new Set(),
     largeFileEvent: new Set(),
     largeFileSearchEvent: new Set(),
+    saveCopyEvent: new Set(),
     updateStatus: new Set(),
     ownViewerChanged: new Set()
   }
@@ -73,6 +74,7 @@ export function createWebviewBridge({ post, listen }: Channel): ExtensionBridge 
     onConnectionEvent: on('connectionEvent'),
     onFollowEvent: on('followEvent'),
     onLargeFileEvent: on('largeFileEvent'),
-    onLargeFileSearchEvent: on('largeFileSearchEvent')
+    onLargeFileSearchEvent: on('largeFileSearchEvent'),
+    onSaveCopyEvent: on('saveCopyEvent')
   }
 }

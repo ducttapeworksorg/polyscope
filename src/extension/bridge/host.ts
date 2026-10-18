@@ -113,6 +113,7 @@ export function serveBridge({ core, log, shell, post }: Options) {
     core.onFollowEvent(send('followEvent')),
     core.onLargeFileEvent(send('largeFileEvent')),
     core.onLargeFileSearchEvent(send('largeFileSearchEvent')),
+    core.onSaveCopyEvent(send('saveCopyEvent')),
     shell.onOwnViewerChanged(send('ownViewerChanged'))
   ]
 

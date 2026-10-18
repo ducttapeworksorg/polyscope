@@ -909,6 +909,26 @@ export const largeFileSearchLimit = 10_000
 /** An opened file, in whichever view suits its content (or was asked for). */
 export type OpenedFile = TextFile | BinaryFile | HexFile | LargeFile
 
+/**
+ * How saving a copy of a file is going: its bytes as stored being written to a file on this computer, then `saved`,
+ * or `cancelled` or `failed`, leaving nothing of the copy behind.
+ */
+export type SaveCopyStatus =
+  | { state: 'saving'; savedBytes: number; totalBytes: number }
+  | { state: 'saved'; savedBytes: number }
+  | { state: 'cancelled' }
+  | { state: 'failed'; code: CoreErrorCode; message: string }
+
+export type SaveCopyEvent = SaveCopyStatus & { saveId: string }
+
+/** A save of a copy under way, until its status says it's done. */
+export interface SaveCopyStarted {
+  /** Names it in cancelSaveCopy and its SaveCopyEvents. */
+  saveId: string
+  /** Where the copy goes on this computer. */
+  target: string
+}
+
 /** The last lines of a Log Stream, as a snapshot. */
 export interface LogSnapshot {
   view: 'log'
@@ -1126,6 +1146,10 @@ export type CoreErrorCode =
   | 'CACHE_TOO_SMALL'
   /** The local cache couldn't be written, say for a full disk. */
   | 'CACHE_UNWRITABLE'
+  /** A copy of a file couldn't be written where it was to be saved, say for a full disk or no permission there. */
+  | 'SAVE_UNWRITABLE'
+  /** A copy of a Local Filesystem file to be saved over the file itself. */
+  | 'SAVE_OVER_SOURCE'
   /** A file to be opened in the editor anyway whose content is over the "open anyway" limit. */
   | 'OVER_OPEN_ANYWAY_LIMIT'
   /** A search pattern that isn't a regular expression, or is empty. */
@@ -1237,6 +1261,11 @@ export interface CoreApi {
   /** Stops caching a Large File, and any searches of it, and lets it go; the cache keeps what was cached. Nothing happens to one already closed. */
   closeLargeFile(largeFileId: string): Promise<void>
   /**
+   * Stops saving a copy of a file, which a host started where the user chose (see the core's CoreSaves), removing
+   * what it had written: it ends `cancelled`. Nothing happens to one already done.
+   */
+  cancelSaveCopy(saveId: string): Promise<void>
+  /**
    * Fetches the last lines of a Log Stream in a Log Source. Asking for all of a log larger than the
    * Large File threshold fails with LOG_TOO_LARGE, unless `allowLarge` says to go ahead. Asking for the Previous Log
    * of a Log Stream whose Source Type has none fails with LOG_UNAVAILABLE, as does asking for a Since of one whose
@@ -1324,6 +1353,8 @@ export interface CoreEvents {
   onLargeFileEvent(listener: (event: LargeFileEvent) => void): () => void
   /** Calls `listener` with every Large File search's updates; returns a function that unsubscribes. */
   onLargeFileSearchEvent(listener: (event: LargeFileSearchEvent) => void): () => void
+  /** Calls `listener` with how every save of a copy is going; returns a function that unsubscribes. */
+  onSaveCopyEvent(listener: (event: SaveCopyEvent) => void): () => void
 }
 
 export type CoreMethod = keyof CoreApi
@@ -1352,6 +1383,7 @@ export const coreMethods: readonly CoreMethod[] = [
   'searchLargeFile',
   'cancelLargeFileSearch',
   'closeLargeFile',
+  'cancelSaveCopy',
   'openLog',
   'readEarlierLog',
   'followLog',

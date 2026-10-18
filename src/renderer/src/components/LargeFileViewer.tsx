@@ -6,6 +6,7 @@ import { t } from '../i18n'
 import { formatCount, formatSize } from '../i18n/format'
 import { highlightLine } from '../line-highlights'
 import { applySearchUpdate, nextMatch, startedSearch, type SearchResults } from '../search-results'
+import { SaveCopyButton } from './FileToolbar'
 import { ChevronIcon, CloseIcon } from './icons'
 
 /** Where a Large File's view was, kept while its tab is in the background. */
@@ -32,6 +33,8 @@ interface Props {
   openAnywayLimit: number
   /** Opens the file in the editor instead. */
   onOpenAnyway(): void
+  /** Saves a copy of the file, asking where; without it, the toolbar offers no "Save a copy…". */
+  onSaveCopy?(): void
 }
 
 /** Matches the editor's line height, so switching views keeps the text where the eye expects it. */
@@ -57,7 +60,7 @@ const sameQuery = (a: LargeFileSearchQuery, b: LargeFileSearchQuery) => a.patter
  * in view, and can be searched. Scrolling is scaled when the file is too tall to lay out, with the wheel and
  * keys still moving line by line. Log levels, timestamps and search matches are picked out in the lines.
  */
-export function LargeFileViewer({ file, place, onPlace, openAnywayLimit, onOpenAnyway }: Props) {
+export function LargeFileViewer({ file, place, onPlace, openAnywayLimit, onOpenAnyway, onSaveCopy }: Props) {
   const { largeFileId, lastLines } = file
   const scrollerRef = useRef<HTMLDivElement>(null)
   const goToRef = useRef<HTMLInputElement>(null)
@@ -435,6 +438,7 @@ export function LargeFileViewer({ file, place, onPlace, openAnywayLimit, onOpenA
             {t('largeFile.openAnyway')}
           </button>
         )}
+        {onSaveCopy && <SaveCopyButton onSaveCopy={onSaveCopy} />}
       </div>
       <div
         ref={scrollerRef}

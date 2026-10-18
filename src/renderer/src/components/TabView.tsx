@@ -3,7 +3,7 @@ import type { ConnectionState } from '@shared/core-api'
 import type { Settings } from '@shared/settings'
 import { describeFailure } from '../core-client'
 import { t } from '../i18n'
-import { isLog, tabName } from '../workspace'
+import { isLog, tabName, type OpenTab } from '../workspace'
 import { FileToolbar } from './FileToolbar'
 import { LogToolbar } from './LogToolbar'
 import type { TabsModel } from './use-tabs'
@@ -22,6 +22,8 @@ interface Props {
   panelId: string
   /** Opens a Large File in an editor anyway; by default, in the tab's own. */
   onOpenAnyway?(key: string): void
+  /** Saves a copy of a tab's file, asking where; without it, files offer no "Save a copy…". */
+  onSaveCopy?(tab: OpenTab): void
   /** Shown in the viewer when no tab is active. */
   children?: ReactNode
 }
@@ -30,7 +32,7 @@ interface Props {
  * What the active tab shows: any error opening it, banners for a Disconnected Source, a pod or Log Stream that's gone or
  * a slowed Follow, its toolbar, and the viewer.
  */
-export function TabView({ viewerRef, model, settings, connection, onReconnect, panelId, onOpenAnyway, children }: Props) {
+export function TabView({ viewerRef, model, settings, connection, onReconnect, panelId, onOpenAnyway, onSaveCopy, children }: Props) {
   const { tabs, activeTab, openError } = model
   return (
     <>
@@ -79,8 +81,8 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
           onLoadEarlier={() => void model.loadEarlier(activeTab.key)}
         />
       )}
-      {activeTab && (activeTab.file.view === 'editor' || activeTab.file.view === 'hex') && (
-        <FileToolbar tab={activeTab} onToggleWrap={() => model.toggleWrap(activeTab.key)} />
+      {activeTab && (activeTab.file.view === 'editor' || activeTab.file.view === 'hex' || activeTab.file.view === 'binary') && (
+        <FileToolbar tab={activeTab} onToggleWrap={() => model.toggleWrap(activeTab.key)} {...(onSaveCopy && { onSaveCopy: () => onSaveCopy(activeTab) })} />
       )}
       <div
         ref={viewerRef}
@@ -97,6 +99,7 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
           largeFileThreshold={settings.largeFileThreshold}
           openAnywayLimit={settings.openAnywayLimit}
           onOpenAnyway={onOpenAnyway ?? ((key) => void model.reopenTabAs(key, { inEditor: true }))}
+          {...(onSaveCopy && activeTab && { onSaveCopy: () => onSaveCopy(activeTab) })}
           followFeed={model.followFeed}
           onLineCount={model.noteLineCount}
           onDroppedLines={model.noteDroppedLines}
