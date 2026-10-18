@@ -27,6 +27,17 @@ if [ "${1:-}" = --session-start ]; then
     echo 'export PATH="/opt/node24/bin:$PATH"' >> "$CLAUDE_ENV_FILE"
     echo "if [ -f $env ]; then . $env; fi" >> "$CLAUDE_ENV_FILE"
   fi
+  # A session can start on an older commit than its branch's (one its environment kept from before), running this
+  # script and the tests as they were then: said, not fixed, as a checkout is the session's to change.
+  branch=$(git symbolic-ref --short -q HEAD)
+  if [ -n "$branch" ] && timeout 10 git fetch -q origin "$branch" 2> /dev/null; then
+    behind=$(git rev-list --count "HEAD..origin/$branch" 2> /dev/null || echo 0)
+    if [ "$behind" -gt 0 ]; then
+      echo "Warning: this checkout is $behind commit(s) behind origin/$branch, so it isn't the code the session was" \
+        "started for, and the backends below start from its older scripts/cloud-services.sh. Tell the user, and" \
+        "with their go-ahead, git pull --ff-only, then run scripts/cloud-services.sh again, in the foreground."
+    fi
+  fi
   # The VM has no display, which Electron and VS Code want; CI gives its smoke and extension tests one the same way.
   echo "Run the smoke and extension tests as CI does, with a display of their own:" \
     "scripts/with-display.sh npm run test:smoke, and scripts/with-display.sh npm run test:extension."
