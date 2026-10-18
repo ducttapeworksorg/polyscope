@@ -809,6 +809,7 @@ describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () 
         path: 'pods/counter/counter',
         name: 'counter',
         offersPreviousLog: true,
+        offersSince: true,
         previous: false,
         restarted: false,
         lastNLines: 10,
@@ -853,6 +854,15 @@ describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () 
       })
       const log = await core.openLog(sourceId, 'pods/counter/counter', { lastNLines: 'all', allowLarge: true })
       expect(log.content).toBe(counterLines.join('\n'))
+    })
+
+    it('shows only the lines logged since a time, at most the last N of them', async () => {
+      await core.connect(sourceId)
+      const since = async (time: string, lastNLines: number | 'all') => (await core.openLog(sourceId, 'pods/counter/counter', { since: time, lastNLines })).content
+
+      expect(await since('2999-01-01T00:00:00Z', 'all')).toBe('')
+      expect(await since('2000-01-01T00:00:00Z', 'all')).toBe(counterLines.join('\n'))
+      expect(await since('2000-01-01T00:00:00Z', 3)).toBe('line 98\nline 99\nline 100')
     })
 
     it('reads any container in the tree, init and sidecar containers included', async () => {
@@ -928,6 +938,10 @@ describe.skipIf(!hasTestCluster)('Previous Logs against the test cluster', () =>
         content: 'crashing'
       })
       expect(await core.openLog(restarted, 'pods/restarted/restarted')).toMatchObject({ previous: false, restarted: true, content: 'running' })
+      // Since limits the Previous Log too.
+      const previousSince = (since: string) => core.openLog(restarted, 'pods/restarted/restarted', { previous: true, since })
+      expect(await previousSince('2000-01-01T00:00:00Z')).toMatchObject({ previous: true, content: 'crashing' })
+      expect(await previousSince('2999-01-01T00:00:00Z')).toMatchObject({ previous: true, content: '' })
     } finally {
       await core.disconnect(restarted)
       await remove()
@@ -1014,6 +1028,25 @@ describe.skipIf(!hasTestCluster)('Following a Log Stream against the test cluste
       await vi.waitFor(() => expect(updates.of(log.followId).length).toBeGreaterThanOrEqual(2), { timeout: 15_000 })
       const shown = [...log.content.split('\n'), ...updates.of(log.followId)].filter(Boolean).slice(0, 6)
       expect(shown).toEqual(Array.from({ length: shown.length }, (_, i) => `tick ${i + 1}`))
+    }, 30_000)
+
+    it('follows on from the lines since a time, repeating none of them', async () => {
+      // Since when it logged `tick 3`.
+      const stamped = async () => (await core.openLog(tickerSource, ticker, { timestamps: true })).content.split('\n')
+      const third = await vi.waitFor(
+        async () => {
+          const line = (await stamped()).find((l) => l.endsWith(' tick 3'))
+          if (!line) throw new Error('not logged yet')
+          return line
+        },
+        { timeout: 15_000 }
+      )
+      const log = await core.followLog(tickerSource, ticker, { lastNLines: 1_000, since: third.slice(0, third.indexOf(' ')) })
+
+      const shown = () => [...log.content.split('\n'), ...updates.of(log.followId)]
+      await vi.waitFor(() => expect(shown()).toContain('tick 6'), { timeout: 15_000 })
+      const run = shown().slice(0, shown().indexOf('<restarted>') < 0 ? undefined : shown().indexOf('<restarted>'))
+      expect(run).toEqual(['tick 3', 'tick 4', 'tick 5', 'tick 6'])
     }, 30_000)
 
     it('marks the restart, then follows the new run from its start', async () => {

@@ -846,6 +846,11 @@ const firstRun: [string, () => Promise<void>][] = [
       const { core, open } = await extension()
 
       await withLogsSource(core, async (sourceId) => {
+        await core.connect(sourceId)
+        // Its log says it offers Since, so the viewer tab's toolbar, the app's own, shows the control.
+        const since = await core.openLog(sourceId, counterLog.path, { since: '2026-09-27T10:00:02Z' })
+        assert.deepEqual([since.offersSince, since.content], [true, 'line 2\nline 3'])
+
         await open({ ...counterLog, sourceId })
 
         await eventually(() => activeViewerTab(counterLog.name))

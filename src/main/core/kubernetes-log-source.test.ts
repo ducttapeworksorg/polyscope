@@ -1,12 +1,18 @@
-import { describe, expect, it } from 'vitest'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { LogGroupNode, LogNode, SourcePath } from '@shared/core-api'
 import { kubeConfigFor } from './kubeconfig'
 import { createKubernetesLogSource } from './kubernetes-log-source'
+import { standInCluster, startTestApiServer } from './kubernetes-test-api-server'
 import { hasTestCluster, testKubernetesLogsSource } from './kubernetes-test-cluster'
 import { describeLogSourceContract } from './log-source-contract'
 import type { LogSource } from './log-source'
 
 const counter = 'pods/counter/counter'
+
+const capabilities = { previousLog: true, restarts: true, status: true, since: true }
 
 const testLogSource = () => {
   const { context, namespace } = testKubernetesLogsSource()
@@ -22,8 +28,31 @@ async function walk(source: LogSource, path: SourcePath = ''): Promise<LogNode[]
 
 const parentOf = (path: SourcePath) => path.slice(0, Math.max(0, path.lastIndexOf('/')))
 
+describe('Kubernetes Logs against a stand-in API server', () => {
+  let apiServer: Awaited<ReturnType<typeof startTestApiServer>>
+  let dir: string
+  let logSource: LogSource
+
+  beforeAll(async () => {
+    apiServer = await startTestApiServer()
+    dir = await mkdtemp(join(tmpdir(), 'polyscope-kube-'))
+    const kubeconfig = join(dir, 'kubeconfig')
+    await writeFile(kubeconfig, standInCluster(apiServer.url, apiServer.caPath))
+    vi.stubEnv('KUBECONFIG', kubeconfig)
+    logSource = createKubernetesLogSource(kubeConfigFor('fake'), 'lines')
+  })
+
+  afterAll(async () => {
+    vi.unstubAllEnvs()
+    await apiServer.close()
+    await rm(dir, { recursive: true, force: true })
+  })
+
+  describeLogSourceContract('Kubernetes Logs', capabilities, async () => ({ logSource, counter }))
+})
+
 describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () => {
-  describeLogSourceContract('Kubernetes Logs', { previousLog: true, restarts: true, status: true, since: false }, async () => ({ logSource: testLogSource(), counter }))
+  describeLogSourceContract('Kubernetes Logs', capabilities, async () => ({ logSource: testLogSource(), counter }))
 
   describe('its tree', () => {
     it('starts with a group per kind of Workload, which never folds, and reaches containers only through pods', async () => {
