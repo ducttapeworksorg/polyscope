@@ -12,7 +12,7 @@
 # didn't start, if any, and $dir/skipped naming those this machine can't run, and why (the journal, without systemd).
 # `cloud-services.sh --session-start` is the SessionStart hook in .claude/settings.json: outside a cloud session it does
 # nothing; in one it has Claude's shell commands read $dir/env, and starts everything in the background, logging to
-# $dir/log, unless it's already running or done since the VM last started.
+# $dir/log, unless it's already running, or this version of it is done since the VM last started.
 set -u
 
 dir=/tmp/polyscope-cloud
@@ -31,8 +31,10 @@ if [ "${1:-}" = --session-start ]; then
     echo "The integration test backends are still starting (scripts/cloud-services.sh, logging to $dir/log)."
     exit 0
   fi
-  # A VM restored after being idle keeps the files but not the processes: the engine stopped tells which.
-  if [ -f "$dir/done" ] && docker info > /dev/null 2>&1; then
+  # A VM restored after being idle keeps the files but not the processes: the engine stopped tells which. A run by
+  # another version of this script is done again, as its results say nothing of this one's.
+  if [ -f "$dir/done" ] && [ "$(cat "$dir/script.sha256" 2> /dev/null)" = "$(sha256sum < "$self")" ] &&
+    docker info > /dev/null 2>&1; then
     echo "The integration test backends were started (scripts/cloud-services.sh, logged to $dir/log); their settings" \
       "are in $env.$( [ -f "$dir/failed" ] && echo " These didn't start: $(cat "$dir/failed").")$(
         [ -f "$dir/skipped" ] && echo " These can't run here, so their tests skip: $(paste -sd';' "$dir/skipped").")"
@@ -54,6 +56,8 @@ PATH="/opt/node24/bin:$PATH"
 rm -f "$env" "$dir/done" "$dir/failed" "$dir/skipped"
 mkdir -p "$dir"
 : > "$env"
+sha256sum < "$self" > "$dir/script.sha256"
+echo "== started at $(git rev-parse --short HEAD 2> /dev/null || echo 'an unknown commit')"
 
 put() { printf "export %s='%s'\n" "$1" "$2" >> "$env"; }
 # Ends a step that this machine can't run, saying why in $dir/skipped: not a failure, its tests just skip.
