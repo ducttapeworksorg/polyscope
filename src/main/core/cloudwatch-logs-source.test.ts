@@ -273,6 +273,7 @@ describe('a CloudWatch Logs Source’s endpoint, trust and proxy settings', () =
       const { url, tunnels } = await proxy()
       vi.stubEnv('HTTPS_PROXY', url)
       vi.stubEnv('NO_PROXY', undefined)
+      vi.stubEnv('no_proxy', undefined)
       const { endpoint, caBundlePath, host } = await behindTls()
 
       expect(await connects({ endpoint, caBundlePath })).toEqual(listed)

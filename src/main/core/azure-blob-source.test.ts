@@ -644,6 +644,7 @@ describe.skipIf(!hasTestAccount)('an Azure Blob Storage Source against the test 
       const { url, tunnels } = await proxy()
       vi.stubEnv('HTTPS_PROXY', url)
       vi.stubEnv('NO_PROXY', undefined)
+      vi.stubEnv('no_proxy', undefined)
       const { endpoint, caBundlePath, host } = await behindTls()
 
       expect(await connects(await atEndpoint({ endpoint, caBundlePath }))).toEqual(['a.log'])
