@@ -61,6 +61,10 @@ The health of a Docker container as shown in the tree: running, exited (with its
 Continuously appending new content to an open view as it is produced (live **Log Streams**, or growing files on Local, Kubernetes Files and SSH Files **Sources**). Not applicable to S3 or Azure Blob objects.
 _Avoid_: tail, watch, stream (as a verb)
 
+**Since**:
+How far back a log view's lines go: only those logged since a time, a while ago or a date and time typed in, still capped by **Last N lines**. Offered only by a **Log Source** type that can read from a time; not remembered per **Source**, as **Last N lines** is: each new tab starts at any time.
+_Avoid_: time window, time range, from
+
 **Large File**:
 A file above the size threshold (default 50 MB), opened in the **Large File Viewer** instead of the full editor.
 
@@ -91,7 +95,7 @@ _Avoid_: plugin
 - Kubernetes Files and Kubernetes Logs are separate **Source Types**, even though both point at a cluster
 - In Kubernetes Logs, a **Log Stream** belongs to one container of one pod of one **Workload**
 - **Previous Log**, **Pod Status** and **Ready Count** belong to Kubernetes Logs; other **Log Source** types needn't have them
-- A **Log Source** type declares which of **Previous Log**, restarts and per-node status (**Pod Status**, **Container Status**) it offers; the log view and the tree show only those
+- A **Log Source** type declares which of **Previous Log**, restarts, per-node status (**Pod Status**, **Container Status**) and **Since** it offers; the log view and the tree show only those
 
 ## Flagged ambiguities
 

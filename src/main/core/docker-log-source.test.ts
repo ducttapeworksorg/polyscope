@@ -5,12 +5,12 @@ import { dockerEndpointOf } from './docker-contexts'
 import { connectDockerEngine } from './docker-log-source'
 import { dialerOver } from './docker-ssh'
 import { startTestDockerEngine, type TestDockerEngine } from './docker-test-engine'
-import { hasTestDocker, testCounter, testSshContext, testTlsContext } from './docker-test-seed'
+import { hasTestDocker, testCounter, testSshContext, testTicker, testTlsContext } from './docker-test-seed'
 import { describeLogSourceContract } from './log-source-contract'
 import type { LogSource } from './log-source'
 import { connectSsh, type SshConnection } from './ssh-connection'
 
-const capabilities = { previousLog: false, restarts: true, status: true }
+const capabilities = { previousLog: false, restarts: true, status: true, since: true }
 
 /** What the seed's `counter` logs before it sleeps, a millisecond apart: `line 1` to `line 100`. */
 const counterLogs = Array.from({ length: 100 }, (_, i) => ({
@@ -42,14 +42,16 @@ describe('Docker Logs against a stand-in engine', () => {
 describe.skipIf(!hasTestDocker)('Docker Logs against the test engine', () => {
   describeLogSourceContract('Docker Logs', capabilities, async () => ({
     logSource: (await connectDockerEngine(await dockerEndpointOf('default'))).logSource,
-    counter: testCounter
+    counter: testCounter,
+    ticker: testTicker
   }))
 })
 
 describe.skipIf(!hasTestDocker || !testTlsContext)('Docker Logs against the test engine, through a context fronting it with TLS', () => {
   describeLogSourceContract('Docker Logs over TLS', capabilities, async () => ({
     logSource: (await connectDockerEngine(await dockerEndpointOf(testTlsContext!))).logSource,
-    counter: testCounter
+    counter: testCounter,
+    ticker: testTicker
   }))
 })
 
@@ -70,5 +72,5 @@ describe.skipIf(!hasTestDocker || !testSshContext)('Docker Logs against the test
     return (await connectDockerEngine(endpoint, dialerOver(connection, host))).logSource
   }
 
-  describeLogSourceContract('Docker Logs over SSH', capabilities, async () => ({ logSource: await (reached ??= reach()), counter: testCounter }))
+  describeLogSourceContract('Docker Logs over SSH', capabilities, async () => ({ logSource: await (reached ??= reach()), counter: testCounter, ticker: testTicker }))
 })

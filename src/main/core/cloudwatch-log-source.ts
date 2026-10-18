@@ -431,7 +431,7 @@ export function createCloudWatchLogSource(target: CloudWatchTarget, { pageSize =
   })()
 
   const logSource: LogSource = {
-    capabilities: { previousLog: false, restarts: false, status: false },
+    capabilities: { previousLog: false, restarts: false, status: false, since: false },
 
     async listPage(path, cursor): Promise<LogPage> {
       const { group, stream } = partsOf(path)

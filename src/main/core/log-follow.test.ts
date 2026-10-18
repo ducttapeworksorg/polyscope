@@ -29,7 +29,7 @@ function fakeLogSource({ restarts = true } = {}) {
   const lookFailures: CoreError[] = []
 
   const logSource: LogSource = {
-    capabilities: { previousLog: restarts, restarts, status: false },
+    capabilities: { previousLog: restarts, restarts, status: false, since: false },
     listChildren: () => Promise.reject(new Error('not used')),
     logStreamAt: () => Promise.reject(new Error('not used')),
     readLog: () => Promise.reject(new Error('not used')),

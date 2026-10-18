@@ -6,6 +6,8 @@ export interface LogContractSubject {
   logSource: LogSource
   /** A Log Stream that has logged `line 1` to `line 100`, one per line, and nothing else, and goes on running. It has no children, hasn't restarted, and is under a group, or the root of a flat tree. */
   counter: SourcePath
+  /** A Log Stream that logs a line a second, for good: read with Since when given. */
+  ticker?: SourcePath
 }
 
 /** A node of a tree, with the path of the node it was listed under. */
@@ -204,6 +206,27 @@ export function describeLogSourceContract(name: string, capabilities: LogCapabil
           await expect(logSource.logStreamAt(path), path).rejects.toMatchObject({ code: 'NOT_A_LOG_STREAM' })
         }
       })
+
+      if (capabilities.since) {
+        it('reads only what was logged since a time, the last lines of those when asked', async () => {
+          const { logSource, counter } = await subject()
+          expect(await logSource.readLog(counter, { sinceTime: '2000-01-01T00:00:00Z' })).toBe(counterLines(1, 100))
+          expect(await logSource.readLog(counter, { sinceTime: '2000-01-01T00:00:00Z', tailLines: 3 })).toBe(counterLines(98, 100))
+          expect(await logSource.readLog(counter, { sinceTime: '2999-01-01T00:00:00Z' })).toBe('')
+          expect(await logSource.readLog(counter, { sinceTime: '2999-01-01T00:00:00Z', tailLines: 3 })).toBe('')
+        })
+
+        it('reads only a ticking Log Stream’s recent lines since a few seconds ago, if it has one', async () => {
+          const { logSource, ticker } = await subject()
+          if (!ticker) return
+          const since = new Date(Date.now() - 3_500).toISOString()
+          const lines = (await logSource.readLog(ticker, { sinceTime: since, timestamps: true })).split('\n').slice(0, -1)
+          expect(lines.length).toBeGreaterThanOrEqual(2)
+          expect(lines.length).toBeLessThanOrEqual(5)
+          for (const line of lines) expect(Date.parse(line.slice(0, line.indexOf(' '))), line).toBeGreaterThanOrEqual(Date.parse(since))
+          expect((await logSource.readLog(ticker, { tailLines: 10 })).split('\n')).toHaveLength(11)
+        })
+      }
 
       if (capabilities.previousLog) {
         it('has no Previous Log to give for a Log Stream that has not restarted', async () => {

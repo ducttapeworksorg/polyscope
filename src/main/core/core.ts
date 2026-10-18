@@ -110,6 +110,15 @@ function checkLastNLines(value: unknown): LastNLines {
   return value
 }
 
+const rfc3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/i
+
+/** A Since, an RFC 3339 time in any time zone, as one in UTC. */
+function checkSince(value: unknown): string {
+  const time = typeof value === 'string' && rfc3339.test(value) ? Date.parse(value) : NaN
+  if (!Number.isFinite(time)) throw new CoreError('INVALID_SINCE', `Not an RFC 3339 time: ${String(value)}`)
+  return new Date(time).toISOString()
+}
+
 /** The RFC 3339 timestamp a log line read with timestamps starts with; an empty line may be its timestamp alone. */
 const timestampOf = (line: string) => line.slice(0, line.indexOf(' ') < 0 ? line.length : line.indexOf(' '))
 
@@ -683,20 +692,25 @@ export function createCore(options: CoreOptions = {}): Core {
     const timestamps = options.timestamps === true
     const previous = options.previous === true
     const offersPreviousLog = logSource.capabilities.previousLog
+    const offersSince = logSource.capabilities.since
     // A Source Type without Previous Logs is never asked for one.
     if (previous && !offersPreviousLog) throw new CoreError('LOG_UNAVAILABLE', `Its Log Streams have no Previous Log: ${path}`)
+    const sinceTime = options.since === undefined ? undefined : checkSince(options.since)
+    // Nor is one without Since asked to read from a time.
+    if (sinceTime !== undefined && !offersSince) throw new CoreError('LOG_UNAVAILABLE', `Its Log Streams can’t be read from a time: ${path}`)
     const { name, hasPreviousLog, unreadable } = await logSource.logStreamAt(path)
     // Not a log still to come: following it would wait for good.
     if (unreadable) throw new CoreError('LOG_UNAVAILABLE', unreadable)
     await settingsLoaded
     const lastNLines = asked ?? sourceFor(sourceId).lastNLines ?? settings.defaultLastNLines
-    const read = { timestamps: timestamps || forFollowing, previous }
+    const read = { timestamps: timestamps || forFollowing, previous, ...(sinceTime !== undefined && { sinceTime }) }
     const snapshot = (lines: string[], earlier?: string): LogSnapshot => ({
       view: 'log',
       of: 'logStream',
       path,
       name,
       offersPreviousLog,
+      offersSince,
       previous,
       restarted: offersPreviousLog && hasPreviousLog === true,
       lastNLines,
@@ -707,15 +721,16 @@ export function createCore(options: CoreOptions = {}): Core {
     let text: string
     let earlier: string | undefined
     try {
-      // From a Source Type that can read further back, the read also tells where the lines before these end.
-      if (lastNLines !== 'all' && logSource.readLogBack && !previous) ({ text, before: earlier } = await logSource.readLogBack(path, { ...read, tailLines: lastNLines }))
+      // From a Source Type that can read further back, the read also tells where the lines before these end; lines
+      // since a time are read as they are, with none before them to read.
+      if (lastNLines !== 'all' && logSource.readLogBack && !previous && sinceTime === undefined) ({ text, before: earlier } = await logSource.readLogBack(path, { ...read, tailLines: lastNLines }))
       else if (lastNLines !== 'all') text = await logSource.readLog(path, { ...read, tailLines: lastNLines })
       else if (options.allowLarge) text = await logSource.readLog(path, read)
       else text = await readUpToLarge(logSource, path, read)
     } catch (error) {
       // A container with no log yet, say one waiting to start, can still be followed: its log will come.
       if (!forFollowing || asCoreError(error).code !== 'LOG_UNAVAILABLE') throw error
-      return { snapshot: snapshot([]) }
+      return { snapshot: snapshot([]), sinceTime }
     }
     const lines = text ? text.replace(/\n$/, '').split('\n') : []
     const kept = lastNLines === 'all' ? lines : lines.slice(-lastNLines)
@@ -724,6 +739,7 @@ export function createCore(options: CoreOptions = {}): Core {
     const shown = read.timestamps && !timestamps ? kept.map((line, i) => line.slice(stamps[i]!.length + 1)) : kept
     return {
       snapshot: snapshot(shown, earlier),
+      sinceTime,
       ...(lastTimestamp !== undefined && { lastTimestamp, lastTimestampCount: stamps.filter((stamp) => stamp === lastTimestamp).length })
     }
   }
@@ -1608,13 +1624,15 @@ export function createCore(options: CoreOptions = {}): Core {
         }
         return { logSource, restarts, read }
       })
-      const { snapshot, lastTimestamp, lastTimestampCount } = read
+      const { snapshot, lastTimestamp, lastTimestampCount, sinceTime } = read
+      // With no lines since its Since yet, it goes on from the Since, none of whose lines were shown.
+      const after = lastTimestamp !== undefined ? { after: lastTimestamp, afterCount: lastTimestampCount } : sinceTime !== undefined ? { after: sinceTime, afterCount: 0 } : {}
       // Disconnected or reconnected while reading: this Follow would outlive the connection it was for.
       const live = liveBackendOf(sourceId)
       if (live?.kind !== 'logs' || live.logSource !== logSource) throw new CoreError('SOURCE_DISCONNECTED', `${sourceFor(sourceId).name} was reconnected`)
       const followId = track(sourceId, (emit) =>
         startFollow(logSource, path, {
-          ...(lastTimestamp !== undefined && { after: lastTimestamp, afterCount: lastTimestampCount }),
+          ...after,
           restarts,
           timestamps: snapshot.timestamps,
           cap: snapshot.lastNLines,

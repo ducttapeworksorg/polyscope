@@ -314,7 +314,7 @@ export function createJournalLogSource(host: JournalHost): LogSource {
   }
 
   return {
-    capabilities: { previousLog: false, restarts: false, status: true },
+    capabilities: { previousLog: false, restarts: false, status: true, since: false },
 
     async listChildren(path) {
       if (path) {

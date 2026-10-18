@@ -3,6 +3,7 @@ import type { EntryNode, LastNLines, LogStreamNode, OpenLogOptions, OpenOptions,
 import { core, CoreCallError, describeError } from '../core-client'
 import { createFollowFeed } from '../follow-feed'
 import { targetOf } from '../source-types'
+import { sinceTimeOf, type SinceChoice } from '../since'
 import {
   activateTab,
   addEarlierLines,
@@ -147,8 +148,8 @@ export function useTabs({ onSourcesChanged }: Options) {
     const { of, path } = log
     try {
       if (of === 'logStream') return await (following ? core.followLog(sourceId, path, options) : core.openLog(sourceId, path, options))
-      // A file's lines have no timestamps to show, nor a Previous Log.
-      const { timestamps: _, previous: __, ...fileOptions } = options
+      // A file's lines have no timestamps to show, nor a Previous Log, nor a Since.
+      const { timestamps: _, previous: __, since: ___, ...fileOptions } = options
       return await (following ? core.followFile(sourceId, path, fileOptions) : core.openFileLog(sourceId, path, fileOptions))
     } catch (error) {
       if (!(error instanceof CoreCallError) || error.code !== 'LOG_TOO_LARGE') throw error
@@ -224,7 +225,8 @@ export function useTabs({ onSourcesChanged }: Options) {
 
   /**
    * Fetches a log tab's lines again: as many as `options` asks for, or else as many as it shows, with or
-   * without timestamps likewise, and of the container's current log or its Previous Log likewise. Following
+   * without timestamps likewise, of the container's current log or its Previous Log likewise, and since the time
+   * `options` asks for (any time, if it says `since: undefined`) or else the tab's Since. Following
    * goes on (from the new lines) if it was, unless `following` says otherwise. A file open in the editor moves
    * to a log view, with its Source's "Last N lines". Pins the tab.
    */
@@ -238,6 +240,7 @@ export function useTabs({ onSourcesChanged }: Options) {
       : { of: 'file' as const, path: file.path, name: file.name, previous: false }
     const shown = file.view === 'log' || file.view === 'logFailed' ? file.lastNLines : file.view === 'logTooLarge' ? 'all' : undefined
     const timestamps = (file.view === 'log' || file.view === 'logFailed') && file.timestamps
+    const since = 'since' in options ? options.since : tab.since && sinceTimeOf(tab.since)
     // Only the latest fetch for a tab lands: picking 1K then 50K quickly must end on 50K, whichever answers first.
     const request = {}
     latestLogFetch.current.set(key, request)
@@ -248,7 +251,9 @@ export function useTabs({ onSourcesChanged }: Options) {
     try {
       // A current log that failed to read had its Follow stopped; read again, it's Followed as when first opened.
       const retrying = file.view === 'logFailed' && !previous
-      const read = await readLog(tab.source.id, log, { ...lines, timestamps, ...options, previous }, following ?? (Boolean(tab.follow) || retrying))
+      const { since: _, ...rest } = options
+      const asked = { ...lines, timestamps, ...rest, previous, ...(since !== undefined && { since }) }
+      const read = await readLog(tab.source.id, log, asked, following ?? (Boolean(tab.follow) || retrying))
       if (isLatest()) setWorkspace((ws) => reopenLogTab(ws, key, read))
       // Overtaken by a later fetch: its Follow is shown nowhere.
       else if ('followId' in read) void core.stopFollow(read.followId).catch(() => undefined)
@@ -274,6 +279,13 @@ export function useTabs({ onSourcesChanged }: Options) {
       reopenLog(key, { lastNLines }),
       core.rememberLastNLines(tab.source.id, lastNLines).then(onSourcesChanged, (error) => setOpenError(describeError(error)))
     ])
+  }
+
+  /** Shows a log tab's lines since another time, or from any time; a new tab starts at any time, so it isn't remembered. */
+  const changeSince = (key: string, since: SinceChoice | undefined) => {
+    if (!tabs.some((open) => open.key === key)) return
+    setWorkspace((ws) => setLogView(ws, key, { since }))
+    return reopenLog(key, { since: since && sinceTimeOf(since) })
   }
 
   /** Follows a tab's file in a log view. */
@@ -366,6 +378,7 @@ export function useTabs({ onSourcesChanged }: Options) {
     reopenTabAs,
     reopenLog,
     changeLastNLines,
+    changeSince,
     toggleFollow,
     togglePrevious,
     togglePause,

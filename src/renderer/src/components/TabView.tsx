@@ -69,6 +69,7 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
         <LogToolbar
           tab={activeTab}
           onChangeLastNLines={(lastNLines) => void model.changeLastNLines(activeTab.key, lastNLines)}
+          onChangeSince={(since) => void model.changeSince(activeTab.key, since)}
           onToggleFollow={() => model.toggleFollow(activeTab.key)}
           onTogglePause={() => model.togglePause(activeTab.key)}
           onTogglePrevious={() => model.togglePrevious(activeTab.key)}

@@ -15,6 +15,7 @@ import type {
 } from '@shared/core-api'
 import { followableSourceTypes } from '@shared/core-api'
 import { t } from './i18n'
+import type { SinceChoice } from './since'
 
 /**
  * A Log Stream or file whose whole log was asked for but is larger than the Large File threshold: nothing
@@ -71,6 +72,9 @@ export const offersPrevious = ({ file, offersPreviousLog }: Pick<OpenTab, 'file'
 export const canShowPrevious = (tab: Pick<OpenTab, 'file' | 'restarted' | 'offersPreviousLog'>) =>
   offersPrevious(tab) && isLog(tab.file) && (tab.file.previous || tab.restarted === true)
 
+/** Whether a log tab offers Since: for a Log Stream whose Source Type offers it, as its log said when last read. */
+export const sinceOffered = ({ file, offersSince }: Pick<OpenTab, 'file' | 'offersSince'>) => isLog(file) && file.of === 'logStream' && offersSince === true
+
 /** Whether a Source's files can be Followed: those of Local, Kubernetes Files and SSH Files Sources grow; S3 objects don't. */
 export const followsFiles = (source: SourceInfo) => followableSourceTypes.includes(source.type)
 
@@ -107,6 +111,10 @@ export interface OpenTab {
   restarted?: boolean
   /** Whether a log tab's Log Stream's Source Type has Previous Logs, as last read; left out until a read has said. */
   offersPreviousLog?: boolean
+  /** Whether a log tab's Log Stream's Source Type offers Since, as last read; left out until a read has said. */
+  offersSince?: boolean
+  /** How far back a log tab's lines go, kept as it's read again; any time when left out, as a new tab starts. */
+  since?: SinceChoice
   /** A log tab's lines read further back, before its content's, as they came, and where the lines before those end. */
   loadedEarlier?: EarlierLog
   /** Set once a log tab's Follow dropped its first lines: lines read further back would leave a gap, so none are. */
@@ -132,9 +140,12 @@ export const emptyWorkspace: Workspace = { tabs: [], activeKey: null }
 /** The Follow a log was read with, if any, running: its tab shows it and stops it when done with it. */
 const followOf = (file: TabContent): FollowState | undefined => ('followId' in file ? { followId: file.followId, paused: false } : undefined)
 
-/** Whether a Log Stream, as read, says it has restarted and whether it has Previous Logs at all; nothing for what doesn't say. */
-const restartedOf = (file: TabContent): Pick<OpenTab, 'restarted' | 'offersPreviousLog'> =>
-  file.view === 'log' && file.of === 'logStream' ? { restarted: file.restarted, offersPreviousLog: file.offersPreviousLog } : {}
+/**
+ * Whether a Log Stream, as read, says it has restarted, and whether it has Previous Logs and Since at all; nothing for
+ * what doesn't say.
+ */
+const restartedOf = (file: TabContent): Pick<OpenTab, 'restarted' | 'offersPreviousLog' | 'offersSince'> =>
+  file.view === 'log' && file.of === 'logStream' ? { restarted: file.restarted, offersPreviousLog: file.offersPreviousLog, offersSince: file.offersSince } : {}
 
 /**
  * Shows a file: activating its tab if it's open already, otherwise putting it in place of the
@@ -244,7 +255,7 @@ export function reopenLogTab(ws: Workspace, key: string, file: TabContent): Work
 }
 
 /** Changes how a log tab is shown or followed, leaving its content as it is. */
-export const setLogView = (ws: Workspace, key: string, change: Partial<Pick<OpenTab, 'follow' | 'utc' | 'wrap'>>): Workspace =>
+export const setLogView = (ws: Workspace, key: string, change: Partial<Pick<OpenTab, 'follow' | 'utc' | 'wrap' | 'since'>>): Workspace =>
   updateTab(ws, key, change)
 
 /** Notes that a Follow's container restarted, so its tab can switch to the Previous Log. */

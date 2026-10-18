@@ -885,6 +885,9 @@ const firstRun: [string, () => Promise<void>][] = [
       try {
         assert.deepEqual((await core.connect(source.id)).map(nameOf), ['shop', '_standalone'])
         assert.equal((await core.openLog(source.id, '_standalone/redis')).content, 'Ready to accept connections')
+        // Its log says it offers Since, so the viewer tab's toolbar, the app's own, shows the control.
+        const since = await core.openLog(source.id, '_standalone/redis', { since: '2026-10-12T10:00:01Z' })
+        assert.deepEqual([since.offersSince, since.content], [true, ''])
 
         await open({ kind: 'log', sourceId: source.id, path: '_standalone/redis', name: 'redis', pinned: true })
         const tab = await eventually(() => activeViewerTab('redis'))

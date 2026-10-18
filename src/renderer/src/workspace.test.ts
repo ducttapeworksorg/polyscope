@@ -23,6 +23,8 @@ import {
   reopenLogTab,
   reopenTab,
   setLanguage,
+  setLogView,
+  sinceOffered,
   tabName,
   type TabContent,
   type Workspace
@@ -250,13 +252,13 @@ describe('offering to Follow a tab’s file', () => {
   })
 
   it('doesn’t for a Log Stream, which has its own Follow', () => {
-    const log = { view: 'log', of: 'logStream', path: 'p', name: 'c', offersPreviousLog: true, previous: false, restarted: false, lastNLines: 10, timestamps: false, content: '' } as const
+    const log = { view: 'log', of: 'logStream', path: 'p', name: 'c', offersPreviousLog: true, offersSince: false, previous: false, restarted: false, lastNLines: 10, timestamps: false, content: '' } as const
     expect(canFollowFile({ source, file: log })).toBe(false)
   })
 })
 
 describe('a log tab whose Follow is slowed', () => {
-  const log = { view: 'log', of: 'logStream', path: 'g', name: 'g', offersPreviousLog: false, previous: false, restarted: false, lastNLines: 10, timestamps: false, content: '' } as const
+  const log = { view: 'log', of: 'logStream', path: 'g', name: 'g', offersPreviousLog: false, offersSince: false, previous: false, restarted: false, lastNLines: 10, timestamps: false, content: '' } as const
   const followed = () => openTab(openTab(emptyWorkspace, { key: 'g', source, file: { ...log, followId: 'f' } }), { key: 'h', source, file: { ...log, followId: 'g' } }, { pinned: true })
 
   it('says so until it no longer is', () => {
@@ -272,7 +274,7 @@ describe('a log tab whose Follow is slowed', () => {
 })
 
 describe('a log tab whose Log Stream is gone', () => {
-  const log = { view: 'log', of: 'logStream', path: 'p/c', name: 'c', offersPreviousLog: false, previous: false, restarted: false, lastNLines: 10, timestamps: false, content: 'last read' } as const
+  const log = { view: 'log', of: 'logStream', path: 'p/c', name: 'c', offersPreviousLog: false, offersSince: false, previous: false, restarted: false, lastNLines: 10, timestamps: false, content: 'last read' } as const
   const followed = () => openTab(emptyWorkspace, { key: 'c', source, file: { ...log, followId: 'f' } })
 
   it('keeps what it showed, marked as gone, when its Follow ends as the Log Stream went away', () => {
@@ -297,7 +299,7 @@ describe('a log tab whose Log Stream is gone', () => {
 })
 
 describe('switching a container’s log view to its Previous Log', () => {
-  const log = { view: 'log', of: 'logStream', path: 'p/c', name: 'c', offersPreviousLog: true, previous: false, restarted: false, lastNLines: 10, timestamps: false, content: '' } as const
+  const log = { view: 'log', of: 'logStream', path: 'p/c', name: 'c', offersPreviousLog: true, offersSince: false, previous: false, restarted: false, lastNLines: 10, timestamps: false, content: '' } as const
   const followed = (restarted = false) => openTab(emptyWorkspace, { key: 'c', source, file: { ...log, restarted, followId: 'f' } })
   const onlyTab = (ws: Workspace) => ws.tabs[0]!
 
@@ -375,7 +377,7 @@ describe('cycling through tabs', () => {
 })
 
 describe('reading further back in a log view', () => {
-  const log = { view: 'log', of: 'logStream', path: 'g', name: 'g', offersPreviousLog: false, previous: false, restarted: false, lastNLines: 2, timestamps: false, content: 'c\nd', earlier: 'e1' } as const
+  const log = { view: 'log', of: 'logStream', path: 'g', name: 'g', offersPreviousLog: false, offersSince: false, previous: false, restarted: false, lastNLines: 2, timestamps: false, content: 'c\nd', earlier: 'e1' } as const
   const opened = () => openTab(emptyWorkspace, { key: 'g', source, file: { ...log, followId: 'f' } })
   const onlyTab = (ws: Workspace) => ws.tabs[0]!
 
@@ -403,5 +405,33 @@ describe('reading further back in a log view', () => {
 
     expect(onlyTab(reopened)).not.toHaveProperty('loadedEarlier')
     expect(earlierOf(onlyTab(reopened))).toBe('e1')
+  })
+})
+
+describe('a log view’s Since', () => {
+  const log = { view: 'log', of: 'logStream', path: 'p/c', name: 'c', offersPreviousLog: true, offersSince: true, previous: false, restarted: true, lastNLines: 10, timestamps: false, content: '' } as const
+  const opened = (offersSince = true) => openTab(emptyWorkspace, { key: 'c', source, file: { ...log, offersSince } })
+  const onlyTab = (ws: Workspace) => ws.tabs[0]!
+
+  it('is offered only for a Log Stream whose Source Type offers it, as its log said when read', () => {
+    expect(sinceOffered(onlyTab(opened()))).toBe(true)
+    expect(sinceOffered(onlyTab(opened(false)))).toBe(false)
+    const fileLog = { view: 'log', of: 'file', path: 'a', name: 'a', previous: false, lastNLines: 10, timestamps: false, content: '' } as const
+    expect(sinceOffered(onlyTab(openTab(emptyWorkspace, { key: 'a', source, file: fileLog })))).toBe(false)
+  })
+
+  it('starts at any time', () => {
+    expect(onlyTab(opened()).since).toBeUndefined()
+  })
+
+  it('is kept as the log is read again, switching to its Previous Log and back, or failing to', () => {
+    const since = { minutesAgo: 15 }
+    const ws = setLogView(opened(), 'c', { since })
+    const failed = { view: 'logFailed', of: 'logStream', path: 'p/c', name: 'c', previous: true, lastNLines: 10, timestamps: false, message: 'gone' } as const
+
+    const previous = reopenLogTab(ws, 'c', { ...log, previous: true })
+    expect(onlyTab(previous)).toMatchObject({ since, offersSince: true })
+    expect(onlyTab(reopenLogTab(previous, 'c', log))).toMatchObject({ since, offersSince: true })
+    expect(onlyTab(reopenLogTab(ws, 'c', failed))).toMatchObject({ since, offersSince: true })
   })
 })

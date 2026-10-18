@@ -3,7 +3,7 @@ import { CoreError } from './core-error'
 import type { LogConnection, LogSource } from './log-source'
 
 /** When the fake's counter logged its `n`th line: a second apart, from the start of 2026. */
-const loggedAt = (n: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, n)).toISOString()
+export const loggedAt = (n: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, n)).toISOString()
 
 const counterLines = Array.from({ length: 100 }, (_, i) => ({ time: loggedAt(i + 1), text: `line ${i + 1}` }))
 
@@ -44,6 +44,8 @@ export function createFakeLogSource({ capabilities, reportsAnyway = {} }: FakeLo
   const connections = new Set<{ end(): void }>()
   /** Every Previous Log it was asked for, by path. */
   const previousAsked: SourcePath[] = []
+  /** Every read it was asked for with a Since. */
+  const sinceAsked: { path: SourcePath; sinceTime: string; previous: boolean }[] = []
 
   const logSource: LogSource = {
     capabilities,
@@ -53,13 +55,16 @@ export function createFakeLogSource({ capabilities, reportsAnyway = {} }: FakeLo
       throw nodeAt(path) ? new CoreError('NOT_A_FOLDER', `A log has no children: ${path}`) : new CoreError('NOT_FOUND', `Nothing at ${path}`)
     },
     logStreamAt,
-    async readLog(path, { tailLines, limitBytes, timestamps, previous } = {}) {
+    async readLog(path, { tailLines, limitBytes, timestamps, previous, sinceTime } = {}) {
       await logStreamAt(path)
+      if (sinceTime !== undefined) sinceAsked.push({ path, sinceTime, previous: previous === true })
       if (previous) {
         previousAsked.push(path)
         throw new CoreError('LOG_UNAVAILABLE', `${path} has not restarted`)
       }
-      const lines = tailLines === undefined ? counterLines : counterLines.slice(-tailLines)
+      const since = sinceTime === undefined ? undefined : Date.parse(sinceTime)
+      const logged = since === undefined ? counterLines : counterLines.filter(({ time }) => Date.parse(time) >= since)
+      const lines = tailLines === undefined ? logged : logged.slice(-tailLines)
       const text = lines.map(({ time, text }) => `${timestamps ? `${time} ` : ''}${text}\n`).join('')
       if (limitBytes === undefined) return text
       // Whole lines, overshooting the limit to the end of the line it falls in.
@@ -90,6 +95,7 @@ export function createFakeLogSource({ capabilities, reportsAnyway = {} }: FakeLo
   return {
     logSource,
     previousAsked,
+    sinceAsked,
     /** Ends every stream being followed, as when the things logging stop. */
     endStreams() {
       for (const connection of connections) connection.end()

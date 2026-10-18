@@ -23,7 +23,7 @@ async function walk(source: LogSource, path: SourcePath = ''): Promise<LogNode[]
 const parentOf = (path: SourcePath) => path.slice(0, Math.max(0, path.lastIndexOf('/')))
 
 describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () => {
-  describeLogSourceContract('Kubernetes Logs', { previousLog: true, restarts: true, status: true }, async () => ({ logSource: testLogSource(), counter }))
+  describeLogSourceContract('Kubernetes Logs', { previousLog: true, restarts: true, status: true, since: false }, async () => ({ logSource: testLogSource(), counter }))
 
   describe('its tree', () => {
     it('starts with a group per kind of Workload, which never folds, and reaches containers only through pods', async () => {

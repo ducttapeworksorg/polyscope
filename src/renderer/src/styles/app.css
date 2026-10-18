@@ -942,6 +942,14 @@ body.is-resizing {
   font-variant-numeric: tabular-nums;
 }
 
+.log-toolbar__input--time {
+  width: 13em;
+}
+
+.log-toolbar__error {
+  color: var(--danger);
+}
+
 /* ---------- Context menu ---------- */
 
 .context-menu {
