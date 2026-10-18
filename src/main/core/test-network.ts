@@ -213,10 +213,12 @@ export async function startProxy({ hosts = {} }: { hosts?: Record<string, string
 
 /**
  * Keeps the proxy settings of wherever the tests run out of the way, so a test sees only those it sets. Both spellings:
- * Node's agents take the lowercase ones over the uppercase when both are set, kubectl the other way round.
+ * Node's agents take the lowercase ones over the uppercase when both are set, kubectl the other way round. ALL_PROXY
+ * too, which the Azure SDK reaches for on the requests it makes without Polyscope's agents (Azure CLI sign-in's).
  */
 export const ignoreAmbientProxy = () => {
-  for (const name of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy']) {
+  const names = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']
+  for (const name of names) {
     vi.stubEnv(name, undefined)
   }
 }
