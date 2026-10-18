@@ -550,6 +550,7 @@ describe.skipIf(!hasTestStore)('an S3 Source in a corporate network, against the
     const { url, tunnels } = await proxy()
     vi.stubEnv('HTTPS_PROXY', url)
     vi.stubEnv('NO_PROXY', undefined)
+    vi.stubEnv('no_proxy', undefined)
     const tls = await behindTls()
     const settings = { ...testS3Source('Bucket', await seeded()), ...tls }
 
