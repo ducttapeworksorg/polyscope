@@ -301,7 +301,7 @@ function inspectedNode(node: LogStreamNode, container: ContainerInspect): LogStr
  * Compose project, its service, then the container, e.g. `shop/web/shop-web-1`; containers outside Compose are under
  * `_standalone`. A project with one service and a service with one container carry it folded in, paths keeping every
  * level. Containers tell their Container Status and restarts, and a Follow carries on across restarts; Docker keeps
- * every run of a container in one log, so it has no Previous Log.
+ * every run of a container in one log, so it has no Previous Log. Its logs can be read from a time on (Since).
  */
 function createDockerLogSource(engine: Engine, apiVersion: string): LogSource {
   const api = (path: string) => `/v${apiVersion}${path}`
@@ -348,7 +348,7 @@ function createDockerLogSource(engine: Engine, apiVersion: string): LogSource {
   }
 
   return {
-    capabilities: { previousLog: false, restarts: true, status: true },
+    capabilities: { previousLog: false, restarts: true, status: true, since: true },
 
     async listChildren(path) {
       const containers = await tree()
@@ -371,9 +371,11 @@ function createDockerLogSource(engine: Engine, apiVersion: string): LogSource {
       }
     },
 
-    async readLog(path, { tailLines, limitBytes, timestamps = false }: LogReadOptions = {}) {
+    async readLog(path, { tailLines, limitBytes, timestamps = false, sinceTime }: LogReadOptions = {}) {
       const container = await containerAt(path)
-      const { response, stop } = await logsOf(container, { tail: tailLines === undefined ? 'all' : String(tailLines), timestamps: String(timestamps) })
+      const tail = tailLines === undefined ? 'all' : String(tailLines)
+      // The engine takes the last lines, then those of them since the time: the last lines of those since it, either way.
+      const { response, stop } = await logsOf(container, { tail, timestamps: String(timestamps), ...(sinceTime && { since: sinceOf(sinceTime) }) })
       let text = ''
       const decoder = logDecoder(container.tty, (piece) => (text += piece), limitBytes)
       for await (const chunk of response) {

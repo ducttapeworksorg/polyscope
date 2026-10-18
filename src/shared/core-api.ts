@@ -564,6 +564,8 @@ export interface LogCapabilities {
   restarts: boolean
   /** Its nodes tell how they're doing (a Kubernetes pod's Pod Status, a Docker container's Container Status). */
   status: boolean
+  /** Its Log Streams can be read from a time on, showing only the lines logged since then: Since. */
+  since: boolean
 }
 
 /**
@@ -918,6 +920,8 @@ export interface LogSnapshot {
   name: string
   /** Whether its Source Type has Previous Logs, so its log view offers to switch to one. */
   offersPreviousLog: boolean
+  /** Whether its Source Type can read from a time on, so its log view offers Since. */
+  offersSince: boolean
   /** Whether this is the Log Stream's Previous Log: the log of its run before the current one. */
   previous: boolean
   /** Whether it had a Previous Log to switch to when read: it had restarted. Never, from a Source Type without Previous Logs. */
@@ -962,6 +966,11 @@ export interface OpenLogOptions {
   timestamps?: boolean
   /** Reads the Log Stream's Previous Log rather than its current one, from a Source Type with Previous Logs. */
   previous?: boolean
+  /**
+   * Only the lines logged since this time (Since), an RFC 3339 time in any time zone, from a Source Type that offers
+   * it; `lastNLines` takes the last of those. Any time when left out.
+   */
+  since?: string
 }
 
 /** A Log Stream's snapshot, and the Follow that goes on from its last line; see followLog. */
@@ -1096,6 +1105,7 @@ export type CoreErrorCode =
   | 'PREVIOUS_LOG_GONE'
   | 'LOG_TOO_LARGE'
   | 'INVALID_LINE_COUNT'
+  | 'INVALID_SINCE'
   | 'NOT_FOLLOWABLE'
   | 'INVALID_WORKLOAD_KIND'
   | 'WORKLOAD_REQUIRED'
@@ -1229,7 +1239,8 @@ export interface CoreApi {
   /**
    * Fetches the last lines of a Log Stream in a Log Source. Asking for all of a log larger than the
    * Large File threshold fails with LOG_TOO_LARGE, unless `allowLarge` says to go ahead. Asking for the Previous Log
-   * of a Log Stream whose Source Type has none fails with LOG_UNAVAILABLE.
+   * of a Log Stream whose Source Type has none fails with LOG_UNAVAILABLE, as does asking for a Since of one whose
+   * Source Type doesn't offer it; a Since that isn't an RFC 3339 time fails with INVALID_SINCE.
    */
   openLog(sourceId: string, path: SourcePath, options?: OpenLogOptions): Promise<LogSnapshot>
   /**

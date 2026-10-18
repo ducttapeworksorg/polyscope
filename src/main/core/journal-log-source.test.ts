@@ -7,7 +7,7 @@ import { connectSsh, fingerprintOf, type SshConnection } from './ssh-connection'
 import { sshdTarget } from './ssh-test-server'
 
 describe.skipIf(!hasTestJournal)('systemd Journal against this machine’s journal', () => {
-  describeLogSourceContract('systemd Journal', { previousLog: false, restarts: false, status: true }, async () => ({
+  describeLogSourceContract('systemd Journal', { previousLog: false, restarts: false, status: true, since: false }, async () => ({
     logSource: createJournalLogSource(thisMachine),
     counter: testCounter
   }))
@@ -19,7 +19,7 @@ describe.skipIf(!hasTestJournal || !sshdTarget)('systemd Journal against this ma
   const connections: SshConnection[] = []
   afterAll(() => connections.forEach((connection) => connection.close()))
 
-  describeLogSourceContract('systemd Journal over SSH', { previousLog: false, restarts: false, status: true }, async () => {
+  describeLogSourceContract('systemd Journal over SSH', { previousLog: false, restarts: false, status: true, since: false }, async () => {
     const hostKey = Buffer.from((await readFile(sshd.hostKeyFile, 'utf8')).trim().split(/\s+/)[1]!, 'base64')
     const connection = await connectSsh(
       { host: sshd.host, port: sshd.port, user: sshd.user, privateKey: await readFile(sshd.keyFile) },

@@ -13,7 +13,14 @@ test.beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'polyscope-smoke-'))
   engine = await startTestDockerEngine([
     { name: 'shop-web-1', labels: { 'com.docker.compose.project': 'shop', 'com.docker.compose.service': 'web' } },
-    { name: 'redis', logs: [{ stream: 'stdout', time: '2026-10-12T10:00:00.000000000Z', text: 'Ready to accept connections' }] }
+    { name: 'redis', logs: [{ stream: 'stdout', time: '2026-10-12T10:00:00.000000000Z', text: 'Ready to accept connections' }] },
+    {
+      name: 'api',
+      logs: [
+        { stream: 'stdout', time: '2026-10-12T10:00:00.000000000Z', text: 'booting' },
+        { stream: 'stdout', time: new Date(Date.now() - 60_000).toISOString(), text: 'serving' }
+      ]
+    }
   ])
   app = await electron.launch({
     args: [join(__dirname, '..', '..', 'out', 'main', 'index.js'), `--user-data-dir=${join(dir, 'user-data')}`],
@@ -95,4 +102,30 @@ test('a Docker Logs Source asks how to sign in only for an ssh:// context', asyn
   await expect(signIn.getByRole('radio', { name: 'SSH agent' })).toBeChecked()
   await signIn.locator('label.segmented__option', { hasText: 'Key file' }).click()
   await expect(dialog.getByRole('textbox', { name: 'Key file', exact: true })).toBeVisible()
+})
+
+test('a Docker container’s log shows only the lines since a time, leaving the earlier ones out', async () => {
+  const window = await app.firstWindow()
+  const dialog = await openAddDockerSource(window)
+  await dialog.getByRole('button', { name: 'Add Source' }).click()
+  await window.getByRole('treeitem', { name: 'Docker' }).click()
+  await window.getByRole('treeitem', { name: 'Standalone' }).click()
+  await window.getByRole('treeitem', { name: 'api' }).click()
+  const editor = window.getByTestId('editor')
+  await expect(editor).toContainText('booting')
+  const since = window.locator('.log-toolbar__lines', { hasText: 'Since' })
+
+  await since.locator('label.segmented__option', { hasText: '15 min' }).click()
+
+  await expect(editor).toContainText('serving')
+  await expect(editor).not.toContainText('booting')
+
+  const typed = since.getByRole('textbox', { name: 'Since a date and time' })
+  await typed.fill('not a time')
+  await typed.press('Enter')
+  await expect(since.getByRole('alert')).toContainText('Can’t read that time')
+
+  await typed.fill('2026-10-11 00:00')
+  await typed.press('Enter')
+  await expect(editor).toContainText('booting')
 })

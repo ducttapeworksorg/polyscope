@@ -10,6 +10,8 @@ export interface LogReadOptions {
   timestamps?: boolean
   /** Reads the Log Stream's Previous Log, the log of its run before the current one, rather than its current one. */
   previous?: boolean
+  /** Only lines logged since this RFC 3339 time, `tailLines` taking the last of those; asked only of a Source Type with Since. */
+  sinceTime?: string
 }
 
 /** Where following a log starts: from the start of the Log Stream's current run unless told. Lines always come with their timestamps, as with `timestamps` when reading. */

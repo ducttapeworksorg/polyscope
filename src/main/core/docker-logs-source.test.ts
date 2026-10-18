@@ -8,6 +8,7 @@ import { createCore, type Core } from './core'
 import { writeDockerConfig } from './docker-test-config'
 import { startTestDockerEngine, type TestContainer, type TestDockerEngine } from './docker-test-engine'
 import { hasTestDocker, testCounter, testCrasher, testProject, testSyslog, testTicker, testTlsContext, testUnhealthy } from './docker-test-seed'
+import { MB } from '@shared/settings'
 import { followTiming } from './log-follow'
 import { startMutualTlsFront } from './test-network'
 
@@ -377,6 +378,7 @@ describe('opening a container’s log', () => {
       path: '_standalone/app',
       name: 'app',
       offersPreviousLog: false,
+      offersSince: true,
       previous: false,
       restarted: false,
       lastNLines: 10_000,
@@ -425,6 +427,23 @@ describe('opening a container’s log', () => {
     await expect(core.followLog(sourceId, '_standalone/shipped')).rejects.toMatchObject(unavailable)
   })
 
+  it('shows only the lines logged since a time, at most the last N of them', async () => {
+    const { core, sourceId } = await connected([app])
+
+    expect((await core.openLog(sourceId, '_standalone/app', { since: at(2) })).content).toBe('warning: no config\nlistening on :8080\nerror: bad request')
+    expect((await core.openLog(sourceId, '_standalone/app', { since: at(2), lastNLines: 1 })).content).toBe('error: bad request')
+    expect((await core.openLog(sourceId, '_standalone/app', { since: '2999-01-01T00:00:00Z' })).content).toBe('')
+  })
+
+  it('reads all of a log since a time when that much is under the Large File threshold, however large the whole log', async () => {
+    const old = Array.from({ length: 1100 }, () => ({ stream: 'stdout' as const, time: at(1), text: 'x'.repeat(1000) }))
+    const { core, sourceId } = await connected([{ name: 'big', logs: [...old, { stream: 'stdout', time: at(5), text: 'recent' }] }])
+    await core.updateSettings({ largeFileThreshold: MB })
+
+    await expect(core.openLog(sourceId, '_standalone/big', { lastNLines: 'all' })).rejects.toMatchObject({ code: 'LOG_TOO_LARGE' })
+    expect((await core.openLog(sourceId, '_standalone/big', { lastNLines: 'all', since: at(5) })).content).toBe('recent')
+  })
+
   it('reports a container removed since it was listed', async () => {
     const { core, sourceId } = await connected([app])
 
@@ -458,6 +477,20 @@ describe('following a container’s log', () => {
 
     expect(followed).toMatchObject({ content: 'line 2\nline 3', offersPreviousLog: false })
     await vi.waitFor(() => expect(updates.of(followed.followId)).toEqual(['line 4', 'oops']))
+    await core.disconnect(sourceId)
+    updates.unsubscribe()
+  })
+
+  it('follows on from the lines since a time, repeating none of them', async () => {
+    // Lines logged in other tests are kept in `app`'s own.
+    const { core, sourceId } = await connected([{ ...app, logs: app.logs!.slice(0, 3) }])
+    const updates = followUpdates(core)
+
+    const followed = await core.followLog(sourceId, '_standalone/app', { since: at(2) })
+    engine!.log('app', 'line 4')
+
+    expect(followed.content).toBe('line 2\nline 3')
+    await vi.waitFor(() => expect(updates.of(followed.followId)).toEqual(['line 4']))
     await core.disconnect(sourceId)
     updates.unsubscribe()
   })

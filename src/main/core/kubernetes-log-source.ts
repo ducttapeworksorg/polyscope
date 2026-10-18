@@ -319,7 +319,7 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
   }
 
   return {
-    capabilities: { previousLog: true, restarts: true, status: true },
+    capabilities: { previousLog: true, restarts: true, status: true, since: false },
     listChildren,
     logStreamAt,
 
