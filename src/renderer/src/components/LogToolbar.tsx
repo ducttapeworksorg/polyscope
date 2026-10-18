@@ -4,6 +4,7 @@ import { t } from '../i18n'
 import { formatCount } from '../i18n/format'
 import type { SinceChoice } from '../since'
 import { canShowPrevious, earlierOf, isLog, offersPrevious, sinceOffered, type OpenTab } from '../workspace'
+import { SaveCopyButton } from './FileToolbar'
 import { LastNLinesControl } from './LastNLinesControl'
 import { SinceControl } from './SinceControl'
 
@@ -19,6 +20,8 @@ interface Props {
   onToggleWrap(): void
   /** Reads the lines before the first shown, from a Source Type that can read further back. */
   onLoadEarlier(): void
+  /** Saves a copy of the lines shown, asking where; without it, the toolbar offers no "Save a copy…". */
+  onSaveCopy?(): void
 }
 
 interface ToggleProps {
@@ -40,9 +43,9 @@ export function Toggle({ pressed, disabled, tooltip, onToggle, children }: Toggl
 /**
  * The controls at the top of every log view: its "Last N lines", its Since when its Source Type offers it, loading
  * the lines before those shown when its Source Type can, Follow (with pause and resume) for a Log Stream's current log or a file, switching a Log Stream to its Previous Log and back if its Source Type has
- * them, timestamps in local time or UTC for a Log Stream, and wrapping.
+ * them, timestamps in local time or UTC for a Log Stream, wrapping, and saving a copy of the lines shown.
  */
-export function LogToolbar({ tab, onChangeLastNLines, onChangeSince, onToggleFollow, onTogglePause, onTogglePrevious, onToggleTimestamps, onToggleUtc, onToggleWrap, onLoadEarlier }: Props) {
+export function LogToolbar({ tab, onChangeLastNLines, onChangeSince, onToggleFollow, onTogglePause, onTogglePrevious, onToggleTimestamps, onToggleUtc, onToggleWrap, onLoadEarlier, onSaveCopy }: Props) {
   const { file, follow } = tab
   const log = file.view === 'log' ? file : null
   // Kept by a log that failed to read, for reading it again.
@@ -96,6 +99,7 @@ export function LogToolbar({ tab, onChangeLastNLines, onChangeSince, onToggleFol
         <Toggle pressed={tab.wrap ?? false} disabled={!log} tooltip={t('logView.wrap.tooltip')} onToggle={onToggleWrap}>
           {t('logView.wrap')}
         </Toggle>
+        {onSaveCopy && <SaveCopyButton tooltip={t('saveCopy.log.tooltip')} disabled={!log} onSaveCopy={onSaveCopy} />}
       </div>
     </div>
   )

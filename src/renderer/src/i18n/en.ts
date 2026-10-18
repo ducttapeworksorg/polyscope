@@ -277,6 +277,7 @@ export const en = {
   'tree.tlsOff.tooltip': 'TLS verification is off: the store’s certificate isn’t checked.',
   'saveCopy.action': 'Save a copy…',
   'saveCopy.tooltip': 'Save a copy of the file on this computer, as it’s stored',
+  'saveCopy.log.tooltip': 'Save a copy of the lines shown on this computer, with their timestamps if they’re shown',
   'saveCopy.region': 'Saved copies',
   'saveCopy.saving': 'Saving a copy of {name}…',
   'saveCopy.progress.label': 'Saving {name}',

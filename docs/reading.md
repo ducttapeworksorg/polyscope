@@ -43,8 +43,20 @@ A container's log, a CloudWatch log, or a systemd unit's journal opens with a to
 - **Previous**: show the container's **Previous Log**, the log of its run before it last restarted, in the same tab, marked "(previous)". It has ended, so there's nothing to Follow; turn **Previous** off to go back to the current log, Following it again. It's available once the container has restarted, which a Follow notices as it happens; Kubernetes keeps only the run just before the current one, and not always that.
 - **Timestamps**: start each line with when it was logged, in local time or, with **UTC**, in UTC.
 - **Wrap**: wrap long lines.
+- **Save a copy…**: keep the log on your computer, say to attach it to a bug report. See below.
 
 While following, the log marks what happened in line: a container restarting, the connection dropping and recovering, or the container, pod, CloudWatch log or Source going away.
+
+### Save a copy of a log
+
+**Save a copy…** in the log toolbar saves exactly the lines the tab shows when you choose it, one per line, to a place on your computer. It's there for container logs, CloudWatch logs, systemd units' journals and followed files alike.
+
+- It includes lines a **Follow** has added and lines **Load earlier** has added, in the order shown. While **Paused**, the lines held back aren't included until you **Resume**.
+- What a Follow marks in line, like a container restarting or the connection dropping, is saved as it's shown, among the lines.
+- Timestamps are included only when **Timestamps** is on, in the time shown: local time, or UTC with **UTC** on.
+- A **Previous Log** saves the Previous Log.
+- Polyscope asks where to save it, suggesting a name in your Downloads folder that says what the log is of and when it was saved, like `web-7d9f-nginx-2026-10-18-090507.log` for a Kubernetes pod's container, marked `-previous` for a Previous Log.
+- It's saved as a file's copy is: a bar at the foot of the window says when it's done, and a save that fails leaves nothing behind.
 
 ## Large Files
 

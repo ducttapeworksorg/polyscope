@@ -1,4 +1,4 @@
-import type { ReactNode, Ref } from 'react'
+import { useRef, type ReactNode, type Ref } from 'react'
 import type { ConnectionState } from '@shared/core-api'
 import type { Settings } from '@shared/settings'
 import { describeFailure } from '../core-client'
@@ -7,7 +7,7 @@ import { isLog, tabName, type OpenTab } from '../workspace'
 import { FileToolbar } from './FileToolbar'
 import { LogToolbar } from './LogToolbar'
 import type { TabsModel } from './use-tabs'
-import { Viewer } from './Viewer'
+import { Viewer, type ShownLines } from './Viewer'
 
 interface Props {
   viewerRef?: Ref<HTMLDivElement>
@@ -24,6 +24,8 @@ interface Props {
   onOpenAnyway?(key: string): void
   /** Saves a copy of a tab's file, asking where; without it, files offer no "Save a copy…". */
   onSaveCopy?(tab: OpenTab): void
+  /** Saves a copy of a log tab's lines, as shown, one per line, asking where; without it, logs offer no "Save a copy…". */
+  onSaveLogCopy?(tab: OpenTab, lines: string[]): void
   /** Shown in the viewer when no tab is active. */
   children?: ReactNode
 }
@@ -32,8 +34,9 @@ interface Props {
  * What the active tab shows: any error opening it, banners for a Disconnected Source, a pod or Log Stream that's gone or
  * a slowed Follow, its toolbar, and the viewer.
  */
-export function TabView({ viewerRef, model, settings, connection, onReconnect, panelId, onOpenAnyway, onSaveCopy, children }: Props) {
+export function TabView({ viewerRef, model, settings, connection, onReconnect, panelId, onOpenAnyway, onSaveCopy, onSaveLogCopy, children }: Props) {
   const { tabs, activeTab, openError } = model
+  const shownLines = useRef<ShownLines | null>(null)
   return (
     <>
       {openError && (
@@ -79,6 +82,12 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
           onToggleUtc={() => model.toggleUtc(activeTab.key)}
           onToggleWrap={() => model.toggleWrap(activeTab.key)}
           onLoadEarlier={() => void model.loadEarlier(activeTab.key)}
+          {...(onSaveLogCopy && {
+            onSaveCopy: () => {
+              const lines = shownLines.current?.(activeTab.key)
+              if (lines) onSaveLogCopy(activeTab, lines)
+            }
+          })}
         />
       )}
       {activeTab && (activeTab.file.view === 'editor' || activeTab.file.view === 'hex' || activeTab.file.view === 'binary') && (
@@ -104,6 +113,7 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
           onLineCount={model.noteLineCount}
           onDroppedLines={model.noteDroppedLines}
           minimap={settings.showMinimap}
+          shownLinesRef={shownLines}
         />
         {!activeTab && children}
       </div>

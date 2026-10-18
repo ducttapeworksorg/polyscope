@@ -34,8 +34,8 @@ export interface ExtensionBridge extends PolyscopeBridge {
   onOwnViewerChanged(listener: (on: boolean) => void): () => void
 }
 
-/** The bridge's calls: everything but its subscriptions and what it says about itself. */
-export type BridgeCall = Exclude<keyof ExtensionBridge, `on${string}` | 'copy' | 'saveCopy'>
+/** The bridge's calls: everything but its subscriptions, what it says about itself, and what an Extension Copy can't do yet. */
+export type BridgeCall = Exclude<keyof ExtensionBridge, `on${string}` | 'copy' | 'saveCopy' | 'saveLogCopy'>
 
 /** What each of the bridge's events carries. */
 export interface BridgeEvents {

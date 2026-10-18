@@ -779,3 +779,39 @@ test('save a copy of a file from the sidebar and from its toolbar, a compressed 
   expect(await readFile(join(saves, 'copy of app.log'), 'utf8')).toBe('INFO hello from polyscope\n')
   expect((await readdir(saves)).sort()).toEqual(['copy of app.log', 'old.log.gz'])
 })
+
+test('save a copy of a followed file’s lines, with those a Follow added and not those held back while paused', async () => {
+  const logFile = join(dir, 'root', 'logs', 'app.log')
+  const saves = join(dir, 'saves')
+  await mkdir(saves)
+  // The Save dialog is the OS's: it answers with where the test says, noting the name it suggested.
+  await app.evaluate(({ dialog }, filePath) => {
+    dialog.showSaveDialog = (async (...args: unknown[]) => {
+      const options = args.at(-1) as { defaultPath?: string }
+      ;(globalThis as { suggested?: string }).suggested = options.defaultPath
+      return { canceled: false, filePath }
+    }) as typeof dialog.showSaveDialog
+  }, join(saves, 'app copy.log'))
+  const window = await app.firstWindow()
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  await window.getByRole('treeitem', { name: 'app.log' }).click({ button: 'right' })
+  await window.getByRole('menuitem', { name: 'Follow' }).click()
+
+  const editor = window.getByTestId('editor')
+  await expect(editor).toContainText('INFO hello from polyscope')
+  await appendFile(logFile, 'INFO added by the Follow\n')
+  await expect(editor).toContainText('INFO added by the Follow')
+  await window.getByRole('button', { name: 'Pause', exact: true }).click()
+  await expect(window.getByRole('button', { name: 'Resume', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await appendFile(logFile, 'INFO held back while paused\n')
+  await window.waitForTimeout(3000)
+
+  await window.getByRole('button', { name: 'Save a copy…' }).click()
+  await expect(window.getByRole('region', { name: 'Saved copies' }).getByRole('status')).toContainText(`Saved a copy of app.log to ${join(saves, 'app copy.log')}`)
+  expect(await readFile(join(saves, 'app copy.log'), 'utf8')).toBe('INFO hello from polyscope\nINFO added by the Follow\n')
+  const suggested = await app.evaluate(() => (globalThis as { suggested?: string }).suggested)
+  expect(suggested).toMatch(/[\\/]app-\d{4}-\d{2}-\d{2}-\d{6}\.log$/)
+  expect(await readdir(saves)).toEqual(['app copy.log'])
+})

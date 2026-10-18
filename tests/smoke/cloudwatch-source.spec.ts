@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test'
@@ -118,6 +118,40 @@ test('a CloudWatch log group opens as one merged log, each line saying its strea
   await window.getByRole('menuitem', { name: 'Open log' }).click()
 
   await expect(window.getByTestId('editor')).toContainText('[abc] START RequestId: 1')
+})
+
+test('a CloudWatch log saved as a copy has its lines as shown, with their timestamps in UTC when that’s how they’re shown', async () => {
+  const saves = join(dir, 'saves')
+  await mkdir(saves)
+  // The Save dialog is the OS's: it answers with where the test says, as the user would pick.
+  const answerSaveDialog = (filePath: string) =>
+    app.evaluate(({ dialog }, filePath) => {
+      dialog.showSaveDialog = (async () => ({ canceled: false, filePath })) as typeof dialog.showSaveDialog
+    }, filePath)
+  const window = await app.firstWindow()
+  const dialog = await openAddCloudWatchSource(window)
+  await dialog.getByLabel('Profile', { exact: true }).selectOption('logs')
+  await dialog.getByLabel('Name', { exact: true }).fill('Lambdas')
+  await dialog.getByRole('button', { name: 'Add Source' }).click()
+  await window.getByRole('treeitem', { name: 'Lambdas' }).click()
+  await window.getByRole('treeitem', { name: segment('/aws/lambda/orders') }).click({ button: 'right' })
+  await window.getByRole('menuitem', { name: 'Open log' }).click()
+  const editor = window.getByTestId('editor')
+  await expect(editor).toContainText('[abc] START RequestId: 1')
+  const saved = window.getByRole('region', { name: 'Saved copies' })
+
+  await answerSaveDialog(join(saves, 'plain.log'))
+  await window.getByRole('button', { name: 'Save a copy…' }).click()
+  await expect(saved.getByText(`to ${join(saves, 'plain.log')}`)).toBeVisible()
+  expect(await readFile(join(saves, 'plain.log'), 'utf8')).toBe('[abc] START RequestId: 1\n')
+
+  await window.getByRole('button', { name: 'Timestamps', exact: true }).click()
+  await window.getByRole('button', { name: 'UTC', exact: true }).click()
+  await expect(editor).toContainText('2026-10-12 10:00:00.000Z')
+  await answerSaveDialog(join(saves, 'utc.log'))
+  await window.getByRole('button', { name: 'Save a copy…' }).click()
+  await expect(saved.getByText(`to ${join(saves, 'utc.log')}`)).toBeVisible()
+  expect(await readFile(join(saves, 'utc.log'), 'utf8')).toBe('2026-10-12 10:00:00.000Z [abc] START RequestId: 1\n')
 })
 
 test('a CloudWatch Logs Source takes an endpoint, a CA bundle and a proxy', async () => {

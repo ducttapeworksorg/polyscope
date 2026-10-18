@@ -26,6 +26,7 @@ import type {
   LargeFileSearchEvent,
   SaveCopyEvent,
   SaveCopyStarted,
+  SaveCopyStatus,
   LastNLines,
   LocalSourceInfo,
   LogCapabilities,
@@ -94,7 +95,7 @@ import { currentRunOf, type LogReadOptions, type LogSource } from './log-source'
 import { readCaBundle } from './network-agents'
 import { createRegistryStore, emptyRegistry, type SavedSource } from './registry-store'
 import { createS3FileSource, type S3Target } from './s3-file-source'
-import { saveCopy as startSaveCopy, type SavingCopy } from './save-copy'
+import { saveCopy as startSaveCopy, saveHeldCopy, type SavingCopy } from './save-copy'
 import { createSecretStore, type SecretStore } from './secret-store'
 import { createSettingsStore } from './settings-store'
 import { findSshAgent } from './ssh-agent'
@@ -479,6 +480,11 @@ export interface CoreSaves {
    * Disconnecting its Source fails it.
    */
   saveCopy(sourceId: string, path: SourcePath, target: string): Promise<SaveCopyStarted>
+  /**
+   * Starts saving a copy of a log, the lines its view shows as `text`, to `target`, an absolute path on this computer,
+   * as saveCopy saves a file's; how it goes comes as SaveCopyEvents with the returned `saveId`.
+   */
+  saveLogCopy(text: string, target: string): Promise<SaveCopyStarted>
 }
 
 /** What a Connected Source reads from: files, or Log Streams. */
@@ -894,9 +900,26 @@ export function createCore(options: CoreOptions = {}): Core {
   const searches = new Map<string, { largeFileId: string; search: LargeFileSearch }>()
   const searchListeners = new Set<(event: LargeFileSearchEvent) => void>()
 
-  // Copies of files being saved, by id, each with the Source it's of.
-  const saves = new Map<string, { sourceId: string; saving: SavingCopy }>()
+  // Copies of files being saved, by id, each with the Source it's of (none for a log's, whose lines are held here).
+  const saves = new Map<string, { sourceId: string | null; saving: SavingCopy }>()
   const saveListeners = new Set<(event: SaveCopyEvent) => void>()
+
+  /** Starts a save of a copy with `start`, telling how it goes under a new id until it's done. */
+  const startSave = (sourceId: string | null, target: string, start: (onStatus: (status: SaveCopyStatus) => void) => SavingCopy): SaveCopyStarted => {
+    const saveId = randomUUID()
+    const saving = start((status) => {
+      if (status.state !== 'saving') saves.delete(saveId)
+      const event = { ...status, saveId }
+      for (const listener of saveListeners) listener(event)
+    })
+    saves.set(saveId, { sourceId, saving })
+    return { saveId, target }
+  }
+
+  /** Refuses a place to save a copy to that isn't an absolute path on this computer. */
+  const checkTarget = (target: unknown) => {
+    if (typeof target !== 'string' || !isAbsolute(target)) throw new CoreError('INVALID_PATH', `Not an absolute path to save to: ${String(target)}`)
+  }
 
   const largeFileFor = (largeFileId: string) => {
     const open = largeFiles.get(largeFileId)
@@ -1625,27 +1648,21 @@ export function createCore(options: CoreOptions = {}): Core {
 
     async saveCopy(sourceId, path, target) {
       await loaded
-      if (typeof target !== 'string' || !isAbsolute(target)) throw new CoreError('INVALID_PATH', `Not an absolute path to save to: ${String(target)}`)
+      checkTarget(target)
       const source = sourceFor(sourceId)
       return withFileSource(sourceId, path, async (fileSource) => {
         await fileToRead(fileSource, path)
         if (source.type === 'local' && (await sameFile(join(source.rootPath, path), target))) {
           throw new CoreError('SAVE_OVER_SOURCE', `A copy can’t be saved over the file itself: ${target}`)
         }
-        const saveId = randomUUID()
-        const saving = startSaveCopy({
-          fileSource,
-          path,
-          target,
-          onStatus: (status) => {
-            if (status.state !== 'saving') saves.delete(saveId)
-            const event = { ...status, saveId }
-            for (const listener of saveListeners) listener(event)
-          }
-        })
-        saves.set(saveId, { sourceId, saving })
-        return { saveId, target }
+        return startSave(sourceId, target, (onStatus) => startSaveCopy({ fileSource, path, target, onStatus }))
       })
+    },
+
+    async saveLogCopy(text, target) {
+      checkTarget(target)
+      const bytes = new TextEncoder().encode(text)
+      return startSave(null, target, (onStatus) => saveHeldCopy({ bytes, target, onStatus }))
     },
 
     async cancelSaveCopy(saveId) {

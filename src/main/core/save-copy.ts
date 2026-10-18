@@ -8,7 +8,7 @@ import { chunksOf, largeFileReading } from './large-file'
 import { asCoreError } from './log-follow'
 
 export interface SaveCopyOptions {
-  fileSource: FileSource
+  fileSource: Pick<FileSource, 'stat' | 'read'>
   path: SourcePath
   /** Where the copy goes on this computer: a file there already is replaced only once the copy is whole. */
   target: string
@@ -111,4 +111,15 @@ export function saveCopy({ fileSource, path, target, onStatus }: SaveCopyOptions
     abort: (code, message) => !stopped && interrupt({ state: 'failed', code, message }),
     done: run()
   }
+}
+
+/** Bytes held here, read as a File Source's one file would be: say the lines a log view shows. */
+const heldBytes = (bytes: Uint8Array): SaveCopyOptions['fileSource'] => ({
+  stat: async () => ({ kind: 'file', size: bytes.length, modifiedTime: Date.now() }),
+  read: async (_path, { offset, length }) => bytes.subarray(offset, offset + length)
+})
+
+/** Saves a copy of `bytes` held here, as saveCopy saves a file's: into a part file renamed into place once whole. */
+export function saveHeldCopy({ bytes, target, onStatus }: Omit<SaveCopyOptions, 'fileSource' | 'path'> & { bytes: Uint8Array }): SavingCopy {
+  return saveCopy({ fileSource: heldBytes(bytes), path: '', target, onStatus })
 }

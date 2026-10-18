@@ -24,7 +24,7 @@ export function App() {
   const { tabs, activeTab, setWorkspace } = tabsModel
   const update = useUpdateStatus()
   const saveCopies = useSaveCopies()
-  const { saveCopy } = saveCopies
+  const { saveCopy, saveLogCopy } = saveCopies
   const version = useAppVersion()
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth()
   const sidebarRef = useRef<HTMLElement>(null)
@@ -111,6 +111,7 @@ export function App() {
           onReconnect={() => activeTab && void sourcesModel.connect(activeTab.source)}
           panelId={viewerPanelId}
           {...(saveCopy && { onSaveCopy: (tab) => void saveCopy(tab.source, tab.file.path, tab.file.name) })}
+          {...(saveLogCopy && { onSaveLogCopy: (tab, lines) => void saveLogCopy(tab, lines) })}
         >
           <div className="viewer__empty">
             <ApertureMark />

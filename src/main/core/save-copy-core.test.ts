@@ -102,3 +102,28 @@ describe('saving a copy of a file', () => {
     await expect(core.cancelSaveCopy('no-such-save')).resolves.toBeUndefined()
   })
 })
+
+describe('saving a copy of a log', () => {
+  it('saves the lines it’s given where it was asked to, telling how it went under the id it returns', async () => {
+    const target = join(saves, 'app.log')
+    const text = '2026-10-18T12:00:00Z INFO started\n2026-10-18T12:00:01Z INFO ready — ok\n'
+
+    const { saveId, target: savedTo } = await core.saveLogCopy(text, target)
+
+    expect(savedTo).toBe(target)
+    expect(await outcome(saveId)).toEqual({ saveId, state: 'saved', savedBytes: Buffer.byteLength(text) })
+    expect(await readFile(target, 'utf8')).toBe(text)
+    expect(await readdir(saves)).toEqual(['app.log'])
+  })
+
+  it('saves an empty log as an empty file', async () => {
+    const { saveId } = await core.saveLogCopy('', join(saves, 'empty.log'))
+
+    expect(await outcome(saveId)).toMatchObject({ state: 'saved', savedBytes: 0 })
+    expect(await readFile(join(saves, 'empty.log'), 'utf8')).toBe('')
+  })
+
+  it('refuses a place to save to that isn’t an absolute path', async () => {
+    await expect(core.saveLogCopy('x', 'app.log')).rejects.toMatchObject({ code: 'INVALID_PATH' })
+  })
+})
