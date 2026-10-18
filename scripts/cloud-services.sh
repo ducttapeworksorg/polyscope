@@ -8,10 +8,11 @@
 # The cloud environment's setup script installs the tools (Node 24, RustFS, kind, kubectl, sshd); this only starts
 # them, since a cached environment keeps files, not running processes.
 #
-# `cloud-services.sh` starts everything in the foreground, ending with $dir/done, and $dir/failed naming the services
-# that didn't start, if any did. `cloud-services.sh --session-start` is the SessionStart hook in .claude/settings.json:
-# outside a cloud session it does nothing; in one it has Claude's shell commands read $dir/env, and starts everything in
-# the background, logging to $dir/log, unless it's already running or done since the VM last started.
+# `cloud-services.sh` starts everything in the foreground, ending with $dir/done, $dir/failed naming the services that
+# didn't start, if any, and $dir/skipped naming those this machine can't run, and why (the journal, without systemd).
+# `cloud-services.sh --session-start` is the SessionStart hook in .claude/settings.json: outside a cloud session it does
+# nothing; in one it has Claude's shell commands read $dir/env, and starts everything in the background, logging to
+# $dir/log, unless it's already running or done since the VM last started.
 set -u
 
 dir=/tmp/polyscope-cloud
@@ -33,7 +34,8 @@ if [ "${1:-}" = --session-start ]; then
   # A VM restored after being idle keeps the files but not the processes: the engine stopped tells which.
   if [ -f "$dir/done" ] && docker info > /dev/null 2>&1; then
     echo "The integration test backends were started (scripts/cloud-services.sh, logged to $dir/log); their settings" \
-      "are in $env.$( [ -f "$dir/failed" ] && echo " These didn't start: $(cat "$dir/failed").")"
+      "are in $env.$( [ -f "$dir/failed" ] && echo " These didn't start: $(cat "$dir/failed").")$(
+        [ -f "$dir/skipped" ] && echo " These can't run here, so their tests skip: $(paste -sd';' "$dir/skipped").")"
     exit 0
   fi
   mkdir -p "$dir"
@@ -41,18 +43,26 @@ if [ "${1:-}" = --session-start ]; then
   echo $! > "$dir/pid"
   echo "The integration test backends are starting in the background (scripts/cloud-services.sh, logging to" \
     "$dir/log), which takes a few minutes. $dir/done appears when it's finished, with $dir/failed naming any" \
-    "that didn't start. Until then the integration tests skip the services that aren't up yet."
+    "that didn't start, and $dir/skipped any this machine can't run (their tests skip, as expected). Until then the" \
+    "integration tests skip the services that aren't up yet."
   exit 0
 fi
 
 PATH="/opt/node24/bin:$PATH"
 
 # Started afresh: the settings of a run before are dropped, so none points at a service that's gone.
-rm -f "$env" "$dir/done" "$dir/failed"
+rm -f "$env" "$dir/done" "$dir/failed" "$dir/skipped"
 mkdir -p "$dir"
 : > "$env"
 
 put() { printf "export %s='%s'\n" "$1" "$2" >> "$env"; }
+# Ends a step that this machine can't run, saying why in $dir/skipped: not a failure, its tests just skip.
+unavailable=77
+skip() {
+  echo "$1: $2" >> "$dir/skipped"
+  echo "$2"
+  return "$unavailable"
+}
 # Waits up to $1 seconds for the command after it to succeed.
 wait_for() {
   seconds=$1
@@ -145,10 +155,7 @@ docker_logs() {
 }
 
 journal() {
-  if [ "$(cat /proc/1/comm)" != systemd ]; then
-    echo "systemd isn't running this machine, so there's no journal to seed"
-    return 1
-  fi
+  [ "$(cat /proc/1/comm)" = systemd ] || skip journal "systemd isn't running this machine: there's no journal to seed"
   tests/journal/seed.sh > "$dir/journal.env"
   sed 's/^/export /' "$dir/journal.env" >> "$env"
 }
@@ -162,11 +169,17 @@ kubernetes() {
   if [ "$(stat -fc %T /sys/fs/cgroup)" != cgroup2fs ]; then
     printf 'kubeadmConfigPatches:\n  - |\n    kind: KubeletConfiguration\n    failCgroupV1: false\n' >> "$config"
   fi
-  if ! kind create cluster --name polyscope --config "$config" --wait 180s; then
-    # What kubeadm, the kubelet and the control plane said, to see why.
-    kind export logs --name polyscope "$dir/kind-logs" || true
-    return 1
+  # Kubernetes lowers its pods' OOM score (the pause container's to -998), which takes CAP_SYS_RESOURCE; a host that
+  # withholds it fails every pod sandbox, the control plane's too, unless containerd is told not to go below its own.
+  if ! sh -c 'echo -998 > /proc/self/oom_score_adj' 2> /dev/null; then
+    printf '%s\n' 'containerdConfigPatches:' '  - |-' '    [plugins."io.containerd.cri.v1.runtime"]' \
+      '      restrict_oom_score_adj = true' >> "$config"
   fi
+  # What kubeadm, the kubelet and the control plane said, kept when anything here fails, to see why: --retain keeps a
+  # cluster that didn't start, which kind would otherwise remove.
+  rm -rf "$dir/kind-logs"
+  trap 'status=$?; [ "$status" -eq 0 ] || kind export logs --name polyscope "$dir/kind-logs" > /dev/null 2>&1' EXIT
+  kind create cluster --name polyscope --config "$config" --retain --wait 180s
   # The seed's images, given to the cluster from the engine, so its pods never pull through the session's proxy.
   for image in busybox:1.36 debian:bookworm-slim registry.k8s.io/pause:3.10; do
     docker image inspect "$image" > /dev/null 2>&1 || docker pull "$image"
@@ -198,14 +211,20 @@ kubernetes() {
   put POLYSCOPE_TEST_KUBE_FILES_NAMESPACE polyscope-files
 }
 
-# Runs each step under set -e on its own, so one that fails is named in $dir/failed and the rest still start. Never
-# call it as an if's condition: that turns set -e off in the step too.
+# Runs each step under set -e on its own, so one that fails is named in $dir/failed and the rest still start; one this
+# machine can't run is named in $dir/skipped instead. Never call it as an if's condition: that turns set -e off in the
+# step too.
 failed=
 step() {
   echo "== $1"
   ( set -e; "$1" )
   status=$?
-  [ "$status" -eq 0 ] || { echo "== $1 failed ($status)"; failed="$failed $1"; }
+  if [ "$status" -eq "$unavailable" ]; then
+    echo "== $1 skipped"
+  elif [ "$status" -ne 0 ]; then
+    echo "== $1 failed ($status)"
+    failed="$failed $1"
+  fi
 }
 
 # sshd wants its privilege separation folder; the tests' scripts would sudo for it, and a session is root already.
@@ -227,5 +246,6 @@ esac
 
 [ -z "$failed" ] || echo "${failed# }" > "$dir/failed"
 touch "$dir/done"
-echo "== done${failed:+, these didn't start:$failed}"
+skipped=$( [ -f "$dir/skipped" ] && cut -d: -f1 "$dir/skipped" | paste -sd' ')
+echo "== done${failed:+, these didn't start:$failed}${skipped:+, skipped: $skipped}"
 rm -f "$dir/pid"
