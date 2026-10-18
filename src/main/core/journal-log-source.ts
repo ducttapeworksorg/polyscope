@@ -259,12 +259,16 @@ function statesFromPlain(text: string): Map<string, UnitState> {
 /** What `journalctl` is asked for to read a unit's journal: its entries as JSON, with only what makes a log line. */
 const unitJournal = (unit: string) => ['--output=json', '--output-fields=MESSAGE,PRIORITY', `--unit=${unit}`]
 
+/** What `journalctl` is asked for to read from a time, if given: to the second, as `--since` takes no fraction of one. */
+const sinceArgs = (sinceTime: string | undefined) => (sinceTime === undefined ? [] : [`--since=@${Math.floor(Date.parse(sinceTime) / 1000)}`])
+
 const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 
 /**
  * The system units on a machine that have journal entries of their own, as a Log Source of one flat list of Log Streams,
  * each unit's path its name, e.g. `nginx.service`, failed units first. Each tells its active state as its status.
  * The journal is one log across a unit's restarts, so it has no restarts and no Previous Log; a Follow goes on across them.
+ * A unit's journal can be read from a time on (Since), from the start of its second.
  */
 export function createJournalLogSource(host: JournalHost): LogSource {
   const journalctl = async (args: string[], onLine: (line: string) => boolean | void) =>
@@ -314,7 +318,7 @@ export function createJournalLogSource(host: JournalHost): LogSource {
   }
 
   return {
-    capabilities: { previousLog: false, restarts: false, status: true, since: false },
+    capabilities: { previousLog: false, restarts: false, status: true, since: true },
 
     async listChildren(path) {
       if (path) {
@@ -336,11 +340,12 @@ export function createJournalLogSource(host: JournalHost): LogSource {
       return { name: await unitAt(path) }
     },
 
-    async readLog(path, { tailLines, limitBytes = Infinity, timestamps = false }: LogReadOptions = {}) {
+    async readLog(path, { tailLines, limitBytes = Infinity, timestamps = false, sinceTime }: LogReadOptions = {}) {
       const unit = await unitAt(path)
       let text = ''
       let bytes = 0
-      await journalctl([...unitJournal(unit), ...(tailLines === undefined ? [] : [`--lines=${tailLines}`])], (line) => {
+      // With both, journalctl gives the last lines of those since the time.
+      await journalctl([...unitJournal(unit), ...(tailLines === undefined ? [] : [`--lines=${tailLines}`]), ...sinceArgs(sinceTime)], (line) => {
         const lines = linesOf(line, timestamps)
         text += lines
         bytes += Buffer.byteLength(lines)
@@ -351,9 +356,7 @@ export function createJournalLogSource(host: JournalHost): LogSource {
 
     async followLog(path, { sinceTime }: LogFollowOptions, onText): Promise<LogConnection> {
       const unit = await unitAt(path)
-      // To the second: `--since` takes no fraction of one.
-      const since = sinceTime === undefined ? [] : [`--since=@${Math.floor(Date.parse(sinceTime) / 1000)}`]
-      const running = host.start('journalctl', ['--no-pager', ...unitJournal(unit), '--follow', '--lines=all', ...since])
+      const running = host.start('journalctl', ['--no-pager', ...unitJournal(unit), '--follow', '--lines=all', ...sinceArgs(sinceTime)])
       let stopped = false
       const lines = lineSplitter((line) => {
         const text = linesOf(line, true)

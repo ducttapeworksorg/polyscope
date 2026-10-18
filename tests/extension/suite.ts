@@ -990,6 +990,9 @@ const firstRun: [string, () => Promise<void>][] = [
         try {
           assert.equal(await secrets.get(source.id, 'password'), password)
           assert.deepEqual((await core.connect(source.id)).map(nameOf), ['backup.service', 'nginx.service'])
+          // Its log says it offers Since, so the viewer tab's toolbar, the app's own, shows the control.
+          const since = await core.openLog(source.id, 'nginx.service', { since: '2026-10-13T10:00:02Z' })
+          assert.deepEqual([since.offersSince, since.content], [true, 'GET /\nERROR upstream timed out'])
 
           await open({ kind: 'log', sourceId: source.id, path: 'nginx.service', name: 'nginx.service', pinned: true })
           const tab = await eventually(() => activeViewerTab('nginx.service'))

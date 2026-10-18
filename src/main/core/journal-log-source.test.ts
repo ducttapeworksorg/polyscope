@@ -1,13 +1,41 @@
 import { readFile } from 'node:fs/promises'
-import { afterAll, describe } from 'vitest'
+import { afterAll, beforeAll, describe } from 'vitest'
 import { createJournalLogSource, journalHostOver, thisMachine } from './journal-log-source'
+import { standInCounter, standInJournal } from './journal-test-host'
 import { hasTestJournal, testCounter } from './journal-test-seed'
 import { describeLogSourceContract } from './log-source-contract'
 import { connectSsh, fingerprintOf, type SshConnection } from './ssh-connection'
-import { sshdTarget } from './ssh-test-server'
+import { sshdTarget, startTestSshServer, type TestSshServer } from './ssh-test-server'
+
+const capabilities = { previousLog: false, restarts: false, status: true, since: true }
+
+// A host's journal as stand-in commands answer for it, run by the in-process SSH server.
+describe('systemd Journal against stand-in commands over the in-process SSH server', () => {
+  let server: TestSshServer
+  let connection: SshConnection
+
+  beforeAll(async () => {
+    server = await startTestSshServer({ exec: standInJournal({ counter: true }).exec })
+    const hostKey = Buffer.from(server.hostKey.trim().split(/\s+/)[1]!, 'base64')
+    connection = await connectSsh(
+      { host: server.host, port: server.port, user: server.user, privateKey: server.clientKey },
+      { checkHostKey: (key) => (key.fingerprint === fingerprintOf(hostKey) ? 'trusted' : 'changed') }
+    )
+  })
+
+  afterAll(async () => {
+    connection.close()
+    await server.close()
+  })
+
+  describeLogSourceContract('systemd Journal over SSH', capabilities, async () => ({
+    logSource: createJournalLogSource(journalHostOver(connection, server.host)),
+    counter: standInCounter
+  }))
+})
 
 describe.skipIf(!hasTestJournal)('systemd Journal against this machine’s journal', () => {
-  describeLogSourceContract('systemd Journal', { previousLog: false, restarts: false, status: true, since: false }, async () => ({
+  describeLogSourceContract('systemd Journal', capabilities, async () => ({
     logSource: createJournalLogSource(thisMachine),
     counter: testCounter
   }))
@@ -19,7 +47,7 @@ describe.skipIf(!hasTestJournal || !sshdTarget)('systemd Journal against this ma
   const connections: SshConnection[] = []
   afterAll(() => connections.forEach((connection) => connection.close()))
 
-  describeLogSourceContract('systemd Journal over SSH', { previousLog: false, restarts: false, status: true, since: false }, async () => {
+  describeLogSourceContract('systemd Journal over SSH', capabilities, async () => {
     const hostKey = Buffer.from((await readFile(sshd.hostKeyFile, 'utf8')).trim().split(/\s+/)[1]!, 'base64')
     const connection = await connectSsh(
       { host: sshd.host, port: sshd.port, user: sshd.user, privateKey: await readFile(sshd.keyFile) },
