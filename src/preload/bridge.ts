@@ -22,6 +22,11 @@ export interface PolyscopeBridge {
    * can't be saved yet: an Extension Copy.
    */
   saveCopy?(sourceId: string, path: SourcePath): Promise<CoreResult<SaveCopyStarted | null>>
+  /**
+   * "Save a copy…" of a log: asks where to save `text`, the lines its view shows, suggesting `name`, then starts saving
+   * it there as saveCopy does. Left out where logs can't be saved yet: an Extension Copy.
+   */
+  saveLogCopy?(name: string, text: string): Promise<CoreResult<SaveCopyStarted | null>>
   /** This copy's version, e.g. `0.1.0`. */
   appVersion(): Promise<string>
   getUpdateStatus(): Promise<UpdateStatus>

@@ -13,6 +13,7 @@ const bridge: PolyscopeBridge = {
   copyDiagnostics: () => ipcRenderer.invoke('diagnostics:copy'),
   copyText: (text) => ipcRenderer.invoke('shell:copyText', text),
   saveCopy: (sourceId, path) => ipcRenderer.invoke('shell:saveCopy', sourceId, path),
+  saveLogCopy: (name, text) => ipcRenderer.invoke('shell:saveLogCopy', name, text),
   appVersion: () => ipcRenderer.invoke('updates:appVersion'),
   getUpdateStatus: () => ipcRenderer.invoke('updates:status'),
   checkForUpdates: () => ipcRenderer.invoke('updates:check'),

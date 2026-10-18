@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, type RefObject } from 'react'
 import type { LastNLines } from '@shared/core-api'
 import type { FollowFeed } from '../follow-feed'
 import { t } from '../i18n'
@@ -30,7 +30,12 @@ interface Props {
   onDroppedLines(key: string): void
   /** Whether the editor shows a minimap beside the text. */
   minimap: boolean
+  /** Set to a function reading the lines the editor shows for a tab, so its log can be saved as shown. */
+  shownLinesRef?: RefObject<ShownLines | null>
 }
+
+/** The lines a tab's editor holds, as they're shown, by tab; null for a tab it holds none of. */
+export type ShownLines = (key: string) => string[] | null
 
 /**
  * What the editor shows for a tab, or null when it shows something else: a binary file, a log too large to show or
@@ -82,7 +87,7 @@ function appendLines(model: monaco.editor.ITextModel, lines: string[], cap: Last
  * One read-only Monaco editor; each tab keeps its own model and scroll/cursor state. Binary files, logs
  * too large to show whole, and logs that couldn't be read get a placeholder.
  */
-export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileThreshold, openAnywayLimit, onOpenAnyway, onSaveCopy, followFeed, onLineCount, onDroppedLines, minimap }: Props) {
+export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileThreshold, openAnywayLimit, onOpenAnyway, onSaveCopy, followFeed, onLineCount, onDroppedLines, minimap, shownLinesRef }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const modelsRef = useRef(new Map<string, TabModel>())
@@ -110,7 +115,14 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
     // Monaco measures glyphs once; re-measure after the bundled mono face finishes loading.
     void document.fonts.load(`13px ${editorFontFamily}`).then(() => monaco.editor.remeasureFonts())
     const models = modelsRef.current
+    if (shownLinesRef) {
+      shownLinesRef.current = (key) => {
+        const model = models.get(key)?.model
+        return model && !model.isDisposed() ? model.getLinesContent() : null
+      }
+    }
     return () => {
+      if (shownLinesRef) shownLinesRef.current = null
       editor.dispose()
       for (const { model, detach } of models.values()) {
         detach?.()

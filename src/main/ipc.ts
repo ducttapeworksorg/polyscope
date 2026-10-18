@@ -24,22 +24,40 @@ export function forwardCoreEvents(core: CoreEvents, getWindow: () => BrowserWind
   core.onSaveCopyEvent((event) => getWindow()?.webContents.send('core:saveCopyEvent', event))
 }
 
+/** A name to suggest saving as, from one the renderer or a Source gave: with nothing in it read as a folder here. */
+const suggestedName = (name: string) => {
+  const own = name.slice(name.lastIndexOf('/') + 1).replace(/[\\/]/g, '_')
+  return own === '.' || own === '..' ? '' : own
+}
+
 /**
  * "Save a copy…": asks where to save a Source's file, suggesting its name in the Downloads folder, then has the core
- * save it there. The renderer names the file to save, never where it goes: only the dialog the user answers does.
+ * save it there; likewise a log view's lines, under the name the renderer suggests. The renderer names what to save,
+ * never where it goes: only the dialog the user answers does.
  */
 export function registerSaveCopyIpc(core: CoreSaves, log: AppLog, getWindow: () => BrowserWindow | null): void {
-  ipcMain.handle('shell:saveCopy', async (_event, sourceId: unknown, path: unknown): Promise<CoreResult<SaveCopyStarted | null>> => {
-    if (typeof sourceId !== 'string' || typeof path !== 'string') return { ok: false, code: 'UNKNOWN', message: 'Not a file to save' }
-    // Only its name, with nothing in it read as a folder here: the Source mustn't pick where it's suggested.
-    const name = path.slice(path.lastIndexOf('/') + 1).replace(/[\\/]/g, '_')
+  /** Asks where to save, suggesting `name` in the Downloads folder; null if no place was picked. */
+  const askWhere = async (name: string) => {
     const downloads = app.getPath('downloads')
     const window = getWindow()
-    const options: SaveDialogOptions = { defaultPath: name && name !== '.' && name !== '..' ? join(downloads, name) : downloads }
+    const options: SaveDialogOptions = { defaultPath: name ? join(downloads, name) : downloads }
     const result = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options)
-    if (result.canceled || !result.filePath) return { ok: true, value: null }
-    const target = result.filePath
+    return result.canceled || !result.filePath ? null : result.filePath
+  }
+
+  ipcMain.handle('shell:saveCopy', async (_event, sourceId: unknown, path: unknown): Promise<CoreResult<SaveCopyStarted | null>> => {
+    if (typeof sourceId !== 'string' || typeof path !== 'string') return { ok: false, code: 'UNKNOWN', message: 'Not a file to save' }
+    // Only its name: the Source mustn't pick where it's suggested.
+    const target = await askWhere(suggestedName(path))
+    if (!target) return { ok: true, value: null }
     return resultOf(log, 'saveCopy', () => core.saveCopy(sourceId, path, target))
+  })
+
+  ipcMain.handle('shell:saveLogCopy', async (_event, name: unknown, text: unknown): Promise<CoreResult<SaveCopyStarted | null>> => {
+    if (typeof name !== 'string' || typeof text !== 'string') return { ok: false, code: 'UNKNOWN', message: 'Not a log to save' }
+    const target = await askWhere(suggestedName(name))
+    if (!target) return { ok: true, value: null }
+    return resultOf(log, 'saveLogCopy', () => core.saveLogCopy(text, target))
   })
 }
 

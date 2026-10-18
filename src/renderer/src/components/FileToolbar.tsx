@@ -9,10 +9,10 @@ interface Props {
   onSaveCopy?(): void
 }
 
-/** "Save a copy…", in a file's toolbar. */
-export function SaveCopyButton({ onSaveCopy }: { onSaveCopy(): void }) {
+/** "Save a copy…", in a file's or a log's toolbar. */
+export function SaveCopyButton({ tooltip = t('saveCopy.tooltip'), disabled, onSaveCopy }: { tooltip?: string; disabled?: boolean; onSaveCopy(): void }) {
   return (
-    <button type="button" className="log-toolbar__toggle" title={t('saveCopy.tooltip')} onClick={onSaveCopy}>
+    <button type="button" className="log-toolbar__toggle" title={tooltip} disabled={disabled} onClick={onSaveCopy}>
       {t('saveCopy.action')}
     </button>
   )
