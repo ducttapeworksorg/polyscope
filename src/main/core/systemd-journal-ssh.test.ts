@@ -254,6 +254,30 @@ describe('a systemd Journal Source on a host over SSH', () => {
     await vi.waitFor(() => expect(server.connectionCount()).toBe(0))
   })
 
+  it('shows only the lines logged since a time, from the start of its second, at most the last N of them', async () => {
+    const { core, source } = await connected()
+    const since = async (time: string, lastNLines: number | 'all' = 'all') => (await core.openLog(source.id, 'nginx.service', { since: time, lastNLines })).content
+
+    expect((await core.openLog(source.id, 'nginx.service', { since: '2999-01-01T00:00:00Z' })).offersSince).toBe(true)
+    expect(await since('2999-01-01T00:00:00Z')).toBe('')
+    expect(await since('2026-10-13T10:00:02Z')).toBe('GET /\nERROR upstream timed out')
+    expect(await since('2026-10-13T10:00:02.500Z')).toBe('GET /\nERROR upstream timed out')
+    expect(await since('2000-01-01T00:00:00Z', 1)).toBe('ERROR upstream timed out')
+  })
+
+  it('follows on from the lines since a time, repeating none of them', async () => {
+    const { core, source, journal } = await connected()
+    const events: FollowEvent[] = []
+    core.onFollowEvent((event) => events.push(event))
+
+    const followed = await core.followLog(source.id, 'nginx.service', { since: '2026-10-13T10:00:02Z' })
+    await vi.waitFor(() => expect(journal.following('nginx.service')).toBe(true))
+    journal.log('nginx.service', 10, 'GET /health')
+
+    expect(followed.content).toBe('GET /\nERROR upstream timed out')
+    await vi.waitFor(() => expect(updatesOf(events, followed.followId)).toEqual(['GET /health']))
+  })
+
   it('stops a unit’s journalctl when its Follow is stopped', async () => {
     const { core, source, journal } = await connected()
     const followed = await core.followLog(source.id, 'nginx.service', { lastNLines: 1 })

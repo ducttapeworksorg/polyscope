@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FollowEvent, NewSystemdJournalSource, TreeNode } from '@shared/core-api'
 import { createCore, type Core } from './core'
-import { hasTestJournal, restartTestRestarter, testCounter, testFailer, testLevels, testRestarter, testSilent } from './journal-test-seed'
+import { counterLines, hasTestJournal, restartTestRestarter, testCounter, testFailer, testLevels, testRestarter, testSilent } from './journal-test-seed'
 import { sshdTarget } from './ssh-test-server'
 
 const settings = (changes: Partial<NewSystemdJournalSource> = {}): NewSystemdJournalSource => ({ type: 'systemdJournal', name: 'Laptop', ...changes })
@@ -154,6 +154,34 @@ describe.skipIf(!hasTestJournal)('a systemd Journal Source on this machine’s j
     expect(content).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z line 100$/)
   })
 
+  it('shows only the lines logged since a time, at most the last N of them', async () => {
+    const since = async (time: string, lastNLines: number | 'all') => (await core.openLog(sourceId, testCounter, { since: time, lastNLines })).content
+
+    expect((await core.openLog(sourceId, testCounter, { since: '2999-01-01T00:00:00Z' })).offersSince).toBe(true)
+    expect(await since('2999-01-01T00:00:00Z', 'all')).toBe('')
+    expect(await since('2000-01-01T00:00:00Z', 'all')).toBe(counterLines.join('\n'))
+    expect(await since('2000-01-01T00:00:00Z', 3)).toBe('line 98\nline 99\nline 100')
+  })
+
+  it('follows on from the lines since a time, repeating none of them', { timeout: 15_000 }, async () => {
+    // Since when the restarter's current run logged.
+    const [stamped] = (await core.openLog(sourceId, testRestarter, { lastNLines: 1, timestamps: true })).content.split('\n')
+    const updates = followUpdates(core)
+    const followed = await core.followLog(sourceId, testRestarter, { lastNLines: 1_000, since: stamped!.slice(0, stamped!.indexOf(' ')) })
+    const run = stamped!.slice(stamped!.indexOf(' ') + 1)
+    // From the start of its second, which may hold systemd's own line starting the run.
+    expect(followed.content.split('\n').filter((line) => /^run \d+$/.test(line))).toEqual([run])
+
+    await restartTestRestarter()
+    await vi.waitFor(() => expect(updates.of(followed.followId)).toContainEqual(expect.stringMatching(/^run \d+$/)), { timeout: 10_000 })
+    // systemd's own lines about the restart come too; of the runs', only the new run's.
+    const runs = updates.of(followed.followId).filter((line) => /^run \d+$/.test(line))
+    expect(runs).toHaveLength(1)
+    expect(runs).not.toContain(run)
+    await core.stopFollow(followed.followId)
+    updates.unsubscribe()
+  })
+
   it('shows journal priorities as log levels', async () => {
     const { content } = await core.openLog(sourceId, testLevels, { lastNLines: 'all' })
 
@@ -233,6 +261,9 @@ describe.skipIf(!hasTestJournal || !sshdTarget)('a systemd Journal Source on a h
     expect(root).toContainEqual(expect.objectContaining({ name: testCounter, status: { reason: 'active', health: 'healthy', restarts: 0 } }))
     expect(root.find((node) => 'name' in node && node.name === testFailer)).toMatchObject({ status: { health: 'failing' } })
     expect(await core.openLog(id, testCounter, { lastNLines: 2 })).toMatchObject({ content: 'line 99\nline 100' })
+    expect((await core.openLog(id, testCounter, { since: '2999-01-01T00:00:00Z' })).content).toBe('')
+    expect((await core.openLog(id, testCounter, { since: '2000-01-01T00:00:00Z', lastNLines: 'all' })).content).toBe(counterLines.join('\n'))
+    expect((await core.openLog(id, testCounter, { since: '2000-01-01T00:00:00Z', lastNLines: 3 })).content).toBe('line 98\nline 99\nline 100')
 
     const updates = followUpdates(core)
     const followed = await core.followLog(id, testRestarter, { lastNLines: 1 })

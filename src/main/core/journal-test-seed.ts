@@ -10,6 +10,9 @@ import { promisify } from 'node:util'
  */
 export const testCounter = process.env['POLYSCOPE_TEST_JOURNAL_COUNTER'] ?? ''
 
+/** What the seed's counter logs, one line each: `line 1` to `line 100`. */
+export const counterLines = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`)
+
 /** Whether the journal was seeded; the tests against it are skipped without it. */
 export const hasTestJournal = process.platform === 'linux' && testCounter !== ''
 
