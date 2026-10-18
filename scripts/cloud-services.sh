@@ -185,10 +185,17 @@ kubernetes() {
   trap 'status=$?; [ "$status" -eq 0 ] || kind export logs --name polyscope "$dir/kind-logs" > /dev/null 2>&1' EXIT
   kind create cluster --name polyscope --config "$config" --retain --wait 180s
   # The seed's images, given to the cluster from the engine, so its pods never pull through the session's proxy.
-  for image in busybox:1.36 debian:bookworm-slim registry.k8s.io/pause:3.10; do
-    docker image inspect "$image" > /dev/null 2>&1 || docker pull "$image"
+  # An engine keeping its images in containerd saves a multi-platform image's index with only this platform's layers,
+  # which the node's import of every platform refuses (content digest not found): saved for this platform alone, it
+  # takes them. An engine too old for save --platform keeps its own, whole.
+  images="busybox:1.36 debian:bookworm-slim registry.k8s.io/pause:3.10"
+  platform="linux/$(dpkg --print-architecture)"
+  for image in $images; do
+    docker image inspect "$image" > /dev/null 2>&1 || docker pull --platform "$platform" "$image"
   done
-  kind load docker-image --name polyscope busybox:1.36 debian:bookworm-slim registry.k8s.io/pause:3.10
+  # shellcheck disable=SC2086 # $images is a list.
+  docker save --platform "$platform" -o "$dir/kind-images.tar" $images || docker save -o "$dir/kind-images.tar" $images
+  kind load image-archive --name polyscope "$dir/kind-images.tar"
   # A bare pod isn't retried like a Workload's: its namespace's default ServiceAccount has to be there first.
   kubectl create namespace polyscope-test
   kubectl -n polyscope-test wait --for=create serviceaccount/default --timeout=60s
