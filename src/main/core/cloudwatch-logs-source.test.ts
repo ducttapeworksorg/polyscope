@@ -233,10 +233,13 @@ describe('a CloudWatch Logs Source’s endpoint, trust and proxy settings', () =
       const { url } = await endpointWith()
       const front = await startTlsFront(url)
       disposals.push(front.close)
-      return { endpoint: front.url, caBundlePath: front.caPath, host: new URL(front.url).host }
+      const { port } = new URL(front.url)
+      return { endpoint: front.url, caBundlePath: front.caPath, host: `127.0.0.1:${port}`, named: { endpoint: `https://${proxied}:${port}`, host: `${proxied}:${port}` } }
     }
+    // Only the test proxies know this name, so whatever reaches the endpoint by it went through one of them.
+    const proxied = 'logs.polyscope.test'
     const proxy = async () => {
-      const started = await startProxy()
+      const started = await startProxy({ hosts: { [proxied]: '127.0.0.1' } })
       disposals.push(started.close)
       return started
     }
@@ -270,23 +273,35 @@ describe('a CloudWatch Logs Source’s endpoint, trust and proxy settings', () =
       expect(tunnels).toContain(host)
     })
 
-    it('goes through HTTPS_PROXY without a proxy of its own', async () => {
-      const { url, tunnels } = await proxy()
-      vi.stubEnv('HTTPS_PROXY', url)
-      vi.stubEnv('NO_PROXY', undefined)
-      const { endpoint, caBundlePath, host } = await behindTls()
+    it('goes through HTTPS_PROXY without a proxy of its own, over https_proxy', async () => {
+      const upper = await proxy()
+      const lower = await proxy()
+      vi.stubEnv('HTTPS_PROXY', upper.url)
+      vi.stubEnv('https_proxy', lower.url)
+      const { named, caBundlePath } = await behindTls()
 
-      expect(await connects({ endpoint, caBundlePath })).toEqual(listed)
-      expect(tunnels).toContain(host)
+      expect(await connects({ endpoint: named.endpoint, caBundlePath })).toEqual(listed)
+      expect(upper.tunnels).toContain(named.host)
+      expect(lower.tunnels).toEqual([])
     })
 
     it('goes straight to hosts NO_PROXY lists', async () => {
       const { url, tunnels } = await proxy()
       vi.stubEnv('HTTPS_PROXY', url)
-      vi.stubEnv('NO_PROXY', '127.0.0.1')
+      vi.stubEnv('NO_PROXY', '127.0.0.0/8')
       const { endpoint, caBundlePath } = await behindTls()
 
       expect(await connects({ endpoint, caBundlePath })).toEqual(listed)
+      expect(tunnels).toEqual([])
+    })
+
+    it('ignores ALL_PROXY', async () => {
+      const { url, tunnels } = await proxy()
+      vi.stubEnv('ALL_PROXY', url)
+      vi.stubEnv('all_proxy', url)
+      const { named, caBundlePath } = await behindTls()
+
+      await expect(createCore().testConnection(settings({ endpoint: named.endpoint, caBundlePath }))).rejects.toMatchObject({ code: 'UNREACHABLE' })
       expect(tunnels).toEqual([])
     })
   })

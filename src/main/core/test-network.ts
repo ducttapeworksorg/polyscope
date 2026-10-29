@@ -4,7 +4,7 @@
 
 import { webcrypto } from 'node:crypto'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { createServer as createHttpServer, type Server as HttpServer } from 'node:http'
+import { createServer as createHttpServer, request as httpRequest, type Server as HttpServer } from 'node:http'
 import { connect, isIP, type Server, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -32,8 +32,8 @@ const caExtensions = () => [
 ]
 
 /**
- * A private root CA, an issuing CA it signed, and a certificate that one signed for 127.0.0.1 and localhost, as PEM:
- * the chain a company's own CA gives its servers.
+ * A private root CA, an issuing CA it signed, and a certificate that one signed for 127.0.0.1, localhost and
+ * *.polyscope.test (names only a test proxy knows), as PEM: the chain a company's own CA gives its servers.
  */
 async function createCertificates() {
   const notBefore = new Date(Date.now() - 60 * 60_000)
@@ -70,6 +70,7 @@ async function createCertificates() {
       extensions: [
         new SubjectAlternativeNameExtension([
           { type: 'dns', value: 'localhost' },
+          { type: 'dns', value: '*.polyscope.test' },
           { type: 'ip', value: '127.0.0.1' }
         ]),
         new BasicConstraintsExtension(false),
@@ -190,12 +191,27 @@ export async function startMutualTlsFront(socketPath: string) {
 }
 
 /**
- * An HTTP proxy that tunnels with CONNECT; `tunnels` holds the `host:port` of each tunnel asked for. It
- * looks names up in `hosts` first, so it can reach servers by names that only it knows.
+ * An HTTP proxy that tunnels with CONNECT, and forwards plain http requests asked for by their full URL; `tunnels` holds
+ * the `host:port` of each tunnel asked for, and `forwards` the URL of each request forwarded. It looks names up in
+ * `hosts` first, so it can reach servers by names that only it knows.
  */
 export async function startProxy({ hosts = {} }: { hosts?: Record<string, string> } = {}) {
   const tunnels: string[] = []
-  const server = createHttpServer((_request, response) => response.writeHead(405).end())
+  const forwards: string[] = []
+  const server = createHttpServer((request, response) => {
+    if (!request.url?.startsWith('http://')) return response.writeHead(405).end()
+    forwards.push(request.url)
+    const { hostname, port, pathname, search } = new URL(request.url)
+    const upstream = httpRequest(
+      { host: hosts[hostname] ?? hostname, port: port || 80, path: `${pathname}${search}`, method: request.method, headers: request.headers },
+      (answer) => {
+        response.writeHead(answer.statusCode ?? 502, answer.headers)
+        answer.pipe(response)
+      }
+    )
+    upstream.on('error', () => response.writeHead(502).end())
+    request.pipe(upstream)
+  })
   server.on('connect', (request, client: Socket, head: Buffer) => {
     const target = request.url ?? ''
     tunnels.push(target)
@@ -208,13 +224,13 @@ export async function startProxy({ hosts = {} }: { hosts?: Record<string, string
     upstream.on('error', () => client.destroy())
   })
   const listening = await listen(server)
-  return { url: `http://127.0.0.1:${listening.port}`, tunnels, close: listening.close }
+  return { url: `http://127.0.0.1:${listening.port}`, tunnels, forwards, close: listening.close }
 }
 
 /**
- * Keeps the proxy settings of wherever the tests run out of the way, so a test sees only those it sets. Both spellings:
- * Node's agents take the lowercase ones over the uppercase when both are set, kubectl the other way round. ALL_PROXY
- * too, which the Azure SDK reaches for on the requests it makes without Polyscope's agents (Azure CLI sign-in's).
+ * Keeps the proxy settings of wherever the tests run out of the way, so a test sees only those it sets. Both spellings,
+ * as either is read when the other is unset. ALL_PROXY too, which the Azure SDK reaches for on the requests it makes
+ * without Polyscope's agents (Azure CLI sign-in's).
  */
 export const ignoreAmbientProxy = () => {
   const names = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']

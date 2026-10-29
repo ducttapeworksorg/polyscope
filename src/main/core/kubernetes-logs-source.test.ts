@@ -322,6 +322,25 @@ describe('a cluster behind a proxy', () => {
     await reachesTheCluster()
   })
 
+  it('is reached through HTTPS_PROXY over https_proxy', async () => {
+    await kubeconfigFiles(fakeCluster())
+    vi.stubEnv('HTTPS_PROXY', proxy.url)
+    vi.stubEnv('https_proxy', `http://127.0.0.1:${await closedPort()}`)
+
+    await reachesTheCluster()
+  })
+
+  it('is not reached through ALL_PROXY', async () => {
+    await kubeconfigFiles(fakeCluster())
+    vi.stubEnv('ALL_PROXY', proxy.url)
+    vi.stubEnv('all_proxy', proxy.url)
+    const core = createCore()
+    const source = await core.addSource(shop)
+
+    await expect(core.connect(source.id)).rejects.toMatchObject({ code: 'UNREACHABLE' })
+    expect(proxy.tunnels).toEqual([])
+  })
+
   it('is not reached through HTTPS_PROXY when NO_PROXY covers it', async () => {
     await kubeconfigFiles(fakeCluster())
     vi.stubEnv('HTTPS_PROXY', proxy.url)

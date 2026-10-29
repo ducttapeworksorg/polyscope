@@ -597,10 +597,20 @@ describe.skipIf(!hasTestAccount)('an Azure Blob Storage Source against the test 
     const behindTls = async () => {
       const front = await startTlsFront(testEndpoint)
       disposals.push(front.close)
-      return { endpoint: `${front.url}${new URL(testEndpoint).pathname}`, caBundlePath: front.caPath, host: new URL(front.url).host }
+      const { pathname } = new URL(testEndpoint)
+      const { port } = new URL(front.url)
+      return {
+        endpoint: `${front.url}${pathname}`,
+        caBundlePath: front.caPath,
+        host: new URL(front.url).host,
+        named: { endpoint: `https://${proxied}:${port}`, host: `${proxied}:${port}` }
+      }
     }
+    // Only the test proxies know this name, so whatever reaches the account by it went through one of them. It starts
+    // with the account's name, which is where Azure (and Azurite) look for it in a name, rather than in the path.
+    const proxied = `${testAzureBlobSource('Logs', '').account}.polyscope.test`
     const proxy = async () => {
-      const started = await startProxy()
+      const started = await startProxy({ hosts: { [proxied]: '127.0.0.1' } })
       disposals.push(started.close)
       return started
     }
@@ -641,20 +651,32 @@ describe.skipIf(!hasTestAccount)('an Azure Blob Storage Source against the test 
       expect(tunnels).toContain(host)
     })
 
-    it('goes through HTTPS_PROXY without a proxy of its own', async () => {
-      const { url, tunnels } = await proxy()
-      vi.stubEnv('HTTPS_PROXY', url)
-      vi.stubEnv('NO_PROXY', undefined)
-      const { endpoint, caBundlePath, host } = await behindTls()
+    it('goes through HTTPS_PROXY without a proxy of its own, over https_proxy', async () => {
+      const upper = await proxy()
+      const lower = await proxy()
+      vi.stubEnv('HTTPS_PROXY', upper.url)
+      vi.stubEnv('https_proxy', lower.url)
+      const { named, caBundlePath } = await behindTls()
 
-      expect(await connects(await atEndpoint({ endpoint, caBundlePath }))).toEqual(['a.log'])
-      expect(tunnels).toContain(host)
+      expect(await connects(await atEndpoint({ endpoint: named.endpoint, caBundlePath }))).toEqual(['a.log'])
+      expect(upper.tunnels).toContain(named.host)
+      expect(lower.tunnels).toEqual([])
+    })
+
+    it('ignores ALL_PROXY', async () => {
+      const { url, tunnels } = await proxy()
+      vi.stubEnv('ALL_PROXY', url)
+      vi.stubEnv('all_proxy', url)
+      const { named, caBundlePath } = await behindTls()
+
+      await expect(createCore().testConnection(await atEndpoint({ endpoint: named.endpoint, caBundlePath }))).rejects.toMatchObject({ code: 'UNREACHABLE' })
+      expect(tunnels).toEqual([])
     })
 
     it('goes straight to hosts NO_PROXY lists', async () => {
       const { url, tunnels } = await proxy()
       vi.stubEnv('HTTPS_PROXY', url)
-      vi.stubEnv('NO_PROXY', '127.0.0.1')
+      vi.stubEnv('NO_PROXY', '127.0.0.0/8')
       const { endpoint, caBundlePath } = await behindTls()
 
       expect(await connects(await atEndpoint({ endpoint, caBundlePath }))).toEqual(['a.log'])
