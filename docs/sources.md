@@ -16,6 +16,17 @@ Point at a Source's row to see its actions:
 
 Drag a Source to reorder it within its group. Click a group's header to collapse or expand it; a collapsed group still shows how many Sources it holds, and stays collapsed the next time you open Polyscope. The first of the icons at the top right of the sidebar shows or hides file sizes and modified times.
 
+### Proxy environment variables
+
+S3-compatible Storage, Azure Blob Storage and CloudWatch Logs Sources with no **Proxy** of their own, and Kubernetes Sources whose kubeconfig names no `proxy-url`, take the proxy from the environment, the way `kubectl` does:
+
+- `HTTPS_PROXY` for an `https` address, `HTTP_PROXY` for an `http` one. Each is read before its lowercase spelling (`https_proxy`, `http_proxy`), and a blank one counts as unset.
+- `NO_PROXY` (or else `no_proxy`) lists the hosts reached directly, separated by commas: `*` for every host, a domain for it and its subdomains (`corp`), a domain starting with `.` or `*.` for its subdomains only (`.corp`), an address or a range of them (`10.0.0.0/8`), any of them with a port (`kube.corp:6443`).
+- This machine (`localhost`, `127.0.0.0/8`, `::1`) is always reached directly.
+- `ALL_PROXY` is ignored, apart from getting a token for [Azure CLI sign-in](#azure-blob-storage).
+
+The choice is made for each request, by its host and as the variables are then. A Source's own **Proxy** takes every request instead, `NO_PROXY` or not. Docker Logs, SSH Files and the systemd Journal don't use a proxy.
+
 ## Local Filesystem
 
 A folder on this machine or, on Windows, a UNC share (`\\server\share\logs`).
@@ -83,7 +94,7 @@ A bucket on AWS S3, [Google Cloud Storage](#google-cloud-storage), MinIO, Ceph, 
   - **AWS profile**: a profile from your AWS config and credentials files, or the default credential chain. An SSO profile needs you to have run `aws sso login` recently.
 - **CA bundle**: a PEM file of extra CA certificates to trust, for stores with a private CA.
 - **Verify TLS certificates**: turn it off only when you must. The Source shows a **TLS** warning while it's off.
-- **Proxy**: like `http://proxy.corp:3128`. Otherwise `HTTPS_PROXY` and `NO_PROXY` apply.
+- **Proxy**: like `http://proxy.corp:3128`. Otherwise the [proxy environment variables](#proxy-environment-variables) apply.
 
 S3 objects don't grow, so they can't be followed.
 
@@ -134,9 +145,9 @@ A container in an Azure storage account, Data Lake Gen2 ones (with a hierarchica
 - **Storage account** and **Container**, and an optional **Prefix** to browse only the blobs under it, like `logs/app`.
 - **Blob endpoint**, signing in with a SAS token or Azure CLI: for Azure Government (`https://<account>.blob.core.usgovcloudapi.net`), Azure in China (`https://<account>.blob.core.chinacloudapi.cn`) or the Azurite emulator (`https://127.0.0.1:10000/devstoreaccount1`). Leave it blank for Azure's own. A connection string or SAS URL says where its endpoint is itself.
 - **CA bundle**: a PEM file of extra CA certificates to trust, for TLS inspection by a private CA.
-- **Proxy**: like `http://proxy.corp:3128`. Otherwise `HTTPS_PROXY` and `NO_PROXY` apply.
+- **Proxy**: like `http://proxy.corp:3128`. Otherwise the [proxy environment variables](#proxy-environment-variables) apply.
 
-The proxy and CA bundle are for reaching the storage account. Signing in through Azure CLI, getting a token goes through `HTTPS_PROXY` and the CAs Node.js trusts (`NODE_EXTRA_CA_CERTS`), or Azure CLI's own settings, not these.
+The proxy and CA bundle are for reaching the storage account. Signing in through Azure CLI, getting a token goes through the CAs Node.js trusts (`NODE_EXTRA_CA_CERTS`) and the Azure SDK's own reading of the proxy variables, which takes `HTTPS_PROXY`, then `ALL_PROXY`, then `HTTP_PROXY`, or through Azure CLI's own settings, not these.
 
 Gzip and zstd blobs open decompressed, and a blob over the Large File threshold opens end-first, read in ranges. Blobs don't grow, so they can't be followed.
 
@@ -148,7 +159,7 @@ In VS Code, a connection string or SAS is kept in VS Code's SecretStorage, and u
 
 The files in one folder inside the pods of one Workload, read over `exec` the way `kubectl exec … cat` would.
 
-- **Context**: from your kubeconfig. Polyscope reads the one `kubectl` uses (`KUBECONFIG`, or `~/.kube/config`), and auth plugins like `aws` or `kubelogin` work as they do for `kubectl`.
+- **Context**: from your kubeconfig. Polyscope reads the one `kubectl` uses (`KUBECONFIG`, or `~/.kube/config`), and auth plugins like `aws` or `kubelogin` work as they do for `kubectl`. The cluster is reached through the context's `proxy-url`, or else the [proxy environment variables](#proxy-environment-variables).
 - **Namespace**: where the Workload is. It suggests the cluster's namespaces as you type.
 - **Workload**: a Deployment, StatefulSet or DaemonSet in that namespace.
 - **Path**: the absolute path of a folder in the containers, like `/var/log`. It suggests where the Workload's volumes are mounted.
@@ -252,7 +263,7 @@ The log groups of one AWS region in CloudWatch Logs, where Lambda functions, ECS
 - **Log group prefix**: optional. Shows only the log groups whose names start with it, like `/aws/lambda/orders-`.
 - **Endpoint**: optional. For a VPC endpoint (`https://vpce-….logs.eu-west-1.vpce.amazonaws.com`) or GovCloud (`https://logs.us-gov-west-1.amazonaws.com`). Left blank, it's the region's own, or the one `AWS_ENDPOINT_URL_CLOUDWATCH_LOGS` names.
 - **CA bundle**: a PEM file of extra CA certificates to trust, for TLS inspection by a private CA.
-- **Proxy**: like `http://proxy.corp:3128`. Otherwise `HTTPS_PROXY` and `NO_PROXY` apply.
+- **Proxy**: like `http://proxy.corp:3128`. Otherwise the [proxy environment variables](#proxy-environment-variables) apply.
 
 A new Source is named after its region and prefix, like `eu-west-1 /aws/lambda/orders-`. **Test connection** signs in and lists log groups.
 

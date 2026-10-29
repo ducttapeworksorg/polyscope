@@ -2,10 +2,12 @@
 // through a proxy as the Source says, shared by the Source Types that have those settings.
 
 import { readFile } from 'node:fs/promises'
-import { Agent as HttpAgent } from 'node:http'
-import { Agent as HttpsAgent } from 'node:https'
+import { Agent as HttpAgent, type AgentOptions, type ClientRequest, type RequestOptions } from 'node:http'
+import { Agent as HttpsAgent, type AgentOptions as HttpsAgentOptions } from 'node:https'
+import { isIP } from 'node:net'
 import { createSecureContext, getCACertificates, type SecureContext } from 'node:tls'
 import { CoreError } from './core-error'
+import { proxyFromEnv } from './proxy-env'
 
 /** What a Source's trust and proxy settings come to, with its CA bundle read in. */
 export interface NetworkSettings {
@@ -44,13 +46,100 @@ function secureContextFor(caBundle: string | undefined) {
   return context
 }
 
+// Node hands a request to its agent through this, which its types leave out.
+interface RequestQueue {
+  addRequest(request: ClientRequest, options: RequestOptions): void
+}
+
+/**
+ * The proxy the environment gives the host a request is for, as it is now and as kubectl reads it (`proxyFromEnv`):
+ * `''` for none.
+ */
+function proxyFor(protocol: string, options: RequestOptions) {
+  return proxyFromEnv(origin(protocol, options)) ?? ''
+}
+
+/** Where a request goes, as a URL with no path: `https://[::1]:8443`, say. */
+function origin(protocol: string, { hostname, host, port }: RequestOptions) {
+  const name = hostname ?? host ?? 'localhost'
+  return `${protocol}//${isIP(name) === 6 ? `[${name}]` : name}:${port ?? (protocol === 'https:' ? 443 : 80)}`
+}
+
+/** Hands a request to the agent `agents` keeps for `proxy` (`''` for none), which `make` makes when first needed. */
+function queue(agents: Map<string, HttpAgent>, proxy: string, make: (proxyEnv: NodeJS.ProcessEnv) => HttpAgent, request: ClientRequest, options: RequestOptions) {
+  let agent = agents.get(proxy)
+  if (!agent) agents.set(proxy, (agent = make(proxy ? { HTTP_PROXY: proxy, HTTPS_PROXY: proxy } : {})))
+  ;(agent as unknown as RequestQueue).addRequest(request, options)
+}
+
+/**
+ * Readies a plain http request for going through `proxy`, as Node does for a request given an agent with a proxy of
+ * its own: asking for its full URL rather than its path, and signing in to the proxy as its URL says. An https request
+ * needs none of it: its agent asks the proxy for a tunnel.
+ */
+function addressToProxy(request: ClientRequest, options: RequestOptions, proxy: string) {
+  // Its headers are fixed already when it asks to be let send its body (Expect: 100-continue), which nothing here asks.
+  if (request.headersSent) throw new Error(`Can't send a request whose headers are fixed already through ${proxy}`)
+  const { username, password } = new URL(proxy)
+  if (username || password) {
+    const credentials = `${decodeURIComponent(username)}:${decodeURIComponent(password)}`
+    request.setHeader('proxy-authorization', `Basic ${Buffer.from(credentials).toString('base64')}`)
+  }
+  request.setHeader('proxy-connection', request.shouldKeepAlive ? 'keep-alive' : 'close')
+  // The host and port the proxy was chosen for, rather than the Host header, which could name another.
+  request.path = new URL(request.path, origin('http:', options)).href
+}
+
+/** An http agent following the environment's proxy settings for each request. */
+class EnvironmentHttpAgent extends HttpAgent {
+  readonly #agents = new Map<string, HttpAgent>()
+  readonly #options: AgentOptions
+
+  constructor(options: AgentOptions) {
+    super(options)
+    this.#options = options
+  }
+
+  addRequest(request: ClientRequest, options: RequestOptions) {
+    const proxy = proxyFor('http:', options)
+    if (proxy) addressToProxy(request, options, proxy)
+    queue(this.#agents, proxy, (proxyEnv) => new HttpAgent({ ...this.#options, proxyEnv }), request, options)
+  }
+
+  override destroy() {
+    for (const agent of this.#agents.values()) agent.destroy()
+    super.destroy()
+  }
+}
+
+/** An https agent following the environment's proxy settings for each request. */
+class EnvironmentHttpsAgent extends HttpsAgent {
+  readonly #agents = new Map<string, HttpAgent>()
+  readonly #options: HttpsAgentOptions
+
+  constructor(options: HttpsAgentOptions) {
+    super(options)
+    this.#options = options
+  }
+
+  addRequest(request: ClientRequest, options: RequestOptions) {
+    queue(this.#agents, proxyFor('https:', options), (proxyEnv) => new HttpsAgent({ ...this.#options, proxyEnv }), request, options)
+  }
+
+  override destroy() {
+    for (const agent of this.#agents.values()) agent.destroy()
+    super.destroy()
+  }
+}
+
 /** The agents requests go out through: trusting Node's CAs, the OS's and the Source's own, and via its proxy. */
 export function networkAgents({ verifyTls, caBundle, proxyUrl }: NetworkSettings) {
-  // A proxy of the Source's own takes every request; otherwise the environment's settings, as they are now, decide.
-  const proxyEnv = proxyUrl ? { HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl } : { ...process.env }
   const secureContext = secureContextFor(caBundle)
-  return {
-    httpAgent: new HttpAgent({ keepAlive: true, proxyEnv }),
-    httpsAgent: new HttpsAgent({ keepAlive: true, proxyEnv, secureContext, rejectUnauthorized: verifyTls })
+  const https: HttpsAgentOptions = { keepAlive: true, secureContext, rejectUnauthorized: verifyTls }
+  // A proxy of the Source's own takes every request; otherwise the environment's settings decide for each.
+  if (proxyUrl) {
+    const proxyEnv = { HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl }
+    return { httpAgent: new HttpAgent({ keepAlive: true, proxyEnv }), httpsAgent: new HttpsAgent({ ...https, proxyEnv }) }
   }
+  return { httpAgent: new EnvironmentHttpAgent({ keepAlive: true }), httpsAgent: new EnvironmentHttpsAgent(https) }
 }

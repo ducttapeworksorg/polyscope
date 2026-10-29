@@ -501,10 +501,13 @@ describe.skipIf(!hasTestStore)('an S3 Source in a corporate network, against the
   const behindTls = async () => {
     const front = await startTlsFront(testS3Source('', '').host)
     disposals.push(front.close)
-    return { host: front.url, caBundlePath: front.caPath }
+    const { port } = new URL(front.url)
+    return { host: front.url, caBundlePath: front.caPath, named: `https://${proxied}:${port}` }
   }
+  // Only the test proxies know this name, so whatever reaches the store by it went through one of them.
+  const proxied = 'store.polyscope.test'
   const proxy = async () => {
-    const started = await startProxy()
+    const started = await startProxy({ hosts: { [proxied]: '127.0.0.1' } })
     disposals.push(started.close)
     return started
   }
@@ -547,24 +550,38 @@ describe.skipIf(!hasTestStore)('an S3 Source in a corporate network, against the
     expect(tunnels).toContain(new URL(tls.host).host)
   })
 
-  it('goes through HTTPS_PROXY without a proxy of its own', async () => {
-    const { url, tunnels } = await proxy()
-    vi.stubEnv('HTTPS_PROXY', url)
-    vi.stubEnv('NO_PROXY', undefined)
-    const tls = await behindTls()
-    const settings = { ...testS3Source('Bucket', await seeded()), ...tls }
+  it('goes through HTTPS_PROXY without a proxy of its own, over https_proxy', async () => {
+    const upper = await proxy()
+    const lower = await proxy()
+    vi.stubEnv('HTTPS_PROXY', upper.url)
+    vi.stubEnv('https_proxy', lower.url)
+    const { named, caBundlePath } = await behindTls()
+    const settings = { ...testS3Source('Bucket', await seeded()), host: named, caBundlePath }
 
     expect(await connects(settings)).toEqual(['a.log'])
-    expect(tunnels).toContain(new URL(tls.host).host)
+    expect(upper.tunnels).toContain(new URL(named).host)
+    expect(lower.tunnels).toEqual([])
   })
 
   it('goes straight to hosts NO_PROXY lists', async () => {
     const { url, tunnels } = await proxy()
     vi.stubEnv('HTTPS_PROXY', url)
-    vi.stubEnv('NO_PROXY', '127.0.0.1')
-    const settings = { ...testS3Source('Bucket', await seeded()), ...(await behindTls()) }
+    vi.stubEnv('NO_PROXY', '127.0.0.0/8')
+    const { host, caBundlePath } = await behindTls()
+    const settings = { ...testS3Source('Bucket', await seeded()), host, caBundlePath }
 
     expect(await connects(settings)).toEqual(['a.log'])
+    expect(tunnels).toEqual([])
+  })
+
+  it('ignores ALL_PROXY', async () => {
+    const { url, tunnels } = await proxy()
+    vi.stubEnv('ALL_PROXY', url)
+    vi.stubEnv('all_proxy', url)
+    const { named, caBundlePath } = await behindTls()
+    const settings = { ...testS3Source('Bucket', await seeded()), host: named, caBundlePath }
+
+    await expect(createCore().testConnection(settings)).rejects.toMatchObject({ code: 'UNREACHABLE' })
     expect(tunnels).toEqual([])
   })
 
