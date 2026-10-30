@@ -50,7 +50,8 @@ export interface SshConnection {
   sftp(): Promise<SFTPWrapper>
   /**
    * Runs a command on the server, as the user signed in, resolving with its channel: its stdin and stdout, with its
-   * stderr and exit beside them. UNREACHABLE if the connection has closed, or the server won't open another channel.
+   * stderr and exit beside them. Over another connection to the server if this one has no room for it (MaxSessions).
+   * UNREACHABLE if the connection has closed, the server runs no commands for the user, or another connection fails.
    */
   exec(command: string): Promise<ClientChannel>
   /** Whether the connection has closed, by close() or because it dropped. */
@@ -71,11 +72,17 @@ const algorithmsFor: Record<string, string[]> = {
   'ssh-rsa': ['rsa-sha2-512', 'rsa-sha2-256', 'ssh-rsa']
 }
 
+/** Each target's private key once decrypted, so a pool's further connections to its server don't decrypt it again. */
+const decryptedKeys = new WeakMap<object, ParsedKey>()
+
 /**
  * The private key, decrypted with its passphrase if it's encrypted, failing with what's wrong with it. Decrypting is
  * slow (bcrypt, deliberately), so it's done once, here, and ssh2 is handed the key ready to use.
  */
-function privateKeyOf({ privateKey, passphrase }: { privateKey: string | Buffer; passphrase?: string }): ParsedKey {
+function privateKeyOf(target: { privateKey: string | Buffer; passphrase?: string }): ParsedKey {
+  const decrypted = decryptedKeys.get(target)
+  if (decrypted) return decrypted
+  const { privateKey, passphrase } = target
   let parsed = utils.parseKey(privateKey)
   if (parsed instanceof Error) {
     if (!/passphrase/i.test(parsed.message)) throw new CoreError('KEY_FILE_UNREADABLE', `Not a private key Polyscope can read: ${parsed.message}`)
@@ -86,6 +93,7 @@ function privateKeyOf({ privateKey, passphrase }: { privateKey: string | Buffer;
   const key = Array.isArray(parsed) ? parsed[0] : parsed
   // A public key file, say, picked by mistake.
   if (!key || !key.isPrivateKey()) throw new CoreError('KEY_FILE_UNREADABLE', 'The key file holds no private key')
+  decryptedKeys.set(target, key)
   return key
 }
 
@@ -218,9 +226,33 @@ function forward(bastion: SignedIn, from: SshTarget, to: SshTarget) {
   })
 }
 
+/** The most connections a pool keeps to one server, however few commands each lets run at once: a backstop, not a limit learned. */
+export const maxPooledConnections = 16
+
+/** Whether ssh2's error is the server refusing to open a channel, as sshd does one past MaxSessions, not the connection failing. */
+const isRefusal = (error: Error & { reason?: unknown }) => typeof error.reason === 'number'
+
+/** One of a pool's connections to the server, and the channels running over it. */
+interface Pooled {
+  signedIn: SignedIn
+  /** Whether it's one opened beside the first, for commands the first had no room for. */
+  extra: boolean
+  /** Channels open over it, and being opened. */
+  busy: number
+  /** Channels open over it. */
+  open: number
+  /** Set when the server refused it another channel, until one of its own closes: how many it had open then. */
+  fullAt?: number
+}
+
 /**
  * Connects to an SSH server, checks its host key and signs in. With `jumps`, it goes through each of them in turn,
  * as ssh's ProxyJump does: each is connected to over a channel the one before forwards, its own host key checked.
+ *
+ * The connection is a pool behind one SshConnection: once the server refuses a channel on a connection with some
+ * open (sshd's MaxSessions, 10 by default), commands go over another connection to it, opened as needed (through the
+ * same bastions, one more channel forwarded) and closed once nothing runs on it. The first connection is the one the
+ * SshConnection describes: SFTP is on it, and it dropping drops the whole pool.
  */
 export async function connectSsh(target: SshTarget, options: SshConnectOptions, jumps: SshJump[] = []): Promise<SshConnection> {
   const bastions: SignedIn[] = []
@@ -243,40 +275,132 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions, 
   const { client } = signedIn
   const address = addressOf(target)
   let sftp: Promise<SFTPWrapper> | undefined
-  // A bastion is closed along with the connection through it: when that closes, so does the channel through it.
-  signedIn.onClosed(closeBastions)
   // Set by close(): the connection closing after that hasn't dropped.
   let closing = false
+  const first: Pooled = { signedIn, extra: false, busy: 0, open: 0 }
+  const pool: Pooled[] = [first]
+  // A bastion is closed along with the connection through it: when that closes, so does the channel through it. So
+  // are the extra connections, and everything on them.
+  signedIn.onClosed(() => {
+    closeBastions()
+    for (const pooled of pool.splice(1)) pooled.signedIn.client.end()
+  })
+  const closedError = () => new CoreError('UNREACHABLE', `${address}: the connection closed`)
+
+  /** Closes an extra connection once nothing runs over it; one closing, dropped or not, leaves the pool. */
+  const release = (pooled: Pooled) => {
+    if (!pooled.extra || pooled.busy) return
+    const index = pool.indexOf(pooled)
+    if (index !== -1) pool.splice(index, 1)
+    pooled.signedIn.client.end()
+  }
+
+  // The extra connection being opened, if one is: commands with nowhere to run wait for it, rather than each open one.
+  let opening: Promise<Pooled> | undefined
+  /** Opens another connection to the server, beside the first, for commands that have no room on those open. */
+  const openExtra = (limit: number) =>
+    (opening ??= (async () => {
+      const commandsAtOnce = `${target.host} won't run more than ${limit} command${limit === 1 ? '' : 's'} at once on one connection (its MaxSessions)`
+      if (pool.length >= maxPooledConnections) {
+        throw new CoreError('UNREACHABLE', `${commandsAtOnce}, and Polyscope opens no more than ${maxPooledConnections} connections to one server`)
+      }
+      let extra: SignedIn
+      try {
+        // Through the bastions already signed in to: the last forwards one more channel, so they're not signed in to again.
+        const last = bastions.at(-1)
+        extra = await signIn(target, options, last && (await forward(last, jumps.at(-1)!.target, target)))
+      } catch (error) {
+        throw new CoreError('UNREACHABLE', `${commandsAtOnce}, and another connection failed: ${(error as Error).message}`)
+      }
+      if (closing || signedIn.closed) {
+        extra.client.end()
+        throw closedError()
+      }
+      const pooled: Pooled = { signedIn: extra, extra: true, busy: 0, open: 0 }
+      pool.push(pooled)
+      // Closed, it leaves the pool straight away, though its channels may not have closed yet.
+      extra.onClosed(() => {
+        const index = pool.indexOf(pooled)
+        if (index !== -1) pool.splice(index, 1)
+      })
+      return pooled
+    })().finally(() => (opening = undefined)))
+
+  /** Runs a command over one of the pool's connections, failing with ssh2's error as it is if the server refuses. */
+  const execOver = (pooled: Pooled, command: string) =>
+    new Promise<ClientChannel>((resolveExec, rejectExec) => {
+      const freed = () => {
+        pooled.busy--
+        release(pooled)
+      }
+      pooled.busy++
+      try {
+        pooled.signedIn.client.exec(command, (error, channel) => {
+          if (error) {
+            freed()
+            return rejectExec(error)
+          }
+          pooled.open++
+          channel.once('close', () => {
+            pooled.open--
+            pooled.fullAt = undefined
+            freed()
+          })
+          resolveExec(channel)
+        })
+      } catch {
+        // ssh2 throws once the connection's socket is gone, before it tells it closed.
+        pooled.signedIn.lost()
+        freed()
+        rejectExec(closedError())
+      }
+    })
 
   return {
     user: target.user,
     sftp: () =>
       (sftp ??= new Promise<SFTPWrapper>((resolveSftp, rejectSftp) => {
         client.sftp((error, session) => {
-          if (!error) return resolveSftp(session)
+          if (!error) {
+            // Its session counts against MaxSessions as a command's does.
+            first.busy++
+            first.open++
+            session.once('close', () => {
+              first.busy--
+              first.open--
+              first.fullAt = undefined
+              sftp = undefined
+            })
+            return resolveSftp(session)
+          }
           sftp = undefined
           rejectSftp(
             signedIn.closed
-              ? new CoreError('UNREACHABLE', `${address}: the connection closed`)
+              ? closedError()
               : new CoreError('SFTP_UNAVAILABLE', `${address} has no SFTP subsystem, or it's turned off: ${error.message}`)
           )
         })
       })),
-    exec: (command) =>
-      new Promise<ClientChannel>((resolveExec, rejectExec) => {
-        const closed = () => rejectExec(new CoreError('UNREACHABLE', `${address}: the connection closed`))
-        if (signedIn.closed) return closed()
+    async exec(command) {
+      for (;;) {
+        if (signedIn.closed) throw closedError()
+        // A new connection is tried straight away, by each command that waited for it, so none is opened for nothing.
+        const pooled =
+          pool.find((p) => p.fullAt === undefined && !p.signedIn.closed) ?? (await openExtra(Math.max(...pool.map((p) => p.fullAt ?? 0))))
         try {
-          client.exec(command, (error, channel) => {
-            if (!error) return resolveExec(channel)
-            rejectExec(new CoreError('UNREACHABLE', `${address} wouldn't run ${command}: ${error.message}`))
-          })
-        } catch {
-          // ssh2 throws once the connection's socket is gone, before it tells it closed.
-          signedIn.lost()
-          closed()
+          return await execOver(pooled, command)
+        } catch (error) {
+          // An extra connection closing under it isn't the pool closing: the command goes over another.
+          if (pooled.extra && pooled.signedIn.closed) continue
+          if (error instanceof CoreError) throw error
+          const failure = error as Error
+          if (!isRefusal(failure)) throw new CoreError('UNREACHABLE', `${address} wouldn't run ${command}: ${failure.message}`)
+          // Refused with nothing else running on it, it's not a limit on how many at once: the server runs no commands.
+          if (!pooled.open) throw new CoreError('UNREACHABLE', `${address} won't run commands for ${target.user}: ${failure.message}`)
+          pooled.fullAt = pooled.open
         }
-      }),
+      }
+    },
     get closed() {
       return signedIn.closed
     },
@@ -286,7 +410,7 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions, 
     },
     close() {
       closing = true
-      client.end()
+      for (const pooled of pool) pooled.signedIn.client.end()
       closeBastions()
     }
   }
