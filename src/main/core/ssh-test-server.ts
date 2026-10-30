@@ -23,6 +23,10 @@ export interface TestServerOptions {
   clientKey?: { private: string; public: string }
   /** A password that signs in too; none unless given. */
   password?: string
+  /** How many sessions (commands, SFTP) one connection may have open at once, as OpenSSH's MaxSessions; any number unless given. */
+  maxSessions?: number
+  /** How many clients may be connected at once, those beyond turned away as they connect; any number unless given. */
+  maxConnections?: number
   /**
    * What running a command does: piping its stdin and stdout to a socket (as `docker system dial-stdio` does to a
    * Docker Engine's), exiting with a code and what it wrote, or running until it exits or the client ends it. A
@@ -65,6 +69,8 @@ export interface TestSshServer {
   deny(path: string): void
   /** Ends every client's connection, as a server restarting or a network dropping would; resolves once they're gone. */
   dropConnections(): Promise<void>
+  /** Ends the `index`th of the connections open now, oldest first, as a network dropping it would; resolves once it's gone. */
+  dropConnection(index: number): Promise<void>
   /** Where clients have had it forward channels to, as ProxyJump has a bastion do: `host:port`, in order. */
   forwarded(): string[]
   /** The commands clients have had it run, in order. */
@@ -257,6 +263,8 @@ export async function startTestSshServer({
   port: listenOn = 0,
   clientKey: clientKeys = generateKey(),
   password,
+  maxSessions = Infinity,
+  maxConnections = Infinity,
   exec
 }: TestServerOptions = {}): Promise<TestSshServer> {
   const root = await mkdtemp(join(tmpdir(), 'polyscope-ssh-'))
@@ -291,8 +299,13 @@ export async function startTestSshServer({
       channel.on('error', () => socket.destroy())
       socket.pipe(channel).pipe(socket)
     })
-    client.on('session', (accept) => {
+    let sessions = 0
+    client.on('session', (accept, reject) => {
+      // As sshd refuses a session beyond MaxSessions: the channel isn't opened.
+      if (sessions >= maxSessions) return reject()
+      sessions++
       const session = accept()
+      session.once('close', () => sessions--)
       session.on('sftp', (acceptSftp, reject) => {
         if (!offersSftp) return reject()
         serveSftp(acceptSftp(), root, denied)
@@ -303,6 +316,7 @@ export async function startTestSshServer({
       })
     })
   })
+  server.maxConnections = maxConnections
   await new Promise<void>((resolve) => server.listen(listenOn, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
   let seeds = 0
@@ -324,6 +338,13 @@ export async function startTestSshServer({
       const closed = [...connections].map((connection) => new Promise<void>((resolve) => connection.on('close', () => resolve())))
       for (const connection of connections) connection.end()
       await Promise.all(closed)
+    },
+    async dropConnection(index) {
+      const connection = [...connections][index]
+      if (!connection) throw new Error(`There's no connection ${index}: ${connections.size} are open`)
+      const closed = new Promise<void>((resolve) => connection.on('close', () => resolve()))
+      connection.end()
+      await closed
     },
     forwarded: () => [...forwarded],
     commands: () => [...commands],

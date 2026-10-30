@@ -56,7 +56,10 @@ interface Engine {
   dialed?: { dial: DockerDialer; agent: Agent }
 }
 
-/** How many connections an engine reached over SSH keeps for short requests: OpenSSH lets a connection run 10 commands at once. */
+/**
+ * How many connections an engine reached over SSH keeps for short requests: few, so they don't take up the sessions
+ * (OpenSSH's MaxSessions, 10 by default) its SSH connection can have open, leaving those for Follows.
+ */
 const dialedConnections = 4
 
 /** Has an HTTP request go over a connection `dial` opens. */
