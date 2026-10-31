@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { largeFileSearchLimit, type LargeFile, type LargeFileEvent, type LargeFileMatch, type LargeFileSearchEvent, type LargeFileSearchQuery, type OpenedFile } from '@shared/core-api'
 import { MB } from '@shared/settings'
 import { createCore, type Core } from './core'
+import { largeFileReading } from './large-file'
 
 let dir: string
 let cacheDir: string
@@ -497,5 +498,46 @@ describe('opening a Large File in the editor anyway', () => {
     await core.connect(sourceId)
 
     expect(await core.openFile(sourceId, 'app.log', { inEditor: true })).toMatchObject({ view: 'editor', content: generated(100) })
+  })
+})
+
+describe('escape sequences in a Large File', () => {
+  // A coloured log over the threshold: each line's level and message coloured, and one line's level split by a sequence.
+  const colouredLine = (n: number) => `\x1b[2m${String(n).padStart(10, '0')}\x1b[0m \x1b[32mINFO\x1b[0m ${'x'.repeat(70)}`
+  const splitLine = '\x1b[31mERR\x1b[1mOR\x1b[0m disk full'
+  const colouredLog = () => [...Array.from({ length: 12_000 }, (_, n) => colouredLine(n)), splitLine, colouredLine(12_000)].map((line) => `${line}\n`).join('')
+  const shownLine = (n: number) => `${String(n).padStart(10, '0')} INFO ${'x'.repeat(70)}`
+
+  it('opens, and is paged, without them', async () => {
+    await smallLimits()
+    await writeFile(join(dir, 'coloured.log'), colouredLog())
+    const file = await openLarge('coloured.log')
+    expect(file.lastLines.slice(-2)).toEqual(['ERROR disk full', shownLine(12_000)])
+    await ready(file.largeFileId)
+
+    expect(await core.readLargeFileLines(file.largeFileId, 11_999, 3)).toEqual({ firstLine: 11_999, lines: [shownLine(11_999), 'ERROR disk full', shownLine(12_000)] })
+  })
+
+  it('is searched as it is shown, a match split by a sequence included', async () => {
+    await smallLimits()
+    await writeFile(join(dir, 'coloured.log'), colouredLog())
+    const file = await openLarge('coloured.log')
+    await ready(file.largeFileId)
+
+    const { matches } = await search(file.largeFileId, { pattern: 'ERROR', matchCase: true })
+
+    expect(matches).toEqual([{ line: 12_000, preview: 'ERROR disk full', start: 0, end: 5 }])
+  })
+
+  it('has a long line cut short by what is shown of it, not by its sequences', async () => {
+    await smallLimits()
+    const shown = 'y'.repeat(largeFileReading.maxLineBytes)
+    const long = [...shown].map((y, i) => (i % 2 ? y : `\x1b[0m${y}`)).join('')
+    await writeFile(join(dir, 'long.log'), `${generated(11_000)}${long}\n${lineOf(11_001)}\n`)
+    const file = await openLarge('long.log')
+    await ready(file.largeFileId)
+
+    expect(await core.readLargeFileLines(file.largeFileId, 11_000, 1)).toEqual({ firstLine: 11_000, lines: [shown] })
+    expect((await search(file.largeFileId, { pattern: 'y{100}' })).matches).toMatchObject([{ line: 11_000, preview: shown.slice(0, 240) }])
   })
 })

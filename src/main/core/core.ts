@@ -56,6 +56,7 @@ import type {
 import { defaultAwsAuth, defaultDockerContext, filesWorkloadKinds, followableSourceTypes, workloadKinds } from '@shared/core-api'
 import { searchRegExp } from '@shared/search'
 import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings } from '@shared/settings'
+import { stripAnsi } from './ansi'
 import { awsProfileRegion, listAwsProfiles } from './aws-profiles'
 import type { AwsCredentials } from './aws-sign-in'
 import { checkConnectionString, checkSas, createAzureBlobFileSource, type AzureBlobTarget } from './azure-blob-file-source'
@@ -72,9 +73,11 @@ import {
   decode,
   detectEncoding,
   detectLargeFileEncoding,
+  encode,
   hexDump,
   hexDumpLimit,
-  inflate
+  inflate,
+  startsWithBom
 } from './file-content'
 import { readLastLines, startFileFollow } from './file-follow'
 import { fileIcon, folderIcon } from './file-icons'
@@ -504,6 +507,12 @@ export interface CoreOptions {
 }
 
 /**
+ * A text file's content as it's shown, by the name of the file (inside, if compressed): one that opens as a log is
+ * shown as logs are, without escape sequences, decided now rather than by a language picked later.
+ */
+const shownText = (name: string, content: string) => (languageFor(name) === 'log' ? stripAnsi(content) : content)
+
+/**
  * A file's content, decompressed if it's compressed, if that's no more than `limit` bytes; otherwise at least its
  * first `head` bytes (if it has them), reading and decompressing no more of it than that takes.
  */
@@ -761,7 +770,8 @@ export function createCore(options: CoreOptions = {}): Core {
       if (!forFollowing || asCoreError(error).code !== 'LOG_UNAVAILABLE') throw error
       return { snapshot: snapshot([]), sinceTime }
     }
-    const lines = text ? text.replace(/\n$/, '').split('\n') : []
+    // Lines are shown without escape sequences, by every log view, its Follow and a copy saved of it alike.
+    const lines = text ? stripAnsi(text).replace(/\n$/, '').split('\n') : []
     const kept = lastNLines === 'all' ? lines : lines.slice(-lastNLines)
     const stamps = read.timestamps ? kept.map(timestampOf) : []
     const lastTimestamp = stamps.at(-1)
@@ -804,7 +814,7 @@ export function createCore(options: CoreOptions = {}): Core {
     const { lines, partial, end, before } = await readLastLines(fileSource, path, { size: info.size, lastNLines, maxBytes })
     const shown = forFollowing || !partial ? lines : [...lines, partial].slice(whole ? 0 : -lastNLines)
     const name = path.slice(path.lastIndexOf('/') + 1)
-    const fileLog: FileLog = { view: 'log', of: 'file', path, name, previous: false, lastNLines, timestamps: false, content: shown.join('\n') }
+    const fileLog: FileLog = { view: 'log', of: 'file', path, name, previous: false, lastNLines, timestamps: false, content: stripAnsi(shown.join('\n')) }
     return { fileLog, end, before, identity: info.identity }
   }
 
@@ -854,7 +864,7 @@ export function createCore(options: CoreOptions = {}): Core {
     }
     if (!whole) return openLarge(sourceFor(sourceId), fileSource, info, common, bytes, options, askedEncoding)
     const encoding = askedEncoding ?? (options.hex ? null : detectEncoding(bytes))
-    if (encoding) return { view: 'editor', ...common, content: decode(bytes, encoding), encoding, language: languageFor(innerName) }
+    if (encoding) return { view: 'editor', ...common, content: shownText(innerName, decode(bytes, encoding)), encoding, language: languageFor(innerName) }
     if (!options.hex) return { view: 'binary', ...common, contentLength: bytes.length }
     const shown = bytes.subarray(0, hexDumpLimit)
     return { view: 'hex', ...common, content: hexDump(shown), contentLength: bytes.length, shownLength: shown.length }
@@ -867,12 +877,15 @@ export function createCore(options: CoreOptions = {}): Core {
     for (const listener of followListeners) listener(event)
   }
 
-  /** Starts a Follow of a Source, telling its updates to listeners under a new id, which it returns. */
+  /**
+   * Starts a Follow of a Source, telling its updates to listeners under a new id, which it returns: its lines without
+   * escape sequences, as every log is shown.
+   */
   const track = (sourceId: string, start: (emit: (update: FollowUpdate) => void) => Follow) => {
     const followId = randomUUID()
     const follow = start((update) => {
       if (update.kind === 'ended') follows.delete(followId)
-      announceFollow({ ...update, followId })
+      announceFollow({ ...(update.kind === 'lines' ? { ...update, lines: update.lines.map(stripAnsi) } : update), followId })
     })
     follows.set(followId, { sourceId, follow })
     return followId
@@ -1601,7 +1614,12 @@ export function createCore(options: CoreOptions = {}): Core {
         const limit = settings.openAnywayLimit
         const { bytes, whole } = await readUpTo(fileSource, file, limit, 0)
         if (!whole) throw new CoreError('OVER_OPEN_ANYWAY_LIMIT', `The file's content is over the "open anyway" limit of ${limit} bytes`)
-        return bytes
+        // As openFile shows it, in the encoding it's stored in.
+        const encoding = detectEncoding(bytes)
+        if (!encoding) return bytes
+        const text = decode(bytes, encoding)
+        const shown = shownText(compressionOf(file.name).innerName, text)
+        return shown === text ? bytes : encode(shown, encoding, startsWithBom(bytes, encoding))
       })
     },
 
@@ -1682,7 +1700,7 @@ export function createCore(options: CoreOptions = {}): Core {
         if (!logSource.readLogBack) throw new CoreError('LOG_UNAVAILABLE', `Its Source Type can’t read further back: ${path}`)
         return logSource.readLogBack(path, { tailLines, before: earlier, timestamps })
       })
-      return { content: text.replace(/\n$/, ''), ...(before !== undefined && { earlier: before }) }
+      return { content: stripAnsi(text).replace(/\n$/, ''), ...(before !== undefined && { earlier: before }) }
     },
 
     async followLog(sourceId, path, options = {}) {
