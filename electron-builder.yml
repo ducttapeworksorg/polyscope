@@ -72,6 +72,9 @@ linux:
   synopsis: A viewer for files and logs from many systems
   maintainer: Ducttapeworks <info@ducttapeworks.dev>
   executableName: polyscope
+  # The .desktop file is named after package.json's desktopName (the appId), which Electron also uses as the app_id on
+  # Wayland and the WM_CLASS on X11, so desktops match its windows to it and xdg-desktop-portal can resolve it.
+  syncDesktopName: true
 
 rpm:
   # Without /usr/lib/.build-id links: every Electron app's binaries have the same build IDs, so the links clash with
