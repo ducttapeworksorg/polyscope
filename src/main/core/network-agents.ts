@@ -1,5 +1,6 @@
 // The agents requests to an object store (S3, Azure Blob Storage) go out through, trusting a CA bundle and going
-// through a proxy as the Source says, shared by the Source Types that have those settings.
+// through a proxy as the Source says, shared by the Source Types that have those settings; and agents trusting the same
+// but going through no proxy, for what's only ever reached directly (a managed identity endpoint).
 
 import { readFile } from 'node:fs/promises'
 import { Agent as HttpAgent, type AgentOptions, type ClientRequest, type RequestOptions } from 'node:http'
@@ -132,14 +133,32 @@ class EnvironmentHttpsAgent extends HttpsAgent {
   }
 }
 
+/** What `networkAgents` gives: an agent for plain http requests and one for https. */
+export interface NetworkAgents {
+  httpAgent: HttpAgent
+  httpsAgent: HttpsAgent
+}
+
+const httpsOptions = ({ verifyTls, caBundle }: Omit<NetworkSettings, 'proxyUrl'>): HttpsAgentOptions => ({
+  keepAlive: true,
+  secureContext: secureContextFor(caBundle),
+  rejectUnauthorized: verifyTls
+})
+
 /** The agents requests go out through: trusting Node's CAs, the OS's and the Source's own, and via its proxy. */
-export function networkAgents({ verifyTls, caBundle, proxyUrl }: NetworkSettings) {
-  const secureContext = secureContextFor(caBundle)
-  const https: HttpsAgentOptions = { keepAlive: true, secureContext, rejectUnauthorized: verifyTls }
+export function networkAgents({ verifyTls, caBundle, proxyUrl }: NetworkSettings): NetworkAgents {
+  const https = httpsOptions({ verifyTls, ...(caBundle && { caBundle }) })
   // A proxy of the Source's own takes every request; otherwise the environment's settings decide for each.
   if (proxyUrl) {
     const proxyEnv = { HTTP_PROXY: proxyUrl, HTTPS_PROXY: proxyUrl }
     return { httpAgent: new HttpAgent({ keepAlive: true, proxyEnv }), httpsAgent: new HttpsAgent({ ...https, proxyEnv }) }
   }
   return { httpAgent: new EnvironmentHttpAgent({ keepAlive: true }), httpsAgent: new EnvironmentHttpsAgent(https) }
+}
+
+/** Agents trusting as `networkAgents`' do, but going straight to every server, whatever proxy anything names. */
+export function directAgents(settings: Omit<NetworkSettings, 'proxyUrl'>): NetworkAgents {
+  // A proxyEnv naming no proxy, so that not even Node's own reading of the environment (NODE_USE_ENV_PROXY) adds one.
+  const proxyEnv = {}
+  return { httpAgent: new HttpAgent({ keepAlive: true, proxyEnv }), httpsAgent: new HttpsAgent({ ...httpsOptions(settings), proxyEnv }) }
 }

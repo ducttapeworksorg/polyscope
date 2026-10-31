@@ -32,8 +32,9 @@ const caExtensions = () => [
 ]
 
 /**
- * A private root CA, an issuing CA it signed, and a certificate that one signed for 127.0.0.1, localhost and
- * *.polyscope.test (names only a test proxy knows), as PEM: the chain a company's own CA gives its servers.
+ * A private root CA, an issuing CA it signed, and a certificate that one signed for 127.0.0.1, localhost,
+ * *.polyscope.test (names only a test proxy knows) and login.microsoftonline.com (for a test proxy to reach a stand-in
+ * for Microsoft Entra ID by), as PEM: the chain a company's own CA gives its servers.
  */
 async function createCertificates() {
   const notBefore = new Date(Date.now() - 60 * 60_000)
@@ -71,6 +72,7 @@ async function createCertificates() {
         new SubjectAlternativeNameExtension([
           { type: 'dns', value: 'localhost' },
           { type: 'dns', value: '*.polyscope.test' },
+          { type: 'dns', value: 'login.microsoftonline.com' },
           { type: 'ip', value: '127.0.0.1' }
         ]),
         new BasicConstraintsExtension(false),
@@ -193,17 +195,24 @@ export async function startMutualTlsFront(socketPath: string) {
 /**
  * An HTTP proxy that tunnels with CONNECT, and forwards plain http requests asked for by their full URL; `tunnels` holds
  * the `host:port` of each tunnel asked for, and `forwards` the URL of each request forwarded. It looks names up in
- * `hosts` first, so it can reach servers by names that only it knows.
+ * `hosts` first, so it can reach servers by names that only it knows: an address, or an address and the port to reach
+ * there whatever port is asked for (`127.0.0.1:41000`).
  */
 export async function startProxy({ hosts = {} }: { hosts?: Record<string, string> } = {}) {
+  /** Where to reach `host` at `port`, as `hosts` says. */
+  const reach = (host: string, port: string) => {
+    const [address = host, mappedPort = port] = (hosts[host] ?? host).split(/:(?=\d+$)/)
+    return { address, port: Number(mappedPort) }
+  }
   const tunnels: string[] = []
   const forwards: string[] = []
   const server = createHttpServer((request, response) => {
     if (!request.url?.startsWith('http://')) return response.writeHead(405).end()
     forwards.push(request.url)
     const { hostname, port, pathname, search } = new URL(request.url)
+    const { address, port: reachedPort } = reach(hostname, port || '80')
     const upstream = httpRequest(
-      { host: hosts[hostname] ?? hostname, port: port || 80, path: `${pathname}${search}`, method: request.method, headers: request.headers },
+      { host: address, port: reachedPort, path: `${pathname}${search}`, method: request.method, headers: request.headers },
       (answer) => {
         response.writeHead(answer.statusCode ?? 502, answer.headers)
         answer.pipe(response)
@@ -216,7 +225,8 @@ export async function startProxy({ hosts = {} }: { hosts?: Record<string, string
     const target = request.url ?? ''
     tunnels.push(target)
     const [host = '', port = '443'] = target.split(/:(?=\d+$)/)
-    const upstream = connect(Number(port), hosts[host] ?? host, () => {
+    const { address, port: reachedPort } = reach(host, port)
+    const upstream = connect(reachedPort, address, () => {
       client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
       upstream.write(head)
       splice(client, upstream)
@@ -229,8 +239,8 @@ export async function startProxy({ hosts = {} }: { hosts?: Record<string, string
 
 /**
  * Keeps the proxy settings of wherever the tests run out of the way, so a test sees only those it sets. Both spellings,
- * as either is read when the other is unset. ALL_PROXY too, which the Azure SDK reaches for on the requests it makes
- * without Polyscope's agents (Azure CLI sign-in's).
+ * as either is read when the other is unset. ALL_PROXY too, which Polyscope ignores but would show up a request
+ * going out without its agents.
  */
 export const ignoreAmbientProxy = () => {
   const names = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy']

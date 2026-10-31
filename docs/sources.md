@@ -23,7 +23,8 @@ S3-compatible Storage, Azure Blob Storage and CloudWatch Logs Sources with no **
 - `HTTPS_PROXY` for an `https` address, `HTTP_PROXY` for an `http` one. Each is read before its lowercase spelling (`https_proxy`, `http_proxy`), and a blank one counts as unset.
 - `NO_PROXY` (or else `no_proxy`) lists the hosts reached directly, separated by commas: `*` for every host, a domain for it and its subdomains (`corp`), a domain starting with `.` or `*.` for its subdomains only (`.corp`), an address or a range of them (`10.0.0.0/8`), any of them with a port (`kube.corp:6443`).
 - This machine (`localhost`, `127.0.0.0/8`, `::1`) is always reached directly.
-- `ALL_PROXY` is ignored, apart from getting a token for [Azure CLI sign-in](#azure-blob-storage).
+- `ALL_PROXY` is ignored.
+- A managed identity's endpoint, for [Azure CLI sign-in](#azure-blob-storage), is always reached directly: Azure's instance metadata service (`169.254.169.254`) and wherever `IDENTITY_ENDPOINT` or `MSI_ENDPOINT` point.
 
 The choice is made for each request, by its host and as the variables are then. A Source's own **Proxy** takes every request instead, `NO_PROXY` or not. Docker Logs, SSH Files and the systemd Journal don't use a proxy.
 
@@ -147,7 +148,7 @@ A container in an Azure storage account, Data Lake Gen2 ones (with a hierarchica
 - **CA bundle**: a PEM file of extra CA certificates to trust, for TLS inspection by a private CA.
 - **Proxy**: like `http://proxy.corp:3128`. Otherwise the [proxy environment variables](#proxy-environment-variables) apply.
 
-The proxy and CA bundle are for reaching the storage account. Signing in through Azure CLI, getting a token goes through the CAs Node.js trusts (`NODE_EXTRA_CA_CERTS`) and the Azure SDK's own reading of the proxy variables, which takes `HTTPS_PROXY`, then `ALL_PROXY`, then `HTTP_PROXY`, or through Azure CLI's own settings, not these.
+The proxy and CA bundle are for reaching the storage account and, signing in through Azure CLI, for getting a token from Microsoft Entra ID. A managed identity's endpoint is always reached directly, the Source's own Proxy or not. The `az` command itself follows Azure CLI's own proxy settings, not these.
 
 Gzip and zstd blobs open decompressed, and a blob over the Large File threshold opens end-first, read in ranges. Blobs don't grow, so they can't be followed.
 
