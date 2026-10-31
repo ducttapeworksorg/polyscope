@@ -43,6 +43,11 @@ import { t, type MessageKey } from './i18n'
 export interface FieldsProps<S extends NewSource> {
   value: S
   onChange(value: S): void
+  /**
+   * Changes the settings as they are when it's applied, for a change made once something has been read: by then, the
+   * user may have changed them, and `value` be out of date. Ignored if the Source Type has changed meanwhile.
+   */
+  update(change: (current: S) => S): void
   /** The Source being edited, if any, e.g. to tell whether a secret is already stored for it. */
   editing?: SourceInfo
 }
@@ -123,7 +128,7 @@ type SshSettings = Extract<NewSource, { type: 'sshFiles' }>
 /** The name an SSH Files Source is given from its host and path, like `web-1:/var/log`. */
 const sshName = ({ host, path }: Pick<SshSettings, 'host' | 'path'>) => [host.trim(), path.trim()].filter(Boolean).join(':')
 
-function SshFields({ value, onChange, editing }: FieldsProps<SshSettings>) {
+function SshFields({ value, onChange, update, editing }: FieldsProps<SshSettings>) {
   // A new Source is named after its host and path.
   const set = (changes: Partial<SshSettings>) => {
     const next = { ...value, ...changes }
@@ -138,7 +143,7 @@ function SshFields({ value, onChange, editing }: FieldsProps<SshSettings>) {
         <input className="field__input field__input--path" value={value.path} onChange={(e) => set({ path: e.target.value })} spellCheck={false} />
         <span className="field__hint">{t('sshSource.path.hint')}</span>
       </label>
-      <SshSignInFields value={value} onChange={onChange} editing={editing} />
+      <SshSignInFields value={value} onChange={onChange} update={update} editing={editing} />
     </>
   )
 }
@@ -355,7 +360,7 @@ function ProxyField({ value, onChange }: { value: string; onChange(proxyUrl: str
 
 type S3Settings = Extract<NewSource, { type: 's3' }>
 
-function S3Fields({ value, onChange, editing }: FieldsProps<S3Settings>) {
+function S3Fields({ value, onChange, update, editing }: FieldsProps<S3Settings>) {
   // A new Source is named after its bucket.
   const set = (key: keyof S3Settings, input: string) =>
     onChange(key === 'bucket' ? { ...value, bucket: input, name: nameFollowing(value.name, value.bucket, input) } : { ...value, [key]: input })
@@ -388,7 +393,7 @@ function S3Fields({ value, onChange, editing }: FieldsProps<S3Settings>) {
       {text('prefix', 's3Source.prefix', { hint: 's3Source.prefix.hint', mono: true })}
       {check('pathStyle', 's3Source.pathStyle', 's3Source.pathStyle.hint', false)}
 
-      <AwsSignInFields value={value} onChange={onChange} editing={editing} />
+      <AwsSignInFields value={value} onChange={onChange} update={update} editing={editing} />
 
       <CaBundleField value={value.caBundlePath ?? ''} onChange={(caBundlePath) => onChange({ ...value, caBundlePath })} />
       {check('verifyTls', 's3Source.verifyTls', 's3Source.verifyTls.hint', true)}
@@ -470,29 +475,36 @@ type CloudWatchLogsSettings = Extract<NewSource, { type: 'cloudwatchLogs' }>
 const cloudWatchName = ({ region, prefix }: Pick<CloudWatchLogsSettings, 'region' | 'prefix'>) =>
   [region.trim(), prefix?.trim() ?? ''].filter(Boolean).join(' ')
 
-function CloudWatchLogsFields({ value, onChange, editing }: FieldsProps<CloudWatchLogsSettings>) {
+function CloudWatchLogsFields({ value, onChange, update, editing }: FieldsProps<CloudWatchLogsSettings>) {
   // A new Source is named after its region and prefix.
   const set = (changes: Partial<CloudWatchLogsSettings>) => {
     const next = { ...value, ...changes }
     onChange({ ...next, name: nameFollowing(value.name, cloudWatchName(value), cloudWatchName(next)) })
   }
   // The region the profile names: signing in with keys, the default credential chain's.
-  const signInProfile = awsAuthOf(value) === 'profile' ? (value.profile ?? '') : ''
+  const signInProfileOf = (settings: CloudWatchLogsSettings) => (awsAuthOf(settings) === 'profile' ? (settings.profile ?? '') : '')
+  const signInProfile = signInProfileOf(value)
   const profileRegion = useListing(() => core.awsProfileRegion(signInProfile), [signInProfile])
   // The region last filled in from a profile: until another is chosen, the region follows the profile.
   const [filledIn, setFilledIn] = useState<string>()
   useEffect(() => {
     const region = profileRegion.items
     if (region === null) return
-    if (region && (!value.region || value.region === filledIn)) set({ region })
+    // Filled in whenever the profile's region is read, into the settings as they are by then (the profile picked since
+    // has a region of its own, still to be read).
+    if (region)
+      update((current) => {
+        if (signInProfileOf(current) !== signInProfile || (current.region && current.region !== filledIn)) return current
+        const next = { ...current, region }
+        return { ...next, name: nameFollowing(current.name, cloudWatchName(current), cloudWatchName(next)) }
+      })
     setFilledIn(region)
-    // Filled in whenever the profile's region is read, from the settings as they are then.
   }, [profileRegion.items])
   const regionId = useId()
 
   return (
     <>
-      <AwsSignInFields value={value} onChange={onChange} editing={editing} />
+      <AwsSignInFields value={value} onChange={onChange} update={update} editing={editing} />
       <div className="field">
         <label className="field__label" htmlFor={regionId}>
           {t('cloudwatchSource.region')}
@@ -692,7 +704,7 @@ function useListing<T>(list: () => Promise<T> | null, deps: unknown[]) {
 const choicesOf = (listed: string[], value: string) => (value && !listed.includes(value) ? [value, ...listed] : listed)
 
 /** A kubeconfig context and a namespace in its cluster, as both Kubernetes Source Types have. */
-function ClusterFields<S extends KubernetesLogsSettings | KubernetesFilesSettings>({ value, onChange }: FieldsProps<S>) {
+function ClusterFields<S extends KubernetesLogsSettings | KubernetesFilesSettings>({ value, onChange, update }: FieldsProps<S>) {
   // Null until the kubeconfig has been read.
   const [contexts, setContexts] = useState<KubeContext[] | null>(null)
   const [problem, setProblem] = useState<string | null>(null)
@@ -710,11 +722,12 @@ function ClusterFields<S extends KubernetesLogsSettings | KubernetesFilesSetting
     name: settings.type === 'kubernetesLogs' ? nameFollowing(settings.name, settings.namespace, namespace) : settings.name
   })
 
-  /** Picks a context, filling in its namespace unless the one there was typed rather than filled in from the last context. */
-  const pick = (context: string, listed = contexts ?? []) => {
-    const typed = value.namespace.trim() && value.namespace !== namespaceOf(value.context, listed)
-    onChange(withNamespace({ ...value, context }, typed ? value.namespace : namespaceOf(context, listed)))
+  /** `settings` on another context, its namespace filled in unless the one there was typed rather than filled in from the last context. */
+  const picked = (settings: S, context: string, listed: KubeContext[]) => {
+    const typed = settings.namespace.trim() && settings.namespace !== namespaceOf(settings.context, listed)
+    return withNamespace({ ...settings, context }, typed ? settings.namespace : namespaceOf(context, listed))
   }
+  const pick = (context: string) => onChange(picked(value, context, contexts ?? []))
 
   useEffect(() => {
     let current = true
@@ -722,9 +735,10 @@ function ClusterFields<S extends KubernetesLogsSettings | KubernetesFilesSetting
       (listed) => {
         if (!current) return
         setContexts(listed)
-        // A new Source starts on the kubeconfig's current context, as kubectl would.
+        // A new Source starts on the kubeconfig's current context, as kubectl would, unless one was picked meanwhile;
+        // filled into the settings as they are by now, with whatever was typed while the kubeconfig was read.
         const currentContext = listed.find((c) => c.current)
-        if (currentContext && !value.context) pick(currentContext.name, listed)
+        if (currentContext) update((settings) => (settings.context ? settings : picked(settings, currentContext.name, listed)))
       },
       (error) => {
         if (!current) return
@@ -735,7 +749,7 @@ function ClusterFields<S extends KubernetesLogsSettings | KubernetesFilesSetting
     return () => {
       current = false
     }
-    // Read once, when the fields appear: the settings as they were then are the ones to fill in.
+    // Read once, when the fields appear.
   }, [])
 
   const choices = choicesOf(contexts?.map((c) => c.name) ?? [], value.context)
@@ -782,7 +796,7 @@ const KubernetesLogsFields = (props: FieldsProps<KubernetesLogsSettings>) => <Cl
 /** A Workload's value in the Workload dropdown, which lists every kind: its kind and name. */
 const workloadKey = ({ kind, name }: { kind: FilesWorkloadKind; name: string }) => `${kind}/${name}`
 
-function KubernetesFilesFields({ value, onChange }: FieldsProps<KubernetesFilesSettings>) {
+function KubernetesFilesFields({ value, onChange, update }: FieldsProps<KubernetesFilesSettings>) {
   const { context, namespace, workloadKind, workloadName } = value
   const workloads = useListing(() => (context && namespace.trim() ? core.listKubeWorkloads(context, namespace.trim()) : null), [context, namespace])
   const listed = workloads.items ?? []
@@ -797,7 +811,7 @@ function KubernetesFilesFields({ value, onChange }: FieldsProps<KubernetesFilesS
 
   return (
     <>
-      <ClusterFields value={value} onChange={onChange} />
+      <ClusterFields value={value} onChange={onChange} update={update} />
       {workloads.problem ? (
         // Can't be listed, say for lack of permission: its kind picked and its name typed in instead.
         <div className="field-pair">
@@ -890,7 +904,7 @@ type DockerLogsSettings = Extract<NewSource, { type: 'dockerLogs' }>
 /** The name a Docker Logs Source is given from its context: Docker, for the default one. */
 const dockerName = (context: string) => (context === defaultDockerContext ? t('dockerSource.defaultName') : context)
 
-function DockerLogsFields({ value, onChange, editing }: FieldsProps<DockerLogsSettings>) {
+function DockerLogsFields({ value, onChange, update, editing }: FieldsProps<DockerLogsSettings>) {
   const context = value.context || defaultDockerContext
   const contexts = useListing(() => core.listDockerContexts(), [])
   const listed = contexts.items ?? []
@@ -935,7 +949,7 @@ function DockerLogsFields({ value, onChange, editing }: FieldsProps<DockerLogsSe
         </select>
         <span className="field__hint">{hint}</span>
       </div>
-      {overSsh && <SshSignInFields value={value} onChange={onChange} editing={editing} />}
+      {overSsh && <SshSignInFields value={value} onChange={onChange} update={update} editing={editing} />}
     </>
   )
 }
@@ -958,23 +972,26 @@ const journalName = ({ target, host = '' }: Pick<SystemdJournalSettings, 'target
  * Whose journal a systemd Journal Source reads: this machine's, offered only on Linux, or a host's over SSH, set up as an
  * SSH Files Source's server is.
  */
-function SystemdJournalFields({ value, onChange, editing }: FieldsProps<SystemdJournalSettings>) {
+function SystemdJournalFields({ value, onChange, update, editing }: FieldsProps<SystemdJournalSettings>) {
   const target = value.target ?? 'thisMachine'
   // The OS the core runs on: this machine is offered only on Linux (and until it's known), and one already reading it stays offered.
   const platform = useListing(() => core.platform(), []).items
   const offersThisMachine = platform === null || platform === 'linux' || (editing?.type === 'systemdJournal' && editing.target === 'thisMachine')
   // A new Source is named after its target.
-  const set = (changes: Partial<SystemdJournalSettings>) => {
-    const next = { ...value, ...changes }
-    onChange({ ...next, name: nameFollowing(value.name, journalName(value), journalName(next)) })
+  const changed = (settings: SystemdJournalSettings, changes: Partial<SystemdJournalSettings>) => {
+    const next = { ...settings, ...changes }
+    return { ...next, name: nameFollowing(settings.name, journalName(settings), journalName(next)) }
   }
+  const set = (changes: Partial<SystemdJournalSettings>) => onChange(changed(value, changes))
   useEffect(() => {
     if (!value.name.trim()) onChange({ ...value, name: journalName(value) })
     // Named once, when the fields appear.
   }, [])
-  // Off Linux, a new Source reads a host's journal: this machine has none.
+  // Off Linux, a new Source reads a host's journal: this machine has none. Applied to the settings as they are once the
+  // OS is known.
   useEffect(() => {
-    if (platform && !offersThisMachine && target === 'thisMachine') set({ target: 'ssh' })
+    if (platform && !offersThisMachine)
+      update((current) => ((current.target ?? 'thisMachine') === 'thisMachine' ? changed(current, { target: 'ssh' }) : current))
   }, [platform])
 
   return (
@@ -998,7 +1015,7 @@ function SystemdJournalFields({ value, onChange, editing }: FieldsProps<SystemdJ
       {target === 'ssh' && (
         <>
           <SshServerFields value={value} onChange={onChange} set={set} />
-          <SshSignInFields value={value} onChange={onChange} editing={editing} />
+          <SshSignInFields value={value} onChange={onChange} update={update} editing={editing} />
         </>
       )}
     </>
