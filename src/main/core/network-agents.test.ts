@@ -63,7 +63,8 @@ const attempt = (url: string, caBundle: string) =>
   Promise.race([get(url, caBundle).then(() => true, () => false), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500))])
 
 describe('the agents of a Source with no proxy of its own', () => {
-  it('go through HTTPS_PROXY over https_proxy when both are set', async () => {
+  // Windows' variable names ignore case: there, https_proxy would be HTTPS_PROXY itself.
+  it.skipIf(process.platform === 'win32')('go through HTTPS_PROXY over https_proxy when both are set', async () => {
     const { httpsPort, caBundle } = await startServer()
     const upper = await proxy()
     const lower = await proxy()
@@ -109,7 +110,8 @@ describe('the agents of a Source with no proxy of its own', () => {
     expect([...upper.tunnels, ...lower.tunnels]).toEqual([])
   })
 
-  it('send an http request through HTTP_PROXY, HTTP_PROXY over http_proxy', async () => {
+  // Windows' variable names ignore case: there, https_proxy would be HTTPS_PROXY itself.
+  it.skipIf(process.platform === 'win32')('send an http request through HTTP_PROXY, HTTP_PROXY over http_proxy', async () => {
     const { httpPort, caBundle } = await startServer()
     const upper = await proxy()
     const lower = await proxy()

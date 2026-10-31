@@ -322,7 +322,8 @@ describe('a cluster behind a proxy', () => {
     await reachesTheCluster()
   })
 
-  it('is reached through HTTPS_PROXY over https_proxy', async () => {
+  // Windows' variable names ignore case: there, https_proxy would be HTTPS_PROXY itself.
+  it.skipIf(process.platform === 'win32')('is reached through HTTPS_PROXY over https_proxy', async () => {
     await kubeconfigFiles(fakeCluster())
     vi.stubEnv('HTTPS_PROXY', proxy.url)
     vi.stubEnv('https_proxy', `http://127.0.0.1:${await closedPort()}`)
