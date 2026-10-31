@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LargeFileSearchEvent, NewAzureBlobSource, TreeNode } from '@shared/core-api'
 import { MB } from '@shared/settings'
 import { hasTestAccount, seedPrefix, takesTokens, testAzureBlobSource, testEndpoint, testSasUrl } from './azure-blob-test-store'
-import { expiredAzureCli, startManagedIdentity } from './azure-test-identity'
+import { expiredAzureCli, managedIdentity, startEntraId, startRefusingAzure } from './azure-test-identity'
 import { createCore } from './core'
 import { createSecretStore } from './secret-store'
 import { ignoreAmbientProxy, startProxy, startTlsFront } from './test-network'
@@ -357,30 +357,70 @@ describe('an Azure Blob Storage Source signing in through Azure CLI', () => {
     expect(await core.connectionState(source.id)).toMatchObject({ state: 'error', code: 'AZURE_LOGIN_REQUIRED' })
   }, 30_000)
 
+  const refusingAzure = async () => {
+    const azure = await startRefusingAzure()
+    disposals.push(azure.close)
+    return azure
+  }
+  const signingIn = (changes: Partial<NewAzureBlobSource>) => offline({ auth: 'azureCli', connectionString: undefined, ...changes })
+
   it('without a role that reads blobs names the role it needs', async () => {
-    const identity = await startManagedIdentity()
-    disposals.push(identity.close)
-    for (const [name, value] of Object.entries(identity.env)) vi.stubEnv(name, value)
-    // Azure, refusing an identity that has no data role on the account: Azurite gives every identity every role.
-    const azure = createServer((_request, response) => {
-      response.writeHead(403, { 'content-type': 'application/xml', 'x-ms-error-code': 'AuthorizationPermissionMismatch' })
-      response.end(
-        '<?xml version="1.0" encoding="utf-8"?><Error><Code>AuthorizationPermissionMismatch</Code>' +
-          '<Message>This request is not authorized to perform this operation using this permission.</Message></Error>'
-      )
-    })
-    await new Promise<void>((resolve) => azure.listen(0, '127.0.0.1', resolve))
-    disposals.push(() => new Promise((resolve) => azure.close(() => resolve())))
-    const front = await startTlsFront(`http://127.0.0.1:${(azure.address() as AddressInfo).port}`)
-    disposals.push(front.close)
+    for (const [name, value] of Object.entries((await managedIdentity()).env)) vi.stubEnv(name, value)
+    const { endpoint, caPath } = await refusingAzure()
     // As though the private CA were the public one Azure's certificates come from.
     const trusted = getCACertificates('default')
-    setDefaultCACertificates([...trusted, await readFile(front.caPath, 'utf8')])
+    setDefaultCACertificates([...trusted, await readFile(caPath, 'utf8')])
     disposals.push(async () => setDefaultCACertificates(trusted))
 
-    await expect(
-      createCore().testConnection(offline({ auth: 'azureCli', connectionString: undefined, endpoint: `${front.url}/contosologs` }))
-    ).rejects.toMatchObject({ code: 'ROLE_REQUIRED', message: expect.stringContaining('Storage Blob Data Reader') })
+    await expect(createCore().testConnection(signingIn({ endpoint }))).rejects.toMatchObject({
+      code: 'ROLE_REQUIRED',
+      message: expect.stringContaining('Storage Blob Data Reader')
+    })
+  })
+
+  describe('as an app, through Microsoft Entra ID', () => {
+    /** Signs in through the Entra ID stand-in, which proxies started after reach by its name. */
+    const entraId = async () => {
+      const started = await startEntraId()
+      disposals.push(started.close)
+      for (const [name, value] of Object.entries(started.env)) vi.stubEnv(name, value)
+      return started
+    }
+    const proxy = async (hosts: Record<string, string>) => {
+      const started = await startProxy({ hosts })
+      disposals.push(started.close)
+      return started
+    }
+
+    it('gets its token through the Source’s own proxy, trusting its CA bundle', async () => {
+      const entra = await entraId()
+      const { url, tunnels } = await proxy(entra.hosts)
+      // The Source's CA bundle trusts the stand-ins' private CA, which Node doesn't.
+      const { endpoint, caPath } = await refusingAzure()
+
+      const settings = signingIn({ endpoint, caBundlePath: caPath, proxyUrl: url })
+
+      await expect(createCore().testConnection(settings)).rejects.toMatchObject({ code: 'ROLE_REQUIRED' })
+      expect(tunnels).toContain('login.microsoftonline.com:443')
+      expect(entra.tokens).toBe(1)
+    })
+
+    it('gets its token through HTTPS_PROXY without a proxy of its own, over https_proxy and ALL_PROXY', async () => {
+      const entra = await entraId()
+      const upper = await proxy(entra.hosts)
+      const lower = await proxy(entra.hosts)
+      const all = await proxy(entra.hosts)
+      vi.stubEnv('HTTPS_PROXY', upper.url)
+      vi.stubEnv('https_proxy', lower.url)
+      vi.stubEnv('ALL_PROXY', all.url)
+      const { endpoint, caPath } = await refusingAzure()
+      const settings = signingIn({ endpoint, caBundlePath: caPath })
+
+      await expect(createCore().testConnection(settings)).rejects.toMatchObject({ code: 'ROLE_REQUIRED' })
+      expect(upper.tunnels).toEqual(['login.microsoftonline.com:443'])
+      expect(lower.tunnels).toEqual([])
+      expect(all.tunnels).toEqual([])
+    })
   })
 })
 
@@ -574,9 +614,7 @@ describe.skipIf(!hasTestAccount)('an Azure Blob Storage Source against the test 
   })
 
   it.skipIf(!takesTokens)('signs in through Azure’s default credentials, a managed identity here, storing nothing', async () => {
-    const identity = await startManagedIdentity()
-    disposals.push(identity.close)
-    for (const [name, value] of Object.entries(identity.env)) vi.stubEnv(name, value)
+    for (const [name, value] of Object.entries((await managedIdentity()).env)) vi.stubEnv(name, value)
     const { account, container, prefix } = testAzureBlobSource('Logs', await seeded({ 'app/a.log': 'a' }))
     const secrets = createSecretStore({ cipher: reversed })
     const core = createCore({ secrets })
@@ -684,9 +722,7 @@ describe.skipIf(!hasTestAccount)('an Azure Blob Storage Source against the test 
     })
 
     it.skipIf(!takesTokens)('signs in through Azure’s default credentials through them too', async () => {
-      const identity = await startManagedIdentity()
-      disposals.push(identity.close)
-      for (const [name, value] of Object.entries(identity.env)) vi.stubEnv(name, value)
+      for (const [name, value] of Object.entries((await managedIdentity()).env)) vi.stubEnv(name, value)
       const { url, tunnels } = await proxy()
       const { endpoint, caBundlePath, host } = await behindTls()
       const { account, container } = testAzureBlobSource('Logs', '')

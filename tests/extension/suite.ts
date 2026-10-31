@@ -10,7 +10,7 @@ import * as vscode from 'vscode'
 import { cloudWatchSegment, type FollowEvent, type HostKey } from '@shared/core-api'
 import { MB } from '@shared/settings'
 import { hasTestAccount, seedPrefix as seedBlobs, takesTokens, testAzureBlobSource, testEndpoint, testSasUrl } from '../../src/main/core/azure-blob-test-store'
-import { startManagedIdentity } from '../../src/main/core/azure-test-identity'
+import { managedIdentity } from '../../src/main/core/azure-test-identity'
 import { allowedCloudWatchOperations, startTestCloudWatchEndpoint } from '../../src/main/core/cloudwatch-test-endpoint'
 import { kubeConfigFor } from '../../src/main/core/kubeconfig'
 import { startTestDockerEngine } from '../../src/main/core/docker-test-engine'
@@ -441,7 +441,7 @@ const firstRunAzure: [string, () => Promise<void>][] = [
     async () => {
       if (!takesTokens) return console.log('    (skipped: the test account takes no tokens, as POLYSCOPE_TEST_AZURE_OAUTH says)')
       const { core, secrets } = await extension()
-      const identity = await startManagedIdentity()
+      const identity = await managedIdentity()
       const { prefix, remove } = await seedBlobs({ 'a.log': blobText })
       const { account, container } = testAzureBlobSource('', '')
 
@@ -457,7 +457,6 @@ const firstRunAzure: [string, () => Promise<void>][] = [
           }
         })
       } finally {
-        await identity.close()
         await remove()
       }
     }
