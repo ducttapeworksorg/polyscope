@@ -15,6 +15,7 @@ import type {
 } from '@shared/core-api'
 import { followableSourceTypes } from '@shared/core-api'
 import { t } from './i18n'
+import type { LogLevel } from './log-level'
 import type { SinceChoice } from './since'
 
 /**
@@ -103,6 +104,8 @@ export interface OpenTab {
   utc?: boolean
   /** Whether a log tab, or a file open in the editor, wraps long lines. */
   wrap?: boolean
+  /** The Log Levels a log view's Level Filter hides; none when left out, as a new tab starts. */
+  hiddenLevels?: LogLevel[]
   /** Set, to the pod's name, when a Kubernetes Files tab's pod turned out to be gone: it shows what was last read from it. */
   podGone?: string
   /** Set when a log tab's Log Stream (a container, say) turned out to be gone: it shows what was last read from it. */
@@ -257,6 +260,21 @@ export function reopenLogTab(ws: Workspace, key: string, file: TabContent): Work
 /** Changes how a log tab is shown or followed, leaving its content as it is. */
 export const setLogView = (ws: Workspace, key: string, change: Partial<Pick<OpenTab, 'follow' | 'utc' | 'wrap' | 'since'>>): Workspace =>
   updateTab(ws, key, change)
+
+/** Whether a tab's lines can be shown by Log Level: a log's, or a file's highlighted as a log. */
+export const offersLevelFilter = ({ file, language }: OpenTab) =>
+  isLog(file) || (file.view === 'editor' && (language ?? file.language) === 'log')
+
+/** The Log Levels a tab's Level Filter hides. */
+export const hiddenLevelsOf = (tab: OpenTab): LogLevel[] => tab.hiddenLevels ?? []
+
+/** Hides a Log Level in a log view, or shows it again. */
+export function toggleLevel(ws: Workspace, key: string, level: LogLevel): Workspace {
+  const tab = ws.tabs.find((open) => open.key === key)
+  if (!tab) return ws
+  const hidden = hiddenLevelsOf(tab)
+  return updateTab(ws, key, { hiddenLevels: hidden.includes(level) ? hidden.filter((other) => other !== level) : [...hidden, level] })
+}
 
 /** Notes that a Follow's container restarted, so its tab can switch to the Previous Log. */
 export function noteRestart(ws: Workspace, followId: string): Workspace {

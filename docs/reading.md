@@ -20,6 +20,7 @@ Polyscope highlights a file by its name: YAML, JSON, XML, source code, and logs,
 - **Language**: click it in the status bar to highlight the file as another language.
 - **Binary files**: shown as a size, with **Show as hex** to see the bytes.
 - **Wrap**: the **Wrap** button at the top right wraps long lines.
+- **Log Levels**: a file highlighted as a log has the same **Error**, **Warning**, **Info** and **Debug** buttons as a log view, to show only some levels' lines. See below. In VS Code, a file opens in VS Code's own editor, which doesn't have them.
 
 To watch a growing file on a Local Filesystem, SSH Files or Kubernetes Files Source, turn on **Follow** from its tab's menu, or right-click it in the sidebar. New lines appear as they're written.
 
@@ -43,15 +44,27 @@ A container's log, a CloudWatch log, or a systemd unit's journal opens with a to
 - **Previous**: show the container's **Previous Log**, the log of its run before it last restarted, in the same tab, marked "(previous)". It has ended, so there's nothing to Follow; turn **Previous** off to go back to the current log, Following it again. It's available once the container has restarted, which a Follow notices as it happens; Kubernetes keeps only the run just before the current one, and not always that.
 - **Timestamps**: start each line with when it was logged, in local time or, with **UTC**, in UTC.
 - **Wrap**: wrap long lines.
+- **Error**, **Warning**, **Info**, **Debug**: show or hide each level's lines. See below.
 - **Save a copy…**: keep the log on your computer, say to attach it to a bug report. See below.
 
 Colour codes and other ANSI escape sequences that loggers write into their output are removed, from logs, files that open as logs (`.log`, `.out`, `.err`) and Large Files alike, so a log shows, is searched and is saved as plain text; **Save a copy…** of a file keeps the file's original bytes, sequences and all.
+
+### Showing only some Log Levels
+
+The **Error**, **Warning**, **Info** and **Debug** buttons show or hide the lines of each level, each button saying how many there are. All four start on in each new tab; turn **Debug** off to cut the noise, or all but **Error** to see only what went wrong.
+
+- A line with no level of its own, like a stack trace's or the rest of a message over several lines, goes with the line with a level above it: hide errors and their stack traces go too.
+- Lines before the first with a level, and the log's marks (and the lines after a mark, until one with a level), always show.
+- The lines shown keep their numbers, so a gap in the numbers shows where lines are hidden.
+- It only hides lines already read: **Last N lines** and **Since** count every line, shown or not, and turning a level back on shows its lines straight away. A **Follow**'s new lines are shown or hidden as they come; while **Paused**, the lines held back aren't counted until you **Resume**.
+- Search, copying and **Save a copy…** cover only the lines shown.
+- It stays as it is when you switch to the **Previous Log** and back. With all four off, only the lines with no level show, and the log says so.
 
 While following, the log marks what happened in line: a container restarting, the connection dropping and recovering, or the container, pod, CloudWatch log or Source going away.
 
 ### Save a copy of a log
 
-**Save a copy…** in the log toolbar saves exactly the lines the tab shows when you choose it, one per line, to a place on your computer. It's there for container logs, CloudWatch logs, systemd units' journals and followed files alike.
+**Save a copy…** in the log toolbar saves exactly the lines the tab shows when you choose it, those of the Log Levels it's showing, one per line, to a place on your computer. It's there for container logs, CloudWatch logs, systemd units' journals and followed files alike.
 
 - It includes lines a **Follow** has added and lines **Load earlier** has added, in the order shown. While **Paused**, the lines held back aren't included until you **Resume**.
 - What a Follow marks in line, like a container restarting or the connection dropping, is saved as it's shown, among the lines.

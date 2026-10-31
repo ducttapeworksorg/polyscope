@@ -13,6 +13,7 @@ import {
   cycleTab,
   emptyWorkspace,
   endFollow,
+  hiddenLevelsOf,
   markLogStreamGone,
   markPodGone,
   noteRestart,
@@ -26,6 +27,7 @@ import {
   setLogView,
   sinceOffered,
   tabName,
+  toggleLevel,
   type TabContent,
   type Workspace
 } from './workspace'
@@ -433,5 +435,31 @@ describe('a log view’s Since', () => {
     expect(onlyTab(previous)).toMatchObject({ since, offersSince: true })
     expect(onlyTab(reopenLogTab(previous, 'c', log))).toMatchObject({ since, offersSince: true })
     expect(onlyTab(reopenLogTab(ws, 'c', failed))).toMatchObject({ since, offersSince: true })
+  })
+})
+
+describe('a log view’s Level Filter', () => {
+  const log = { view: 'log', of: 'logStream', path: 'p/c', name: 'c', offersPreviousLog: true, offersSince: true, previous: false, restarted: true, lastNLines: 10, timestamps: false, content: '' } as const
+  const opened = () => openTab(emptyWorkspace, { key: 'c', source, file: log })
+  const onlyTab = (ws: Workspace) => ws.tabs[0]!
+
+  it('starts showing every Log Level', () => {
+    expect(hiddenLevelsOf(onlyTab(opened()))).toEqual([])
+  })
+
+  it('hides a Log Level, and shows it again', () => {
+    const ws = toggleLevel(toggleLevel(opened(), 'c', 'debug'), 'c', 'info')
+    expect(hiddenLevelsOf(onlyTab(ws))).toEqual(['debug', 'info'])
+    expect(hiddenLevelsOf(onlyTab(toggleLevel(ws, 'c', 'debug')))).toEqual(['info'])
+  })
+
+  it('is kept as the log is read again, switching to its Previous Log and back, or failing to', () => {
+    const ws = toggleLevel(opened(), 'c', 'debug')
+    const failed = { view: 'logFailed', of: 'logStream', path: 'p/c', name: 'c', previous: true, lastNLines: 10, timestamps: false, message: 'gone' } as const
+
+    const previous = reopenLogTab(ws, 'c', { ...log, previous: true })
+    expect(hiddenLevelsOf(onlyTab(previous))).toEqual(['debug'])
+    expect(hiddenLevelsOf(onlyTab(reopenLogTab(previous, 'c', log)))).toEqual(['debug'])
+    expect(hiddenLevelsOf(onlyTab(reopenLogTab(ws, 'c', failed)))).toEqual(['debug'])
   })
 })

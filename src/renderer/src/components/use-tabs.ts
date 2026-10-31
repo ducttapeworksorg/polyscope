@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { EntryNode, LastNLines, LogStreamNode, OpenLogOptions, OpenOptions, SourceInfo } from '@shared/core-api'
 import { core, CoreCallError, describeError } from '../core-client'
 import { createFollowFeed } from '../follow-feed'
+import type { LogLevel } from '../log-level'
 import { targetOf } from '../source-types'
 import { sinceTimeOf, type SinceChoice } from '../since'
 import {
@@ -23,6 +24,7 @@ import {
   reopenLogTab,
   reopenTab,
   setLogView,
+  toggleLevel as toggleTabLevel,
   type LogFailed,
   type LogTooLarge,
   type TabContent,
@@ -354,6 +356,9 @@ export function useTabs({ onSourcesChanged }: Options) {
     if (tabs.some((open) => open.key === key && earlierOf(open) !== undefined)) setWorkspace((ws) => dropEarlier(ws, key))
   }
 
+  /** Hides a Log Level in a log view, or shows it again. */
+  const toggleLevel = (key: string, level: LogLevel) => setWorkspace((ws) => toggleTabLevel(ws, key, level))
+
   /** Wraps a log tab's (or an open file's) long lines, or stops wrapping them. */
   const toggleWrap = (key: string) => {
     const tab = tabs.find((open) => open.key === key)
@@ -385,6 +390,7 @@ export function useTabs({ onSourcesChanged }: Options) {
     toggleTimestamps,
     toggleUtc,
     toggleWrap,
+    toggleLevel,
     loadEarlier,
     noteDroppedLines
   }

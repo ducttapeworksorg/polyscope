@@ -69,6 +69,14 @@ _Avoid_: time window, time range, from
 How serious a log line is: error, warning, info or debug. A line has at most one, found in its opening words or in a level field, whatever logger's wording it is written in; a level word later in the line's message is not its **Log Level**.
 _Avoid_: severity, priority
 
+**Log Entry**:
+A line with a **Log Level** together with the lines after it that have none (a stack trace, the rest of a multi-line message), up to the next line with a **Log Level** or one of Polyscope's own marks. Its **Log Level** is its first line's. Lines before a log's first **Log Level**, marks, and the lines after a mark up to the next **Log Level**, belong to no **Log Entry**.
+_Avoid_: message, record, event
+
+**Level Filter**:
+Which **Log Levels** a log view shows, chosen per tab: each tab starts showing all four. It hides whole **Log Entries**, never lines belonging to none, and applies only to the lines already fetched, never to what is fetched: **Last N lines** and **Since** count lines regardless of it.
+_Avoid_: severity filter
+
 **Large File**:
 A file above the size threshold (default 50 MB), opened in the **Large File Viewer** instead of the full editor.
 

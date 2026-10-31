@@ -1,9 +1,11 @@
-import { useRef, type ReactNode, type Ref } from 'react'
+import { useCallback, useRef, useState, type ReactNode, type Ref } from 'react'
 import type { ConnectionState } from '@shared/core-api'
 import type { Settings } from '@shared/settings'
 import { describeFailure } from '../core-client'
 import { t } from '../i18n'
-import { isLog, tabName, type OpenTab } from '../workspace'
+import type { LevelCounts } from '../log-entries'
+import { logLevels } from '../log-level'
+import { hiddenLevelsOf, isLog, offersLevelFilter, tabName, type OpenTab } from '../workspace'
 import { FileToolbar } from './FileToolbar'
 import { LogToolbar } from './LogToolbar'
 import type { TabsModel } from './use-tabs'
@@ -37,6 +39,10 @@ interface Props {
 export function TabView({ viewerRef, model, settings, connection, onReconnect, panelId, onOpenAnyway, onSaveCopy, onSaveLogCopy, children }: Props) {
   const { tabs, activeTab, openError } = model
   const shownLines = useRef<ShownLines | null>(null)
+  // How many Log Entries of each Log Level each tab's log has, as its viewer last said.
+  const [levelCounts, setLevelCounts] = useState<ReadonlyMap<string, LevelCounts>>(new Map())
+  const noteLevelCounts = useCallback((key: string, counts: LevelCounts) => setLevelCounts((prev) => new Map(prev).set(key, counts)), [])
+  const activeCounts = activeTab && levelCounts.get(activeTab.key)
   return (
     <>
       {openError && (
@@ -70,6 +76,11 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
           <span className="workbench__banner-text">{t('viewer.podGone', { pod: activeTab.podGone })}</span>
         </div>
       )}
+      {activeTab && (activeTab.file.view === 'log' || activeTab.file.view === 'editor') && offersLevelFilter(activeTab) && hiddenLevelsOf(activeTab).length === logLevels.length && (
+        <div className="workbench__banner" role="status">
+          <span className="workbench__banner-text">{t('viewer.allLevelsHidden')}</span>
+        </div>
+      )}
       {activeTab && isLog(activeTab.file) && (
         <LogToolbar
           tab={activeTab}
@@ -81,6 +92,8 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
           onToggleTimestamps={() => model.toggleTimestamps(activeTab.key)}
           onToggleUtc={() => model.toggleUtc(activeTab.key)}
           onToggleWrap={() => model.toggleWrap(activeTab.key)}
+          {...(activeCounts && { levelCounts: activeCounts })}
+          onToggleLevel={(level) => model.toggleLevel(activeTab.key, level)}
           onLoadEarlier={() => void model.loadEarlier(activeTab.key)}
           {...(onSaveLogCopy && {
             onSaveCopy: () => {
@@ -91,7 +104,13 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
         />
       )}
       {activeTab && (activeTab.file.view === 'editor' || activeTab.file.view === 'hex' || activeTab.file.view === 'binary') && (
-        <FileToolbar tab={activeTab} onToggleWrap={() => model.toggleWrap(activeTab.key)} {...(onSaveCopy && { onSaveCopy: () => onSaveCopy(activeTab) })} />
+        <FileToolbar
+          tab={activeTab}
+          onToggleWrap={() => model.toggleWrap(activeTab.key)}
+          {...(activeCounts && { levelCounts: activeCounts })}
+          onToggleLevel={(level) => model.toggleLevel(activeTab.key, level)}
+          {...(onSaveCopy && { onSaveCopy: () => onSaveCopy(activeTab) })}
+        />
       )}
       <div
         ref={viewerRef}
@@ -114,6 +133,7 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
           onDroppedLines={model.noteDroppedLines}
           minimap={settings.showMinimap}
           shownLinesRef={shownLines}
+          onLevelCounts={noteLevelCounts}
         />
         {!activeTab && children}
       </div>

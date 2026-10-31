@@ -928,6 +928,34 @@ body.is-resizing {
   outline: 1px solid var(--glint);
 }
 
+/* The Level Filter: a toggle per Log Level, named in its colour, with how many Log Entries it has. */
+.level-filter {
+  display: flex;
+  gap: 4px;
+}
+
+.level-filter__name--error {
+  color: var(--log-error);
+  font-weight: 600;
+}
+
+.level-filter__name--warning {
+  color: var(--log-warning);
+}
+
+.level-filter__name--info {
+  color: var(--log-info);
+}
+
+.level-filter__name--debug {
+  color: var(--log-debug);
+}
+
+.level-filter__count {
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
 .log-toolbar__label {
   color: var(--text-dim);
 }

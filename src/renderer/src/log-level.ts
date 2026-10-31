@@ -1,6 +1,9 @@
 /** How serious a log line is, its Log Level: one of four, each coloured its own way. */
 export type LogLevel = 'error' | 'warning' | 'info' | 'debug'
 
+/** Every Log Level, the most serious first. */
+export const logLevels: readonly LogLevel[] = ['error', 'warning', 'info', 'debug']
+
 /** A line's Log Level, and where in the line the word or value saying so is, unless nothing in it does. */
 export interface FoundLogLevel {
   level: LogLevel
