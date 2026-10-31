@@ -12,6 +12,7 @@
   "repository": "github:ducttapeworksorg/polyscope",
   "private": true,
   "main": "./out/main/index.js",
+  "desktopName": "com.ducttapeworks.polyscope.desktop",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
