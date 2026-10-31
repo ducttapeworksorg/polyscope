@@ -273,7 +273,8 @@ describe('a CloudWatch Logs Source’s endpoint, trust and proxy settings', () =
       expect(tunnels).toContain(host)
     })
 
-    it('goes through HTTPS_PROXY without a proxy of its own, over https_proxy', async () => {
+    // Windows' variable names ignore case: there, https_proxy would be HTTPS_PROXY itself.
+    it.skipIf(process.platform === 'win32')('goes through HTTPS_PROXY without a proxy of its own, over https_proxy', async () => {
       const upper = await proxy()
       const lower = await proxy()
       vi.stubEnv('HTTPS_PROXY', upper.url)

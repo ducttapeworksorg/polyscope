@@ -550,7 +550,8 @@ describe.skipIf(!hasTestStore)('an S3 Source in a corporate network, against the
     expect(tunnels).toContain(new URL(tls.host).host)
   })
 
-  it('goes through HTTPS_PROXY without a proxy of its own, over https_proxy', async () => {
+  // Windows' variable names ignore case: there, https_proxy would be HTTPS_PROXY itself.
+  it.skipIf(process.platform === 'win32')('goes through HTTPS_PROXY without a proxy of its own, over https_proxy', async () => {
     const upper = await proxy()
     const lower = await proxy()
     vi.stubEnv('HTTPS_PROXY', upper.url)
