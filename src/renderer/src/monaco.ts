@@ -6,8 +6,7 @@ import JsonWorker from 'monaco-editor/languages/features/json/json.worker?worker
 import TsWorker from 'monaco-editor/languages/features/typescript/ts.worker?worker'
 import type { Theme } from '@shared/settings'
 import { t } from './i18n'
-import { logRules } from './line-highlights'
-import { markerPattern } from './log-lines'
+import { logTokens } from './line-highlights'
 
 self.MonacoEnvironment = {
   getWorker(_workerId, label) {
@@ -100,17 +99,17 @@ monaco.editor.defineTheme('polyscope-light', {
   }
 })
 
-// Monaco has no language for logs; this one picks out Polyscope's own marks, levels, timestamps, strings and numbers.
+// Monaco has no language for logs; this one picks out Polyscope's own marks, a line's Log Level, timestamps, strings and
+// numbers. Each line is read on its own, so there's no state to carry from one to the next.
+const lineByLine: monaco.languages.IState = { clone: () => lineByLine, equals: () => true }
+const scopes: Record<string, string> = { string: 'string.log', number: 'number.log' }
 monaco.languages.register({ id: 'log', aliases: ['Log'] })
-monaco.languages.setMonarchTokensProvider('log', {
-  tokenizer: {
-    root: [
-      [markerPattern, 'log.marker'],
-      ...logRules.map(([rule, highlight]): [RegExp, string] => [rule, `log.${highlight}`]),
-      [/"(?:[^"\\]|\\.)*"/, 'string'],
-      [/\b\d+(?:\.\d+)?\b/, 'number']
-    ]
-  }
+monaco.languages.setTokensProvider('log', {
+  getInitialState: () => lineByLine,
+  tokenize: (line) => ({
+    tokens: logTokens(line).map(({ start, token }) => ({ startIndex: start, scopes: token ? (scopes[token] ?? `log.${token}`) : '' })),
+    endState: lineByLine
+  })
 })
 
 export interface Language {

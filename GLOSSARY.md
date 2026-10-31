@@ -65,6 +65,10 @@ _Avoid_: tail, watch, stream (as a verb)
 How far back a log view's lines go: only those logged since a time, a while ago or a date and time typed in, still capped by **Last N lines**. Offered only by a **Log Source** type that can read from a time; not remembered per **Source**, as **Last N lines** is: each new tab starts at any time.
 _Avoid_: time window, time range, from
 
+**Log Level**:
+How serious a log line is: error, warning, info or debug. A line has at most one, found in its opening words or in a level field, whatever logger's wording it is written in; a level word later in the line's message is not its **Log Level**.
+_Avoid_: severity, priority
+
 **Large File**:
 A file above the size threshold (default 50 MB), opened in the **Large File Viewer** instead of the full editor.
 

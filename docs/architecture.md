@@ -358,7 +358,7 @@ flowchart TB
     WS["workspace.ts<br/>tabs as an immutable Workspace"]
     FF["follow-feed.ts<br/>routes FollowEvents to their tab"]
     TN["tree-navigation.ts"]
-    LH["line-highlights.ts, log-lines.ts"]
+    LH["log-level.ts, line-highlights.ts, log-lines.ts"]
     SR["search-results.ts"]
   end
 
@@ -378,7 +378,8 @@ Key pieces:
 - **`components/use-tabs.ts`** + **`workspace.ts`**: the open tabs. `workspace.ts` holds the tab state as an immutable `Workspace` and pure functions over it (`openTab`, `closeTab`, `pinTab`, `endFollow`…). `use-tabs.ts` does the side effects: calling the core to open files and logs, and stopping a Follow or closing a Large File once no tab shows it. Tabs live only in memory and are never saved.
 - **`follow-feed.ts`**: one subscription to `onFollowEvent`, routing each update to the tab that owns its `followId`. It queues updates that arrive before the tab has attached.
 - **`source-types.tsx`**: the UI's per-Source-Type registry (`SourceTypeUi`): label, icon, blank settings, dialog fields, and how to show a path. The UI-side counterpart of the core's Source Type implementations.
-- **`monaco.ts`**: Monaco's set-up: language workers, themes, the log-highlighting language.
+- **`monaco.ts`**: Monaco's set-up: language workers, themes, the log-highlighting language, whose tokens `line-highlights.ts` gives line by line, as it gives the Large File Viewer's pieces.
+- **`log-level.ts`**: a line's Log Level, as popular loggers write it: from a level field (JSON or logfmt, pino's numbers, Serilog's CLEF), klog's header, or the first level word in the first 100 characters of the line's own text, a lower- or title-case one only where it's set apart (`[info]`, `|Warn|`, `fail:`).
 - **`Viewer.tsx`** (Monaco, for normal files and logs) and **`LargeFileViewer.tsx`** (a virtualized, paged list that asks the core for lines as you scroll).
 - **`i18n/`**: every user-visible string is in `i18n/en.ts` and read with `t('key', { vars })`. Error codes map to messages as `error.<CODE>`.
 - **`styles/app.css`**: one stylesheet, themed by CSS custom properties. In the Extension Copy, `webview.css` maps them to VS Code's theme colours.
