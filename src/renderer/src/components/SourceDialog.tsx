@@ -37,10 +37,11 @@ export function SourceDialog({ editing, environments, onManageEnvironments, onSa
   const ui = uiFor(settings.type)
 
   // A test result only speaks for the settings it was run with.
-  const change = (next: NewSource) => {
-    setSettings(next)
-    setTest(null)
-  }
+  // (An update that leaves them as they were, the same object, keeps it.)
+  useEffect(() => setTest(null), [settings])
+  const change = (next: NewSource) => setSettings(next)
+  const update = (change: (current: NewSource) => NewSource) =>
+    setSettings((current) => (current.type === settings.type ? change(current) : current))
 
   const testConnection = async () => {
     const run: TestRun = { state: 'testing' }
@@ -144,7 +145,7 @@ export function SourceDialog({ editing, environments, onManageEnvironments, onSa
           </div>
         </div>
 
-        <ui.Fields value={settings} onChange={change} editing={editing} />
+        <ui.Fields value={settings} onChange={change} update={update} editing={editing} />
 
         <div className="dialog__test">
           <button type="button" className="button button--quiet" disabled={test?.state === 'testing'} onClick={testConnection}>
