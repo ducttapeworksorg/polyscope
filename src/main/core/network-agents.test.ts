@@ -22,7 +22,7 @@ afterEach(async () => {
 
 /** A server answering every request with its path, over http and over https through a TLS front. */
 async function startServer() {
-  const server = createServer((request, response) => response.end(request.url))
+  const server = createServer((request, response) => response.writeHead(200, { 'Content-Type': 'text/plain' }).end(request.url))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const listening = server.address()
   if (!listening || typeof listening === 'string') throw new Error('Not listening on a port')
