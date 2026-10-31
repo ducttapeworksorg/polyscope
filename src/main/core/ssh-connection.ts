@@ -241,6 +241,8 @@ interface Pooled {
   busy: number
   /** Channels open over it. */
   open: number
+  /** Commands being started over it, each settling once it runs or has failed. */
+  starting: Set<Promise<unknown>>
   /** Set when the server refused it another channel, until one of its own closes: how many it had open then. */
   fullAt?: number
 }
@@ -277,7 +279,7 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions, 
   let sftp: Promise<SFTPWrapper> | undefined
   // Set by close(): the connection closing after that hasn't dropped.
   let closing = false
-  const first: Pooled = { signedIn, extra: false, busy: 0, open: 0 }
+  const first: Pooled = { signedIn, extra: false, busy: 0, open: 0, starting: new Set() }
   const pool: Pooled[] = [first]
   // A bastion is closed along with the connection through it: when that closes, so does the channel through it. So
   // are the extra connections, and everything on them.
@@ -316,7 +318,7 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions, 
         extra.client.end()
         throw closedError()
       }
-      const pooled: Pooled = { signedIn: extra, extra: true, busy: 0, open: 0 }
+      const pooled: Pooled = { signedIn: extra, extra: true, busy: 0, open: 0, starting: new Set() }
       pool.push(pooled)
       // Closed, it leaves the pool straight away, though its channels may not have closed yet.
       extra.onClosed(() => {
@@ -327,8 +329,8 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions, 
     })().finally(() => (opening = undefined)))
 
   /** Runs a command over one of the pool's connections, failing with ssh2's error as it is if the server refuses. */
-  const execOver = (pooled: Pooled, command: string) =>
-    new Promise<ClientChannel>((resolveExec, rejectExec) => {
+  const execOver = (pooled: Pooled, command: string) => {
+    const started = new Promise<ClientChannel>((resolveExec, rejectExec) => {
       const freed = () => {
         pooled.busy--
         release(pooled)
@@ -355,6 +357,11 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions, 
         rejectExec(closedError())
       }
     })
+    pooled.starting.add(started)
+    const settled = () => void pooled.starting.delete(started)
+    started.then(settled, settled)
+    return started
+  }
 
   return {
     user: target.user,
@@ -395,6 +402,10 @@ export async function connectSsh(target: SshTarget, options: SshConnectOptions, 
           if (error instanceof CoreError) throw error
           const failure = error as Error
           if (!isRefusal(failure)) throw new CoreError('UNREACHABLE', `${address} wouldn't run ${command}: ${failure.message}`)
+          // The server refuses a channel as soon as it's asked for one, but ssh2 tells of a channel it opened only once
+          // its command runs too: refused while others are being started, how many it runs at once is known once they are.
+          while (!pooled.open && pooled.starting.size) await Promise.allSettled(pooled.starting)
+          if (pooled.extra && pooled.signedIn.closed) continue
           // Refused with nothing else running on it, it's not a limit on how many at once: the server runs no commands.
           if (!pooled.open) throw new CoreError('UNREACHABLE', `${address} won't run commands for ${target.user}: ${failure.message}`)
           pooled.fullAt = pooled.open

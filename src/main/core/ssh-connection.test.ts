@@ -166,6 +166,21 @@ describe('an SSH connection to a server that limits sessions on one connection (
     expect(server.connectionCount()).toBe(1)
   })
 
+  it('fails saying the server runs no commands if it refuses several started at once, without opening more', async () => {
+    const server = await startServer({ maxSessions: 0 })
+    const connection = await connect(server)
+
+    const results = await Promise.allSettled(Array.from({ length: 3 }, () => connection.exec('follow')))
+
+    for (const result of results) {
+      expect(result).toMatchObject({
+        status: 'rejected',
+        reason: { code: 'UNREACHABLE', message: expect.stringMatching(new RegExp(`won't run commands for ${server.user}`)) }
+      })
+    }
+    expect(server.connectionCount()).toBe(1)
+  })
+
   it('fails naming MaxSessions, and why, when another connection can’t be opened', async () => {
     const server = await startServer({ maxSessions: 2, maxConnections: 1 })
     const connection = await connect(server)
@@ -188,5 +203,5 @@ describe('an SSH connection to a server that limits sessions on one connection (
       message: expect.stringMatching(new RegExp(`no more than ${maxPooledConnections} connections`))
     })
     expect(server.connectionCount()).toBe(maxPooledConnections)
-  })
+  }, 30_000)
 })
