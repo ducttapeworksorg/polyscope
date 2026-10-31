@@ -2,10 +2,13 @@ import type { ReactNode } from 'react'
 import type { LastNLines } from '@shared/core-api'
 import { t } from '../i18n'
 import { formatCount } from '../i18n/format'
+import type { LevelCounts } from '../log-entries'
+import type { LogLevel } from '../log-level'
 import type { SinceChoice } from '../since'
-import { canShowPrevious, earlierOf, isLog, offersPrevious, sinceOffered, type OpenTab } from '../workspace'
+import { canShowPrevious, earlierOf, hiddenLevelsOf, isLog, offersPrevious, sinceOffered, type OpenTab } from '../workspace'
 import { SaveCopyButton } from './FileToolbar'
 import { LastNLinesControl } from './LastNLinesControl'
+import { LevelFilterControl } from './LevelFilterControl'
 import { SinceControl } from './SinceControl'
 
 interface Props {
@@ -18,6 +21,9 @@ interface Props {
   onToggleTimestamps(): void
   onToggleUtc(): void
   onToggleWrap(): void
+  /** How many Log Entries the log shown has of each Log Level, for its Level Filter. */
+  levelCounts?: LevelCounts
+  onToggleLevel(level: LogLevel): void
   /** Reads the lines before the first shown, from a Source Type that can read further back. */
   onLoadEarlier(): void
   /** Saves a copy of the lines shown, asking where; without it, the toolbar offers no "Save a copy…". */
@@ -43,9 +49,9 @@ export function Toggle({ pressed, disabled, tooltip, onToggle, children }: Toggl
 /**
  * The controls at the top of every log view: its "Last N lines", its Since when its Source Type offers it, loading
  * the lines before those shown when its Source Type can, Follow (with pause and resume) for a Log Stream's current log or a file, switching a Log Stream to its Previous Log and back if its Source Type has
- * them, timestamps in local time or UTC for a Log Stream, wrapping, and saving a copy of the lines shown.
+ * them, its Level Filter, timestamps in local time or UTC for a Log Stream, wrapping, and saving a copy of the lines shown.
  */
-export function LogToolbar({ tab, onChangeLastNLines, onChangeSince, onToggleFollow, onTogglePause, onTogglePrevious, onToggleTimestamps, onToggleUtc, onToggleWrap, onLoadEarlier, onSaveCopy }: Props) {
+export function LogToolbar({ tab, onChangeLastNLines, onChangeSince, onToggleFollow, onTogglePause, onTogglePrevious, onToggleTimestamps, onToggleUtc, onToggleWrap, levelCounts, onToggleLevel, onLoadEarlier, onSaveCopy }: Props) {
   const { file, follow } = tab
   const log = file.view === 'log' ? file : null
   // Kept by a log that failed to read, for reading it again.
@@ -64,6 +70,7 @@ export function LogToolbar({ tab, onChangeLastNLines, onChangeSince, onToggleFol
           {t('logView.loadEarlier')}
         </button>
       )}
+      <LevelFilterControl hidden={hiddenLevelsOf(tab)} {...(log && levelCounts && { counts: levelCounts })} disabled={!log} onToggle={onToggleLevel} />
       <div className="log-toolbar__toggles">
         <Toggle
           pressed={Boolean(follow)}

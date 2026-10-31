@@ -65,6 +65,36 @@ test('add a Local Filesystem Source, browse it, read a file, and find it again a
   await expect(relaunched.getByRole('tab')).toHaveCount(0)
 })
 
+test('filter a log by Log Level, hiding an error with its stack trace and keeping line numbers', async () => {
+  const window = await app.firstWindow()
+  const log = ['INFO starting', 'ERROR request failed', '    at Handler.handle(Handler.java:42)', 'WARN retrying', 'DEBUG attempt 2']
+  await writeFile(join(dir, 'root', 'logs', 'app.log'), `${log.join('\n')}\n`)
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  await window.getByRole('treeitem', { name: /^app\.log/ }).click()
+
+  const levels = window.getByRole('group', { name: 'Log Levels shown' })
+  const editor = window.getByTestId('editor')
+  const level = (name: string) => levels.getByRole('button', { name: new RegExp(`^${name}`) })
+  await expect(level('Error')).toHaveText('Error1')
+  await expect(level('Info')).toHaveAttribute('aria-pressed', 'true')
+  await expect(editor).toContainText('at Handler.handle')
+
+  await level('Error').click()
+  await expect(level('Error')).toHaveAttribute('aria-pressed', 'false')
+  await expect(editor).not.toContainText('ERROR request failed')
+  await expect(editor).not.toContainText('at Handler.handle')
+  await expect(editor).toContainText('WARN retrying')
+  await expect(editor.locator('.line-numbers')).toHaveText(['1', '4', '5', '6'])
+
+  for (const name of ['Warning', 'Info', 'Debug']) await level(name).click()
+  await expect(window.getByRole('status').filter({ hasText: 'Every Log Level is hidden' })).toBeVisible()
+  await level('Error').click()
+  await expect(editor).toContainText('ERROR request failed')
+  await expect(window.getByRole('status').filter({ hasText: 'Every Log Level is hidden' })).toBeHidden()
+})
+
 test('show file sizes and modified times, and hide them for good from the sidebar', async () => {
   const window = await app.firstWindow()
   await addSource(window, 'Fixture', join(dir, 'root'))
