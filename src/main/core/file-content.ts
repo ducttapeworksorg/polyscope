@@ -116,6 +116,24 @@ export function decode(bytes: Uint8Array, encoding: TextEncoding): string {
   }
 }
 
+/** Encodes text as `encoding`, starting with that encoding's BOM if `withBom`: what decode reads back as `text`. */
+export function encode(text: string, encoding: TextEncoding, withBom: boolean): Uint8Array {
+  const bom = Buffer.from((withBom && boms.find(([name]) => name === encoding)?.[1]) || [])
+  switch (encoding) {
+    case 'utf-8':
+      return Buffer.concat([bom, Buffer.from(text, 'utf8')])
+    case 'utf-16le':
+      return Buffer.concat([bom, Buffer.from(text, 'utf16le')])
+    case 'utf-16be':
+      return Buffer.concat([bom, Buffer.from(text, 'utf16le').swap16()])
+    case 'latin1':
+      return Buffer.concat([bom, Buffer.from(text, 'latin1')])
+  }
+}
+
+/** Whether the bytes start with `encoding`'s BOM. */
+export const startsWithBom = (bytes: Uint8Array, encoding: TextEncoding) => bomOf(bytes)?.[0] === encoding
+
 const hex = (byte: number) => byte.toString(16).padStart(2, '0')
 const printable = (byte: number) => (byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : '.')
 

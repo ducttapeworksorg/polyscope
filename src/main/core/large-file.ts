@@ -1,5 +1,6 @@
 import { open } from 'node:fs/promises'
 import type { Compression, LargeFileEncoding, LargeFileLines, LargeFileStatus, SourcePath } from '@shared/core-api'
+import { ansiStripper } from './ansi'
 import { CoreError } from './core-error'
 import { inflate } from './file-content'
 import type { ByteRange, FileSource } from './file-source'
@@ -37,16 +38,23 @@ const decodeLine = (bytes: Uint8Array, encoding: LargeFileEncoding) =>
 export const decodeShortLine = (bytes: Uint8Array, encoding: LargeFileEncoding) =>
   decodeLine(bytes.at(-1) === carriageReturn ? bytes.subarray(0, -1) : bytes, encoding)
 
-/** Collects a line's bytes as they come, keeping only as many as are shown. */
+/**
+ * Collects a line's bytes as they come, keeping only as many as are shown: its escape sequences removed first, so it's
+ * cut short by what's shown of it.
+ */
 export function lineBuilder(encoding: LargeFileEncoding) {
   let pieces: Uint8Array[] = []
   let length = 0
   let cut = false
+  let added = false
+  const stripper = ansiStripper()
   return {
     get empty() {
-      return length === 0 && !cut
+      return !added
     },
-    add(bytes: Uint8Array) {
+    add(raw: Uint8Array) {
+      if (raw.length) added = true
+      const bytes = stripper.strip(raw)
       const room = largeFileReading.maxLineBytes - length
       if (bytes.length > room) cut = true
       const kept = bytes.subarray(0, Math.max(0, room))
@@ -62,6 +70,8 @@ export function lineBuilder(encoding: LargeFileEncoding) {
       pieces = []
       length = 0
       cut = false
+      added = false
+      stripper.reset()
       return line
     }
   }

@@ -1,4 +1,5 @@
 import { largeFileSearchLimit, type LargeFileEncoding, type LargeFileMatch, type LargeFileSearchUpdate } from '@shared/core-api'
+import { escapeAt } from './ansi'
 import { CoreError } from './core-error'
 import { chunksOf, decodeShortLine, largeFileReading, lineBuilder, type LargeFileContent } from './large-file'
 
@@ -52,9 +53,12 @@ async function searchLines(chunks: AsyncIterable<Uint8Array>, encoding: LargeFil
   for await (const bytes of chunks) {
     if (options.stopped()) return null
     let start = 0
+    // Where the chunk's next ESC is, from `start` on: a line with one has escape sequences for the line builder to remove.
+    let escape = -1
     for (let at = bytes.indexOf(lineBreak); at >= 0; at = bytes.indexOf(lineBreak, start)) {
-      // Most lines are short and in one chunk, so are decoded where they are rather than copied first.
-      if (line.empty && at - start <= largeFileReading.maxLineBytes) test(decodeShortLine(bytes.subarray(start, at), encoding))
+      if (escape < start) escape = escapeAt(bytes, start)
+      // Most lines are short, in one chunk and plain, so are decoded where they are rather than copied first.
+      if (line.empty && at - start <= largeFileReading.maxLineBytes && escape > at) test(decodeShortLine(bytes.subarray(start, at), encoding))
       else {
         line.add(bytes.subarray(start, at))
         test(line.take())

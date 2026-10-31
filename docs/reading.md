@@ -45,6 +45,8 @@ A container's log, a CloudWatch log, or a systemd unit's journal opens with a to
 - **Wrap**: wrap long lines.
 - **Save a copy…**: keep the log on your computer, say to attach it to a bug report. See below.
 
+Colour codes and other ANSI escape sequences that loggers write into their output are removed, from logs, files that open as logs (`.log`, `.out`, `.err`) and Large Files alike, so a log shows, is searched and is saved as plain text; **Save a copy…** of a file keeps the file's original bytes, sequences and all.
+
 While following, the log marks what happened in line: a container restarting, the connection dropping and recovering, or the container, pod, CloudWatch log or Source going away.
 
 ### Save a copy of a log
