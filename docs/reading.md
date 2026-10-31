@@ -13,7 +13,7 @@ Each tab carries its Source's Environment colour. The status bar shows the activ
 
 ## Files
 
-Polyscope highlights a file by its name: YAML, JSON, XML, source code, and logs, whose levels (`INFO`, `WARN`, `ERROR`…), timestamps and numbers are coloured. It also handles:
+Polyscope highlights a file by its name: YAML, JSON, XML, source code, and logs, whose timestamps and numbers are coloured, and each line's level: the one its level field says (`level=warn`, `"level":30`), or the first level word near its start, as popular loggers write them (`INFO`, `[12:00:00 WRN]`, `|Error|`, `fail:`, klog's `E1029 …`), not one later in its message. It also handles:
 
 - **Compressed files**: `.gz` and `.zst` files are shown decompressed, highlighted by the name inside (`app.log.gz` as a log).
 - **Encodings**: the encoding is detected. Click it in the status bar to reopen the file as UTF-8, UTF-16 or Latin-1.
