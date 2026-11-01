@@ -4,7 +4,8 @@
 // `locked`, which holds a Deployment `web` and a CronJob `nightly`, listing pods is denied the way RBAC denies it;
 // `crashing` holds a pod `crasher` whose restarted containers' previous runs Kubernetes has removed; `files` holds
 // the Deployments of `filesDeployments`, for a Kubernetes Files Source's tree (it can't exec into their pods); `batch`
-// holds the CronJobs and Jobs of `batchJobs`.
+// holds the CronJobs and Jobs of `batchJobs`; `events` holds no Workloads, only the Events of `namespaceEvents`, and
+// `noevents` nothing, listing its Events denied the way RBAC denies it.
 // Given a token, it turns away requests that don't bear it.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
@@ -127,6 +128,42 @@ const batchJobList = Object.entries(batchJobs).flatMap(([cronJob, jobs]) =>
 
 const batchPods = Object.values(batchJobs).flatMap((jobs) => Object.values(jobs).flat())
 
+/** An Event about an object, of a type, with what it says and when, as the API server gives it. */
+const event = (type: string, reason: string, kind: string, name: string, message: string, times: Record<string, unknown>) => ({
+  metadata: { name: `${name}.${reason.toLowerCase()}`, namespace: 'events', ...('creationTimestamp' in times && { creationTimestamp: times['creationTimestamp'] }) },
+  type,
+  reason,
+  message,
+  involvedObject: { kind, name, namespace: 'events' },
+  ...Object.fromEntries(Object.entries(times).filter(([key]) => key !== 'creationTimestamp'))
+})
+
+/**
+ * The Events in `events`, listed out of order: a pod scheduled, then pulled (only the time it was created), a Deployment
+ * scaled twice (said as a series, events.k8s.io style), its ReplicaSet failing to create a pod (first seen only), and
+ * the pod's container backing off 14 times, first seen at the start and last seen at 10:30.
+ */
+export const namespaceEvents = [
+  event('Warning', 'BackOff', 'Pod', 'api-7d9f-x2k', 'Back-off restarting failed container', {
+    count: 14,
+    firstTimestamp: '2026-10-29T10:00:00Z',
+    lastTimestamp: '2026-10-29T10:30:00Z'
+  }),
+  event('Normal', 'Pulled', 'Pod', 'api-7d9f-x2k', 'Container image "busybox" already present on machine\n', { creationTimestamp: '2026-10-29T10:05:00Z' }),
+  event('Warning', 'FailedCreate', 'ReplicaSet', 'api-7d9f', 'Error creating: pods "api-7d9f-y" is forbidden: exceeded quota', {
+    firstTimestamp: '2026-10-29T10:20:00Z'
+  }),
+  event('Normal', 'ScalingReplicaSet', 'Deployment', 'api', 'Scaled up replica set api-7d9f to 1', {
+    eventTime: '2026-10-29T09:59:00.000000Z',
+    series: { count: 2, lastObservedTime: '2026-10-29T10:10:00.000000Z' }
+  }),
+  event('Normal', 'Scheduled', 'Pod', 'api-7d9f-x2k', 'Successfully assigned events/api-7d9f-x2k to node-1', {
+    count: 1,
+    firstTimestamp: '2026-10-29T10:00:00Z',
+    lastTimestamp: '2026-10-29T10:00:00Z'
+  })
+]
+
 const json = (response: ServerResponse, status: number, body: unknown) =>
   response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
 
@@ -168,6 +205,11 @@ function respond(request: IncomingMessage, response: ServerResponse, token: stri
     const message = `pods is forbidden: User "jane" cannot list resource "pods" in API group "" in the namespace "locked"`
     return json(response, 403, { kind: 'Status', status: 'Failure', reason: 'Forbidden', code: 403, message })
   }
+  if (namespace === 'noevents' && rest === '/events') {
+    const message = `events is forbidden: User "jane" cannot list resource "events" in API group "" in the namespace "noevents"`
+    return json(response, 403, { kind: 'Status', status: 'Failure', reason: 'Forbidden', code: 403, message })
+  }
+  if (namespace === 'events' && rest === '/events') return json(response, 200, { kind: 'EventList', apiVersion: 'v1', metadata: {}, items: namespaceEvents })
   if (namespace === 'locked' && rest === '/deployments') {
     return json(response, 200, { kind: 'DeploymentList', apiVersion: 'apps/v1', metadata: {}, items: [{ metadata: { name: 'web', uid: 'web' } }] })
   }

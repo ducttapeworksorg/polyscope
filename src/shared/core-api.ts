@@ -663,12 +663,17 @@ export type KubernetesLogGroup =
       containerCount: number
     }
 
-/** What a Log Stream is in a Kubernetes Logs Source: a container. */
-export interface KubernetesLogStream {
-  kind: 'container'
-  /** Set for an init container, or a sidecar (an init container that keeps running); left out for the pod's main containers. */
-  role?: ContainerRole
-}
+/** What a Log Stream is in a Kubernetes Logs Source: a container, or the namespace's Events, listed first at its root. */
+export type KubernetesLogStream =
+  | {
+      kind: 'container'
+      /** Set for an init container, or a sidecar (an init container that keeps running); left out for the pod's main containers. */
+      role?: ContainerRole
+    }
+  | { kind: 'events' }
+
+/** The path, and name, of a Kubernetes Logs Source's Log Stream of its namespace's Events: never a group's. */
+export const kubernetesEventsPath = 'events'
 
 export type ContainerRole = 'init' | 'sidecar'
 

@@ -77,6 +77,8 @@ export interface LogStreamInfo {
    * sends its log somewhere the engine can't read it back from.
    */
   unreadable?: string
+  /** Set when it can't be followed yet: a Kubernetes namespace's Events, until they can be (#117). */
+  followable?: false
   /** Set by a Kubernetes Logs Source: the container's pod and name, and how many times it has restarted. */
   kubernetes?: { pod: string; container: string; restarts: number }
 }

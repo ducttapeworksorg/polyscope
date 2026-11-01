@@ -66,7 +66,7 @@ export function useSaveCopies(): SaveCopiesModel {
     saveCopy: (source: SourceInfo, path: SourcePath, name: string) => showSave(name, () => window.polyscope.saveCopy(source.id, path)),
     saveLogCopy: (tab: OpenTab, lines: string[]) => {
       const copy = logCopyOf(tab, lines, new Date())
-      return copy ? showSave(tabName(tab.file), () => window.polyscope.saveLogCopy(copy.name, copy.text)) : Promise.resolve()
+      return copy ? showSave(tabName(tab), () => window.polyscope.saveLogCopy(copy.name, copy.text)) : Promise.resolve()
     },
     cancel: (saveId) => void core.cancelSaveCopy(saveId).catch(() => undefined),
     dismiss: (saveId) => setSaves((current) => dismissSave(current, saveId))

@@ -169,11 +169,11 @@ When the Workload has several pods, each shows as a folder of its own, since eac
 
 ## Kubernetes Logs
 
-Every container log in one namespace, laid out the way the cluster runs them.
+Every container log in one namespace, laid out the way the cluster runs them, and the namespace's **Events**.
 
 - **Context** and **Namespace**, as for Kubernetes Files.
 
-The tree groups the namespace's Workloads: **Deployments**, **StatefulSets**, **DaemonSets**, **CronJobs** (with their Jobs), **Jobs**, and any **Pods** no Workload owns. Along the way it shows:
+The tree starts with **Events**: every Event in the namespace, like a pod scheduled, an image failing to pull or a probe failing, listed even when the namespace has no Workloads. See [Kubernetes Events](reading.md#kubernetes-events). Below it, the tree groups the namespace's Workloads: **Deployments**, **StatefulSets**, **DaemonSets**, **CronJobs** (with their Jobs), **Jobs**, and any **Pods** no Workload owns. Along the way it shows:
 
 - each Workload's **Ready Count**, like `1/2`;
 - each pod's health as a coloured dot, with its status (`Running`, `CrashLoopBackOff`, `OOMKilled`…) and restarts in its tooltip;

@@ -49,19 +49,26 @@ describe('Kubernetes Logs against a stand-in API server', () => {
   })
 
   describeLogSourceContract('Kubernetes Logs', capabilities, async () => ({ logSource, counter }))
+
+  it('cannot follow the namespace’s Events yet', async () => {
+    const events = createKubernetesLogSource(kubeConfigFor('fake'), 'events')
+    await expect(events.followLog('events', {}, () => undefined)).rejects.toMatchObject({ code: 'NOT_FOLLOWABLE' })
+  })
 })
 
 describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () => {
   describeLogSourceContract('Kubernetes Logs', capabilities, async () => ({ logSource: testLogSource(), counter }))
 
   describe('its tree', () => {
-    it('starts with a group per kind of Workload, which never folds, and reaches containers only through pods', async () => {
+    it('starts with the namespace’s Events, then a group per kind of Workload, which never folds, and reaches containers only through pods', async () => {
       const logSource = testLogSource()
-      for (const group of await logSource.listChildren('')) {
+      const [events, ...groups] = await logSource.listChildren('')
+      expect(events).toEqual({ kind: 'logStream', name: 'events', path: 'events', capabilities: { previousLog: false, restarts: false }, kubernetes: { kind: 'events' } })
+      for (const group of groups) {
         expect(group, group.path).toEqual({ kind: 'group', name: group.path, path: group.path, unfoldable: true, kubernetes: { kind: 'workloads', workloadKind: expect.any(String) } })
       }
       const nodes = await walk(logSource)
-      for (const node of nodes.filter((n) => n.kind === 'logStream')) {
+      for (const node of nodes.filter((n) => n.kind === 'logStream' && n.path !== 'events')) {
         expect(node.kubernetes?.kind, node.path).toBe('container')
         const parent = nodes.find((n) => n.path === parentOf(node.path))
         expect(parent?.kind === 'group' && parent.kubernetes?.kind, node.path).toBe('pod')

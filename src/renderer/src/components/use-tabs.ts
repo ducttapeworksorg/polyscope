@@ -13,6 +13,7 @@ import {
   emptyWorkspace,
   endFollow,
   followIdsOf,
+  followsOnOpen,
   isLog,
   largeFileIdsOf,
   markLogStreamGone,
@@ -162,9 +163,11 @@ export function useTabs({ onSourcesChanged }: Options) {
   const openFile = (source: SourceInfo, node: Pick<EntryNode, 'path' | 'name'>, options?: { pinned: boolean }) =>
     openInTab(source, node, options, () => core.openFile(source.id, node.path))
 
-  /** Opens a Log Stream Following it, as it's live. */
+  /** Opens a Log Stream Following it, as it's live, unless it can't be followed yet (a namespace's Events). */
   const openLog = (source: SourceInfo, node: Pick<LogStreamNode, 'path' | 'name'>, options?: { pinned: boolean }) =>
-    openInTab(source, node, options, () => readLog(source.id, { of: 'logStream', path: node.path, name: node.name, previous: false }, {}, true))
+    openInTab(source, node, options, () =>
+      readLog(source.id, { of: 'logStream', path: node.path, name: node.name, previous: false }, {}, followsOnOpen(source, node.path))
+    )
 
   /**
    * Follows a file in a log view, starting from its last lines: in its tab, if it's open (in the editor
@@ -252,7 +255,7 @@ export function useTabs({ onSourcesChanged }: Options) {
     const lines = shown === undefined ? {} : { lastNLines: shown }
     try {
       // A current log that failed to read had its Follow stopped; read again, it's Followed as when first opened.
-      const retrying = file.view === 'logFailed' && !previous
+      const retrying = file.view === 'logFailed' && !previous && followsOnOpen(tab.source, file.path)
       const { since: _, ...rest } = options
       const asked = { ...lines, timestamps, ...rest, previous, ...(since !== undefined && { since }) }
       const read = await readLog(tab.source.id, log, asked, following ?? (Boolean(tab.follow) || retrying))

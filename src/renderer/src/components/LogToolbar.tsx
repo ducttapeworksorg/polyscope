@@ -5,7 +5,7 @@ import { formatCount } from '../i18n/format'
 import type { LevelCounts } from '../log-entries'
 import type { LogLevel } from '../log-level'
 import type { SinceChoice } from '../since'
-import { canShowPrevious, earlierOf, hiddenLevelsOf, isLog, offersPrevious, sinceOffered, type OpenTab } from '../workspace'
+import { canShowPrevious, earlierOf, followsOnOpen, hiddenLevelsOf, isLog, offersPrevious, sinceOffered, type OpenTab } from '../workspace'
 import { SaveCopyButton } from './FileToolbar'
 import { LastNLinesControl } from './LastNLinesControl'
 import { LevelFilterControl } from './LevelFilterControl'
@@ -60,6 +60,8 @@ export function LogToolbar({ tab, onChangeLastNLines, onChangeSince, onToggleFol
   const ofFile = isLog(file) && file.of === 'file'
   // A Previous Log has ended: there's nothing to Follow.
   const previous = isLog(file) && file.previous
+  // A namespace's Events can't be followed yet.
+  const unfollowable = isLog(file) && file.of === 'logStream' && !followsOnOpen(tab.source, file.path)
   const lastNLines = file.view === 'log' || file.view === 'logFailed' ? file.lastNLines : 'all'
   return (
     <div className="log-toolbar">
@@ -74,8 +76,13 @@ export function LogToolbar({ tab, onChangeLastNLines, onChangeSince, onToggleFol
       <div className="log-toolbar__toggles">
         <Toggle
           pressed={Boolean(follow)}
-          disabled={!log || previous}
-          tooltip={t(ofFile ? 'logView.follow.file.tooltip' : previous ? 'logView.follow.previous.tooltip' : 'logView.follow.tooltip')}
+          disabled={!log || previous || unfollowable}
+          tooltip={t(
+            ofFile ? 'logView.follow.file.tooltip'
+            : previous ? 'logView.follow.previous.tooltip'
+            : unfollowable ? 'logView.follow.events.tooltip'
+            : 'logView.follow.tooltip'
+          )}
           onToggle={onToggleFollow}
         >
           {t('logView.follow')}
