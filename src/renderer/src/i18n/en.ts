@@ -266,6 +266,7 @@ export const en = {
   'tree.menuLabel': 'Actions for {name}',
   'tree.follow': 'Follow',
   'tree.openLog': 'Open log',
+  'tree.openToSide': 'Open to the Side',
   'tree.showEvents': 'Show Events',
   'tree.copyName': 'Copy name',
   'tree.copyJobName': 'Copy Job name',
@@ -290,6 +291,7 @@ export const en = {
   'saveCopy.cancel': 'Cancel',
   'saveCopy.dismiss': 'Dismiss',
 
+  'pane.label': 'Pane {number}',
   'tabs.label': 'Open files and logs',
   'tabs.close': 'Close {name}',
   'tabs.closeTab': 'Close',

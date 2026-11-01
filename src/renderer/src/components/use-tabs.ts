@@ -27,6 +27,7 @@ import {
   noteSlowed,
   offersPodEvents,
   openTab,
+  openToSide,
   pinTab,
   reopenLogTab,
   reopenTab,
@@ -43,6 +44,13 @@ import { nodeKey } from './SourceTree'
 interface Options {
   /** A Source's settings were changed from a tab (its "Last N lines"); the caller reloads the Sources. */
   onSourcesChanged(): Promise<void>
+}
+
+/** How a file or Log Stream is opened: pinned, or as the preview tab; in the active Pane, or to the side. */
+interface OpenInTabOptions {
+  pinned?: boolean
+  /** Opens it in a new Pane beside the active one, or in the other Pane if there's no room for one. */
+  toSide?: boolean
 }
 
 /** Whether two versions of a Source point at the same place, whatever they are called. */
@@ -164,11 +172,11 @@ export function useTabs({ onSourcesChanged }: Options) {
     }
   }
 
-  const openFile = (source: SourceInfo, node: Pick<EntryNode, 'path' | 'name'>, options?: { pinned: boolean }) =>
+  const openFile = (source: SourceInfo, node: Pick<EntryNode, 'path' | 'name'>, options?: OpenInTabOptions) =>
     openInTab(source, node, options, () => core.openFile(source.id, node.path))
 
   /** Opens a Log Stream Following it, as it's live. */
-  const openLog = (source: SourceInfo, node: Pick<LogStreamNode, 'path' | 'name'>, options?: { pinned: boolean }) =>
+  const openLog = (source: SourceInfo, node: Pick<LogStreamNode, 'path' | 'name'>, options?: OpenInTabOptions) =>
     openInTab(source, node, options, () => readLog(source.id, { of: 'logStream', path: node.path, name: node.name, previous: false }, {}, true))
 
   /**
@@ -188,18 +196,19 @@ export function useTabs({ onSourcesChanged }: Options) {
   const openInTab = async (
     source: SourceInfo,
     node: { path: string; name: string },
-    { pinned = false } = {},
+    { pinned = false, toSide = false }: OpenInTabOptions = {},
     read: () => Promise<TabContent>
   ) => {
+    const openWhere = toSide ? openToSide : openTab
     const key = nodeKey(source.id, node.path)
     setOpenError(null)
     latestOpen.current = key
     const open = findTab(workspace, key)
-    if (open) return setWorkspace((ws) => openTab(ws, open, { pinned }))
+    if (open) return setWorkspace((ws) => openWhere(ws, open, { pinned }))
     setOpening(node.name)
     try {
       const file = await readForOpening(key, read)
-      if (latestOpen.current === key) setWorkspace((ws) => openTab(ws, { key, source, file }, { pinned }))
+      if (latestOpen.current === key) setWorkspace((ws) => openWhere(ws, { key, source, file }, { pinned }))
     } catch (error) {
       if (latestOpen.current === key) setOpenError(describeError(error))
     } finally {
@@ -387,6 +396,7 @@ export function useTabs({ onSourcesChanged }: Options) {
   }
 
   return {
+    workspace,
     setWorkspace,
     /** The active Pane's tabs. */
     tabs: activePaneOf(workspace).tabs,

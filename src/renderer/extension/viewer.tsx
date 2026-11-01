@@ -90,6 +90,8 @@ function ViewerTab() {
     <main className="workbench">
       <TabView
         model={tabs}
+        tabs={tabs.tabs}
+        activeTab={tabs.activeTab}
         settings={settings}
         connection={connection}
         onReconnect={() => void reconnect()}

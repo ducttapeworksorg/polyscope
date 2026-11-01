@@ -5,6 +5,7 @@ import {
   dropEarlier,
   earlierOf,
   activateTab,
+  activatePane,
   canFollowFile,
   canShowPrevious,
   closeAllTabs,
@@ -23,6 +24,7 @@ import {
   noteSlowed,
   offersPrevious,
   openTab,
+  openToSide,
   pinTab,
   reopenLogTab,
   reopenTab,
@@ -704,6 +706,43 @@ describe('Panes', () => {
     })
   })
 
+  describe('opening to the side', () => {
+    it('opens a file in a new Pane after the active one, side by side, which becomes active', () => {
+      const ws = openToSide(open('a', 'b'), tab('c'))
+
+      expect(panesShape(ws)).toEqual(['  a [b]', '> [c*]'])
+      expect(ws.layout).toEqual(sideBySide)
+    })
+
+    it('opens a file in the other Pane when there are two, in place of that Pane’s own preview tab', () => {
+      const ws = openTab(openToSide(open('a'), tab('p')), tab('q'))
+
+      expect(panesShape(openToSide(ws, tab('r')))).toEqual(['> a [r*]', '  [q*]'])
+      expect(panesShape(openToSide(activateTab(ws, 'a'), tab('r')))).toEqual(['  [a]', '> [r*]'])
+    })
+
+    it('activates a file’s tab, and its Pane, when it’s open already, pinning it if asked', () => {
+      const ws = openToSide(open('a', 'b'), tab('c'))
+
+      expect(panesShape(openToSide(ws, tab('a')))).toEqual(['> [a] b', '  [c*]'])
+      expect(panesShape(openToSide(ws, tab('c'), { pinned: true }))).toEqual(['  a [b]', '> [c]'])
+      expect(panesShape(openToSide(open('a'), tab('a')))).toEqual(['> [a]'])
+    })
+
+    it('opens a file in the only Pane while it has no tabs, rather than beside an empty one', () => {
+      const ws = openToSide(emptyWorkspace, tab('a'))
+
+      expect(panesShape(ws)).toEqual(['> [a*]'])
+      expect(ws.layout).toEqual({ kind: 'single' })
+    })
+
+    it('gives the new Pane an id none of the others has, even after Panes closed', () => {
+      const reopened = openToSide(closeTab(openToSide(open('a'), tab('b')), 'a'), tab('c'))
+
+      expect(new Set(reopened.panes.map((pane) => pane.id)).size).toBe(2)
+    })
+  })
+
   describe('closing', () => {
     it('closes a Pane left with no tabs, its neighbour becoming active and the layout shrinking', () => {
       const ws = closeTab(panesOf(0, ['a'], ['b', 'c']), 'a')
@@ -728,11 +767,26 @@ describe('Panes', () => {
       expect(panesShape(closeAllTabs(panesOf(1, ['a', 'b'], ['c', 'd'])))).toEqual(['> a [b]'])
     })
 
+    it('closes all the tabs of a given Pane, and so that Pane', () => {
+      expect(panesShape(closeAllTabs(panesOf(1, ['a', 'b'], ['c', 'd']), 0))).toEqual(['> c [d]'])
+      expect(panesShape(closeAllTabs(panesOf(0, ['a', 'b'], ['c', 'd']), 1))).toEqual(['> a [b]'])
+    })
+
+    it('closes a Source’s tabs in every Pane, each Pane’s first left taking over from its active one', () => {
+      const ws = reviseTabs(panesOf(1, ['a', 'x1'], ['b', 'x2']), (open) => (open.key.startsWith('x') ? undefined : open))
+
+      expect(panesShape(ws)).toEqual(['  [a]', '> [b]'])
+    })
+
     it('closes a Pane whose tabs all close along with their Source', () => {
       const ws = reviseTabs(panesOf(1, ['a'], ['b', 'c']), (open) => (open.key === 'a' ? open : undefined))
 
       expect(panesShape(ws)).toEqual(['> [a]'])
     })
+  })
+
+  it('activates a Pane, focused, keeping its active tab', () => {
+    expect(panesShape(activatePane(panesOf(1, ['a', 'b'], ['c', 'd']), 0))).toEqual(['> a [b]', '  c [d]'])
   })
 
   it('cycles through the active Pane’s tabs only', () => {

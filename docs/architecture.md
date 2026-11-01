@@ -378,9 +378,9 @@ flowchart TB
 
 Key pieces:
 
-- **`App.tsx`**: the desktop layout: sidebar, tab strip, viewer and status bar, plus app-wide keyboard shortcuts.
+- **`App.tsx`**: the desktop layout: sidebar, a tab strip and viewer per Pane, and status bar, plus app-wide keyboard shortcuts. Focusing a Pane, or pressing in it, makes it the active Pane. Only the active Pane's `Tabs` takes the tab shortcuts.
 - **`components/use-sources.ts`**: the Sources, Environments, settings and each Source's connection state, mirrored from the core. Owns connect/disconnect and the dialogs' open state.
-- **`components/use-tabs.ts`** + **`workspace.ts`**: the open tabs. `workspace.ts` holds the tab state as an immutable `Workspace` and pure functions over it (`openTab`, `closeTab`, `pinTab`, `endFollow`…). `use-tabs.ts` does the side effects: calling the core to open files and logs, and stopping a Follow or closing a Large File once no tab shows it. Tabs live only in memory and are never saved.
+- **`components/use-tabs.ts`** + **`workspace.ts`**: the open tabs. `workspace.ts` holds the tab state as an immutable `Workspace` (its Panes, each with its tabs and active tab, plus the active Pane and the Layout) and pure functions over it (`openTab`, `openToSide`, `closeTab`, `pinTab`, `endFollow`…). Each Pane has an `id`, which keys its components so its editor and Follows survive the Panes before it closing. `use-tabs.ts` does the side effects: calling the core to open files and logs, and stopping a Follow or closing a Large File once no tab shows it. Tabs live only in memory and are never saved.
 - **`follow-feed.ts`**: one subscription to `onFollowEvent`, routing each update to the tab that owns its `followId`. It queues updates that arrive before the tab has attached.
 - **`source-types.tsx`**: the UI's per-Source-Type registry (`SourceTypeUi`): label, icon, blank settings, dialog fields, and how to show a path. The UI-side counterpart of the core's Source Type implementations.
 - **`monaco.ts`**: Monaco's set-up: language workers, themes, the log-highlighting language, whose tokens `line-highlights.ts` gives line by line, as it gives the Large File Viewer's pieces.
@@ -390,7 +390,7 @@ Key pieces:
 - **`i18n/`**: every user-visible string is in `i18n/en.ts` and read with `t('key', { vars })`. Error codes map to messages as `error.<CODE>`.
 - **`styles/app.css`**: one stylesheet, themed by CSS custom properties. In the Extension Copy, `webview.css` maps them to VS Code's theme colours.
 
-**Reuse in the Extension Copy.** `src/renderer/extension/sidebar.tsx` mounts the same `SourcesPane` with `useSources`. `viewer.tsx` mounts the same `TabView` with `useTabs` for a single tab. Only the entry points differ, which is why components take callbacks such as `onOpenFile` rather than opening tabs themselves: on the desktop they open a tab, in VS Code they ask the extension host to.
+**Reuse in the Extension Copy.** `src/renderer/extension/sidebar.tsx` mounts the same `SourcesPane` with `useSources`. `viewer.tsx` mounts the same `TabView` with `useTabs` for a single tab, in a single Pane. The tree offers **Open to the Side** only when given `onOpenToSide`, which the desktop alone passes. Only the entry points differ, which is why components take callbacks such as `onOpenFile` rather than opening tabs themselves: on the desktop they open a tab, in VS Code they ask the extension host to.
 
 ## How the layers interact
 
