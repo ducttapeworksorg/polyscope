@@ -23,6 +23,11 @@ export interface LogFollowOptions {
    * false once it no longer is.
    */
   onSlowed?(slowed: boolean): void
+  /**
+   * Called by a backend that had to start following over, so may have missed or repeated lines since the last it sent
+   * (Kubernetes Events, when their watch can no longer carry on: "410 Gone"), before the lines from where it started over.
+   */
+  onStartedOver?(): void
 }
 
 /** The connection a log is followed over. */
@@ -77,8 +82,6 @@ export interface LogStreamInfo {
    * sends its log somewhere the engine can't read it back from.
    */
   unreadable?: string
-  /** Set when it can't be followed yet: a Kubernetes namespace's Events, until they can be (#117). */
-  followable?: false
   /** Set by a Kubernetes Logs Source: the container's pod and name, and how many times it has restarted. */
   kubernetes?: { pod: string; container: string; restarts: number }
 }

@@ -57,6 +57,8 @@ export function followLines(update: FollowUpdate, { timestamps, utc, of = 'logSt
       return [mark(t('logView.mark.truncated'))]
     case 'rotated':
       return [mark(t('logView.mark.rotated'))]
+    case 'startedOver':
+      return [mark(t('logView.mark.startedOver'))]
     case 'failed':
       return [mark(t('logView.mark.failed', { reason: describeFailure(update), seconds: Math.round(update.retryIn / 1000) }))]
     case 'recovered':

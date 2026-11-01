@@ -1725,7 +1725,6 @@ export function createCore(options: CoreOptions = {}): Core {
         if (options.previous) throw new CoreError('NOT_FOLLOWABLE', `A Previous Log has ended: ${path}`)
         // The snapshot has to be of the run the Follow starts from: one read while the Log Stream restarted is read again.
         const stream = await logSource.logStreamAt(path)
-        if (stream.followable === false) throw new CoreError('NOT_FOLLOWABLE', `It can’t be followed yet: ${path}`)
         // A Log Stream that doesn't restart has no run to look at.
         const currentRun = currentRunOf(logSource, stream)
         const restartsNow = async () => (currentRun ? (await currentRun(path)).restarts : 0)

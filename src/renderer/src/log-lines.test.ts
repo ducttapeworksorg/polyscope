@@ -73,6 +73,13 @@ describe('what a Follow adds to its log view', () => {
     expect(rotated).toMatch(/rotated/)
   })
 
+  it('marks a Follow of Events started over, as some may be missing or repeated', () => {
+    const [startedOver] = followLines({ kind: 'startedOver' }, plain)
+
+    expect(isMarker(startedOver!)).toBe(true)
+    expect(startedOver).toMatch(/started over.*missing or repeated/)
+  })
+
   it('says a followed file’s Follow ended with its pod, not its container', () => {
     const [ended] = followLines({ kind: 'ended', reason: 'gone' }, { ...plain, of: 'file' })
 

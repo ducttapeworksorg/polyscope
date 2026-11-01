@@ -13,7 +13,6 @@ import {
   cycleTab,
   emptyWorkspace,
   endFollow,
-  followsOnOpen,
   hiddenLevelsOf,
   markLogStreamGone,
   markPodGone,
@@ -485,12 +484,6 @@ describe('a Kubernetes Logs Source’s Events', () => {
   it('are titled Events', () => {
     expect(tabName({ source: cluster, file: events('') })).toBe('Events')
     expect(tabName({ source, file: events('') })).toBe('events')
-  })
-
-  it('open as a snapshot, as they can’t be followed yet, unlike a container’s log', () => {
-    expect(followsOnOpen(cluster, 'events')).toBe(false)
-    expect(followsOnOpen(cluster, 'pods/counter/counter')).toBe(true)
-    expect(followsOnOpen(source, 'events')).toBe(true)
   })
 
   it('say there are none only when none were read', () => {

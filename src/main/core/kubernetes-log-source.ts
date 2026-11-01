@@ -94,20 +94,39 @@ function eventLine(event: CoreV1Event): string {
   return `[${event.type ?? 'Normal'}] ${event.reason ?? ''} ${kind.toLowerCase()}/${name}: ${message}${count > 1 ? ` (×${count})` : ''}`
 }
 
+/** When an Event was last seen as a line's timestamp: RFC 3339 in UTC, the epoch's for one with no time at all. */
+const lineTimestamp = (at: number) => new Date(Number.isNaN(at) ? 0 : at).toISOString()
+
+/** An Event's line, starting with when it was last seen, ending in a line break. */
+const stampedLine = ({ at, line }: { at: number; line: string }) => `${lineTimestamp(at)} ${line}\n`
+
 /**
- * Events as a log, one line per Event, by when each was last seen, oldest first (one with no time at all first of
- * all), as LogReadOptions ask: those last seen since `sinceTime`, the last `tailLines` of those, each starting with
- * when it was last seen when asked, at about `limitBytes`.
+ * Events as lines, one per Event, by when each was last seen, oldest first (one with no time at all first of all):
+ * those last seen since `sinceTime`, each with when it was last seen as its line's timestamp.
  */
-function eventsLog(events: CoreV1Event[], { tailLines, limitBytes, timestamps, sinceTime }: LogReadOptions): string {
+function eventLines(events: CoreV1Event[], sinceTime?: string): { at: number; line: string; name: string }[] {
   const since = sinceTime === undefined ? -Infinity : Date.parse(sinceTime)
-  const seen = events
-    .map((event) => ({ event, at: lastSeen(event) }))
+  return events
+    .map((event) => ({ at: lastSeen(event), line: eventLine(event), name: event.metadata.name ?? '' }))
     .toSorted((a, b) => (Number.isNaN(a.at) ? -Infinity : a.at) - (Number.isNaN(b.at) ? -Infinity : b.at))
     .filter(({ at }) => (sinceTime === undefined ? true : at >= since))
+}
+
+/**
+ * Events as a log, one line per Event, as LogReadOptions ask: those last seen since `sinceTime`, the last `tailLines`
+ * of those, each starting with when it was last seen when asked, at about `limitBytes`.
+ */
+function eventsLog(events: CoreV1Event[], { tailLines, limitBytes, timestamps, sinceTime }: LogReadOptions): string {
+  const seen = eventLines(events, sinceTime)
   const kept = tailLines === undefined ? seen : seen.slice(Math.max(0, seen.length - tailLines))
-  const text = kept.map(({ event, at }) => `${timestamps ? `${new Date(Number.isNaN(at) ? 0 : at).toISOString()} ` : ''}${eventLine(event)}\n`).join('')
+  const text = kept.map((seen) => (timestamps ? stampedLine(seen) : `${seen.line}\n`)).join('')
   return limitBytes === undefined ? text : text.slice(0, limitBytes)
+}
+
+/** What a watch on Events sends, one JSON object a line: a change to an Event, a bookmark, or an error, as a Status. */
+interface WatchEvent {
+  type: 'ADDED' | 'MODIFIED' | 'DELETED' | 'BOOKMARK' | 'ERROR'
+  object: CoreV1Event | { kind?: string; code?: number; message?: string }
 }
 
 /**
@@ -332,19 +351,22 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     return { name: node.name, hasPreviousLog: restarts > 0, kubernetes: { pod: path.split('/').at(-2)!, container: node.name, restarts } }
   }
 
-  /** A Log Stream: the namespace's Events, which can't be followed yet, or a container. */
+  /** A Log Stream: the namespace's Events, or a container. */
   const logStreamAt = async (path: SourcePath): Promise<LogStreamInfo> =>
-    path === kubernetesEventsPath ? { name: kubernetesEventsPath, capabilities: eventsCapabilities, followable: false } : await containerAt(path)
+    path === kubernetesEventsPath ? { name: kubernetesEventsPath, capabilities: eventsCapabilities } : await containerAt(path)
 
   /**
-   * Asks the API server for a container's log, with the query given; resolves with the response once it answers with
-   * the log. Not through the client, which can't read a log since a time.
+   * Asks the API server for what's at a path in the namespace, with the query given, as a stream; resolves with the
+   * response once it answers with it, rejecting with what `failed` makes of an error it answers with.
    */
-  const logResponse = async (pod: string, container: string, query: Record<string, string | number | boolean | undefined>) => {
+  const streamResponse = async (
+    resource: string,
+    query: Record<string, string | number | boolean | undefined>,
+    failed: (error: unknown) => CoreError = asCoreError
+  ) => {
     const cluster = config.getCurrentCluster()
     if (!cluster) throw new CoreError('UNKNOWN', 'The kubeconfig context has no cluster')
-    const url = new URL(`${cluster.server.replace(/\/+$/, '')}/api/v1/namespaces/${namespace}/pods/${encodeURIComponent(pod)}/log`)
-    url.searchParams.set('container', container)
+    const url = new URL(`${cluster.server.replace(/\/+$/, '')}/api/v1/namespaces/${namespace}/${resource}`)
     for (const [name, value] of Object.entries(query)) if (value !== undefined) url.searchParams.set(name, String(value))
     // The kubeconfig's TLS settings, credentials (exec plugins included) and proxy, as for any other call.
     const requestOptions: RequestOptions = {}
@@ -356,7 +378,7 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
         if (response.statusCode !== 200) {
           const status = response.statusCode ?? 500
           void bodyOf(response).then(
-            (body) => reject(logError(new ApiException(status, `HTTP ${status}`, body, {}))),
+            (body) => reject(failed(new ApiException(status, `HTTP ${status}`, body, {}))),
             (error: unknown) => reject(asCoreError(error))
           )
           return
@@ -368,6 +390,127 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
       request.on('socket', (socket) => socket.setKeepAlive(true, 15_000))
       request.end()
     })
+  }
+
+  /**
+   * Asks the API server for a container's log, with the query given; resolves with the response once it answers with
+   * the log. Not through the client, which can't read a log since a time.
+   */
+  const logResponse = (pod: string, container: string, query: Record<string, string | number | boolean | undefined>) =>
+    streamResponse(`pods/${encodeURIComponent(pod)}/log`, { container, ...query }, logError)
+
+  /**
+   * Watches the namespace's Events from a resourceVersion, sending each change to one to `send`, once the API server
+   * answers; `end` resolves with the resourceVersion to carry on from once the API server ends the watch, or with
+   * undefined if it no longer keeps changes from that far back ("410 Gone"), and rejects if the watch is cut off or
+   * fails otherwise.
+   */
+  const watchEvents = async (from: string | undefined, send: (event: CoreV1Event) => void) => {
+    const expired = new CoreError('UNKNOWN', 'The watch on Events can no longer carry on')
+    const failed = (error: unknown) => (error instanceof ApiException && error.code === 410 ? expired : asCoreError(error))
+    let opened: Awaited<ReturnType<typeof streamResponse>>
+    try {
+      opened = await streamResponse('events', { watch: true, allowWatchBookmarks: true, resourceVersion: from }, failed)
+    } catch (error) {
+      if (error === expired) return { end: Promise.resolve(undefined), stop: () => undefined }
+      throw error
+    }
+    const { response, stop } = opened
+    response.setEncoding('utf8')
+    let last = from
+    const end = new Promise<string | undefined>((done, fail) => {
+      let partial = ''
+      /** Takes in one line of the watch: false, having stopped it, once the watch fails. */
+      const take = (piece: string) => {
+        let watched: WatchEvent
+        try {
+          watched = JSON.parse(piece) as WatchEvent
+        } catch {
+          return fail(new CoreError('UNKNOWN', `The watch on Events sent what isn’t JSON: ${piece.slice(0, 200)}`))
+        }
+        const { type, object } = watched
+        if (type === 'ERROR') {
+          if ('code' in object && object.code === 410) return done(undefined)
+          return fail(new CoreError('UNKNOWN', `The watch on Events failed: ${'message' in object ? object.message : ''}`))
+        }
+        if ('metadata' in object && object.metadata?.resourceVersion) last = object.metadata.resourceVersion
+        if (type === 'ADDED' || type === 'MODIFIED') send(object as CoreV1Event)
+        return true
+      }
+      response.on('data', (chunk: string) => {
+        const pieces = (partial + chunk).split('\n')
+        partial = pieces.pop()!
+        for (const piece of pieces.filter((p) => p.trim())) {
+          if (take(piece) !== true) return stop()
+        }
+      })
+      response.on('end', () => done(last))
+      response.on('error', (error) => fail(asCoreError(error)))
+      // Closed before its end: the connection dropped, or the watch was stopped.
+      response.on('close', () => fail(new CoreError('UNREACHABLE', 'The watch on Events was cut off')))
+    })
+    end.catch(() => undefined)
+    return { end, stop }
+  }
+
+  /**
+   * Follows the namespace's Events: those last seen since `sinceTime` as listed now, then each change to one as a line
+   * of its own as a watch from that list sends it (a change leaving its count and last-seen time as they were shows
+   * nothing), every line starting with when its Event was last seen. A watch the API server ends is watched again,
+   * a second later, from the last change it sent, quietly; one it can't carry on ("410 Gone") starts over, telling
+   * `onStartedOver`, from listing the Events last seen since the last line sent.
+   */
+  const followEvents = async ({ sinceTime, onStartedOver }: LogFollowOptions, onText: (text: string) => void): Promise<LogConnection> => {
+    // The last line sent's time: starting over goes on from it.
+    let since = sinceTime === undefined ? -Infinity : Date.parse(sinceTime)
+    // What each Event's line last said, by the Event's name: one changed in no way shown isn't sent again.
+    const shown = new Map<string, string>()
+    const send = (events: CoreV1Event[]) => {
+      // One with no time at all only when there's no time to go on from yet, as the snapshot shows it.
+      const sent = eventLines(events).filter(({ at, line, name }) => (Number.isNaN(at) ? since === -Infinity : at >= since) && shown.get(name) !== `${at} ${line}`)
+      for (const { at, line, name } of sent) {
+        if (!Number.isNaN(at)) since = Math.max(since, at)
+        shown.set(name, `${at} ${line}`)
+      }
+      if (sent.length) onText(sent.map(stampedLine).join(''))
+    }
+    const list = () => call(() => core.listNamespacedEvent({ namespace }))
+    let stopped = false
+    let wake: (() => void) | undefined
+    const listed = await list()
+    send(listed.items)
+    let watch = await watchEvents(listed.metadata?.resourceVersion, (event) => send([event]))
+    const ended = (async () => {
+      for (;;) {
+        let from = await watch.end
+        if (stopped) return
+        if (from === undefined) {
+          onStartedOver?.()
+          const relisted = await list()
+          if (stopped) return
+          send(relisted.items)
+          from = relisted.metadata?.resourceVersion
+        } else {
+          // Not straight away, in case the API server, or a proxy on the way, keeps ending watches as soon as they start.
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, 1_000)
+            wake = () => (clearTimeout(timer), resolve())
+          })
+          if (stopped) return
+        }
+        watch = await watchEvents(from, (event) => send([event]))
+        if (stopped) return watch.stop()
+      }
+    })()
+    ended.catch(() => undefined)
+    return {
+      ended,
+      stop() {
+        stopped = true
+        watch.stop()
+        wake?.()
+      }
+    }
   }
 
   /** Opens a connection following a container's log; resolves once the API server answers with the log. */
@@ -408,7 +551,7 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     },
 
     async followLog(path, options, onText) {
-      if (path === kubernetesEventsPath) throw new CoreError('NOT_FOLLOWABLE', 'Events can’t be followed yet')
+      if (path === kubernetesEventsPath) return followEvents(options, onText)
       const { pod, container } = (await containerAt(path)).kubernetes
       return openLogConnection(pod, container, options, onText)
     },

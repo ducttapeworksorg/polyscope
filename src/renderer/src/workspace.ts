@@ -86,9 +86,6 @@ export const canFollowFile = ({ source, file, follow }: Pick<OpenTab, 'source' |
 /** Whether a Log Stream is a Kubernetes Logs Source's namespace Events. */
 const isNamespaceEvents = (source: Pick<SourceInfo, 'type'>, path: SourcePath) => source.type === 'kubernetesLogs' && path === kubernetesEventsPath
 
-/** Whether opening a Log Stream Follows it, as it's live: all but a namespace's Events, which can't be followed yet. */
-export const followsOnOpen = (source: Pick<SourceInfo, 'type'>, path: SourcePath) => !isNamespaceEvents(source, path)
-
 /** Whether a log tab shows a namespace's Events, and none were read: Kubernetes keeps them only a while. */
 export const showsNoEvents = ({ source, file }: Pick<OpenTab, 'source' | 'file'>) =>
   file.view === 'log' && file.of === 'logStream' && isNamespaceEvents(source, file.path) && file.content === ''
