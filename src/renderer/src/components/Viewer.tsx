@@ -6,7 +6,7 @@ import { formatCount, formatSize } from '../i18n/format'
 import { LogEntries, type LevelCounts } from '../log-entries'
 import { followLines, shownContent } from '../log-lines'
 import { editorFontFamily, monaco } from '../monaco'
-import { hiddenLevelsOf, joinLines, largeFileIdsOf, type OpenTab } from '../workspace'
+import { hiddenLevelsOf, joinLines, largeFileIdsIn, type OpenTab } from '../workspace'
 import { LargeFileViewer, type LargeFilePlace } from './LargeFileViewer'
 
 interface Props {
@@ -194,7 +194,7 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
     if (shown) shown.viewState = editor.saveViewState()
 
     const open = new Set(tabs.map((tab) => tab.key))
-    const openLarge = largeFileIdsOf({ tabs, activeKey: null })
+    const openLarge = largeFileIdsIn(tabs)
     for (const largeFileId of largeFilePlaces.current.keys()) if (!openLarge.has(largeFileId)) largeFilePlaces.current.delete(largeFileId)
     for (const [key, entry] of models) {
       if (open.has(key)) continue

@@ -10,11 +10,15 @@ import {
   addEarlierLines,
   dropEarlier,
   earlierOf,
+  activePaneOf,
+  activeTabOf,
   emptyWorkspace,
   endFollow,
+  findTab,
   followIdsOf,
   isLog,
   largeFileIdsOf,
+  reviseTabs,
   logShownBy,
   logToShow,
   markLogStreamGone,
@@ -68,8 +72,7 @@ export function useTabs({ onSourcesChanged }: Options) {
   // Likewise the Large Files, to close those they no longer have.
   const shownLargeFiles = useRef(new Set<string>())
 
-  const { tabs } = workspace
-  const activeTab = tabs.find((tab) => tab.key === workspace.activeKey) ?? null
+  const activeTab = activeTabOf(workspace)
 
   // A Follow that ends by itself (its container finished or is gone, its Source disconnected…) leaves its tab showing
   // what it got. One whose container restarts lets its tab switch to the Previous Log. One slowed down says so.
@@ -111,15 +114,13 @@ export function useTabs({ onSourcesChanged }: Options) {
   /** Tabs follow a rename of their Source, but close when it's deleted or now points somewhere else. */
   const sourcesReloaded = (sources: SourceInfo[]) => {
     const byId = new Map(sources.map((s) => [s.id, s]))
-    setWorkspace((prev) => {
-      const tabs = prev.tabs.flatMap((tab) => {
+    // If a Pane's active tab closed along with its Source, its first remaining tab takes over.
+    setWorkspace((prev) =>
+      reviseTabs(prev, (tab) => {
         const source = byId.get(tab.source.id)
-        return source && sameTarget(source, tab.source) ? [{ ...tab, source }] : []
+        return source && sameTarget(source, tab.source) ? { ...tab, source } : undefined
       })
-      // If the active tab closed along with its Source, the first remaining tab takes over.
-      const activeKey = tabs.some((tab) => tab.key === prev.activeKey) ? prev.activeKey : (tabs[0]?.key ?? null)
-      return { tabs, activeKey }
-    })
+    )
   }
 
   /** Notes how many lines a followed log's view holds, at most once a frame. */
@@ -176,7 +177,7 @@ export function useTabs({ onSourcesChanged }: Options) {
    */
   const followFile = (source: SourceInfo, node: { path: string; name: string }) => {
     const key = nodeKey(source.id, node.path)
-    if (!tabs.some((tab) => tab.key === key)) {
+    if (!findTab(workspace, key)) {
       const read = () => readLog(source.id, { of: 'file', path: node.path, name: node.name, previous: false }, {}, true)
       return openInTab(source, node, { pinned: true }, read)
     }
@@ -193,7 +194,7 @@ export function useTabs({ onSourcesChanged }: Options) {
     const key = nodeKey(source.id, node.path)
     setOpenError(null)
     latestOpen.current = key
-    const open = tabs.find((tab) => tab.key === key)
+    const open = findTab(workspace, key)
     if (open) return setWorkspace((ws) => openTab(ws, open, { pinned }))
     setOpening(node.name)
     try {
@@ -212,7 +213,7 @@ export function useTabs({ onSourcesChanged }: Options) {
    * the next preview.
    */
   const reopenTabAs = async (key: string, openAs?: OpenOptions) => {
-    const tab = tabs.find((open) => open.key === key)
+    const tab = findTab(workspace, key)
     if (!tab) return
     if (isLog(tab.file)) return reopenLog(key)
     const options = openAs ?? tab.openAs ?? {}
@@ -238,7 +239,7 @@ export function useTabs({ onSourcesChanged }: Options) {
    * to a log view, with its Source's "Last N lines". Pins the tab.
    */
   const reopenLog = async (key: string, options: Omit<OpenLogOptions, 'previous'> = {}, following?: boolean, show?: LogShown) => {
-    const tab = tabs.find((open) => open.key === key)
+    const tab = findTab(workspace, key)
     if (!tab) return
     const { file } = tab
     const wasShowing = logShownBy(tab)
@@ -283,7 +284,7 @@ export function useTabs({ onSourcesChanged }: Options) {
 
   /** Shows another number of a log tab's last lines, and remembers it for the tab's Source. */
   const changeLastNLines = async (key: string, lastNLines: LastNLines) => {
-    const tab = tabs.find((open) => open.key === key)
+    const tab = findTab(workspace, key)
     if (!tab) return
     await Promise.all([
       reopenLog(key, { lastNLines }),
@@ -293,20 +294,20 @@ export function useTabs({ onSourcesChanged }: Options) {
 
   /** Shows a log tab's lines since another time, or from any time; a new tab starts at any time, so it isn't remembered. */
   const changeSince = (key: string, since: SinceChoice | undefined) => {
-    if (!tabs.some((open) => open.key === key)) return
+    if (!findTab(workspace, key)) return
     setWorkspace((ws) => setLogView(ws, key, { since }))
     return reopenLog(key, { since: since && sinceTimeOf(since) })
   }
 
   /** Follows a tab's file in a log view. */
   const followTab = (key: string) => {
-    const tab = tabs.find((open) => open.key === key)
+    const tab = findTab(workspace, key)
     if (tab) void followFile(tab.source, tab.file)
   }
 
   /** Turns a log tab's Follow on (fetching its lines afresh to follow on from) or off, keeping what it shows. */
   const toggleFollow = (key: string) => {
-    const tab = tabs.find((open) => open.key === key)
+    const tab = findTab(workspace, key)
     if (tab?.follow) setWorkspace((ws) => setLogView(ws, key, { follow: undefined }))
     else void reopenLog(key, {}, true)
   }
@@ -316,7 +317,7 @@ export function useTabs({ onSourcesChanged }: Options) {
    * log, Following it as when first opened.
    */
   const togglePrevious = (key: string) => {
-    const tab = tabs.find((open) => open.key === key)
+    const tab = findTab(workspace, key)
     if (!tab || !isLog(tab.file) || tab.file.of !== 'logStream') return
     const back = logShownBy(tab) === 'previous'
     void reopenLog(key, {}, back, back ? 'log' : 'previous')
@@ -327,14 +328,14 @@ export function useTabs({ onSourcesChanged }: Options) {
    * to its current log, Following it as when first opened.
    */
   const togglePodEvents = (key: string) => {
-    const tab = tabs.find((open) => open.key === key)
+    const tab = findTab(workspace, key)
     if (!tab || !offersPodEvents(tab)) return
     void reopenLog(key, {}, true, logShownBy(tab) === 'podEvents' ? 'log' : 'podEvents')
   }
 
   /** Pauses a log tab's Follow, holding its new lines back, or resumes it, showing them. */
   const togglePause = (key: string) => {
-    const follow = tabs.find((open) => open.key === key)?.follow
+    const follow = findTab(workspace, key)?.follow
     if (!follow) return
     const paused = !follow.paused
     void (paused ? core.pauseFollow(follow.followId) : core.resumeFollow(follow.followId)).catch((error) => setOpenError(describeError(error)))
@@ -343,19 +344,19 @@ export function useTabs({ onSourcesChanged }: Options) {
 
   /** Fetches a log tab's lines again, with or without their timestamps. */
   const toggleTimestamps = (key: string) => {
-    const file = tabs.find((open) => open.key === key)?.file
+    const file = findTab(workspace, key)?.file
     if (file?.view === 'log') void reopenLog(key, { timestamps: !file.timestamps })
   }
 
   /** Shows a log tab's timestamps in UTC, or in local time again; the viewer reformats the lines it has. */
   const toggleUtc = (key: string) => {
-    const tab = tabs.find((open) => open.key === key)
+    const tab = findTab(workspace, key)
     if (tab) setWorkspace((ws) => setLogView(ws, key, { utc: !tab.utc }))
   }
 
   /** Reads as many lines as a log tab shows from before its first, and shows them above it. */
   const loadEarlier = async (key: string) => {
-    const tab = tabs.find((open) => open.key === key)
+    const tab = findTab(workspace, key)
     const earlier = tab && earlierOf(tab)
     if (!tab || earlier === undefined || tab.file.view !== 'log' || tab.file.lastNLines === 'all') return
     const { path, lastNLines, timestamps } = tab.file
@@ -372,7 +373,8 @@ export function useTabs({ onSourcesChanged }: Options) {
 
   /** Notes that a log tab's Follow dropped its first lines, which leaves it reading no further back. */
   const noteDroppedLines = (key: string) => {
-    if (tabs.some((open) => open.key === key && earlierOf(open) !== undefined)) setWorkspace((ws) => dropEarlier(ws, key))
+    const tab = findTab(workspace, key)
+    if (tab && earlierOf(tab) !== undefined) setWorkspace((ws) => dropEarlier(ws, key))
   }
 
   /** Hides a Log Level in a log view, or shows it again. */
@@ -380,13 +382,14 @@ export function useTabs({ onSourcesChanged }: Options) {
 
   /** Wraps a log tab's (or an open file's) long lines, or stops wrapping them. */
   const toggleWrap = (key: string) => {
-    const tab = tabs.find((open) => open.key === key)
+    const tab = findTab(workspace, key)
     if (tab) setWorkspace((ws) => setLogView(ws, key, { wrap: !tab.wrap }))
   }
 
   return {
     setWorkspace,
-    tabs,
+    /** The active Pane's tabs. */
+    tabs: activePaneOf(workspace).tabs,
     activeTab,
     /** The name of the file or log being opened, if any. */
     opening,

@@ -15,7 +15,7 @@ One configured, user-named instance of a **Source Type**, holding its settings (
 _Avoid_: connection, mount, profile
 
 **Disconnected / Connected / Error**:
-The state of a **Source**. Every **Source** starts **Disconnected** when the app launches; no tabs or views are restored from a previous session, except the editor tabs an **Extension Copy**'s editor restores, which connect their **Source**. Expanding a **Disconnected** **Source** connects it; failing to connect puts it in **Error**. Disconnecting stops all **Follows** but leaves its tabs open. A **Connected** **Source** whose connection drops by itself (an SSH Files **Source**'s, a Docker Logs **Source**'s on an `ssh://` context, or a systemd Journal **Source**'s on a host) stays **Connected**: its **Follows** end saying so, and the next browse or read connects it again, putting it in **Error** if that fails.
+The state of a **Source**. Every **Source** starts **Disconnected** when the app launches; no tabs, **Panes** or views are restored from a previous session, except the editor tabs an **Extension Copy**'s editor restores, which connect their **Source**. Expanding a **Disconnected** **Source** connects it; failing to connect puts it in **Error**. Disconnecting stops all **Follows** but leaves its tabs open. A **Connected** **Source** whose connection drops by itself (an SSH Files **Source**'s, a Docker Logs **Source**'s on an `ssh://` context, or a systemd Journal **Source**'s on a host) stays **Connected**: its **Follows** end saying so, and the next browse or read connects it again, putting it in **Error** if that fails.
 
 **Environment**:
 An optional, user-defined label (name + colour) attached to a **Source** to show what kind of system it points at (defaults: prod, staging, qa, dev). Shown on the **Source**, its tabs, and the status bar.
@@ -86,6 +86,14 @@ A file above the size threshold (default 50 MB), opened in the **Large File View
 
 **Large File Viewer**:
 A read-only, end-first, paged viewer for **Large Files**, with backend-side search and minimal highlighting.
+
+**Pane**:
+One of the areas the desktop app's viewer is split into, each with its own tabs and preview tab. A file or **Log Stream** is open in at most one tab across both **Panes**; a **Pane** closes when its last tab leaves it. The **Pane** last focused is the active one: what's opened from the tree opens there, and the status bar describes its active tab.
+_Avoid_: split, editor group, group (a **Log Source**'s tree has groups)
+
+**Layout**:
+How the viewer's **Panes** are arranged and sized: one **Pane** alone, or two side by side (the default) or one above the other, with the share of the room each gets (50/50 to start). Each **Layout** holds a fixed number of **Panes**; when a **Pane** closes, the **Layout** shrinks to fit those left. Never restored on the next launch.
+_Avoid_: split, arrangement
 
 ### Distribution
 
