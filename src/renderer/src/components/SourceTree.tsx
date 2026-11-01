@@ -29,7 +29,7 @@ import { core, describeError, describeFailure } from '../core-client'
 import { t } from '../i18n'
 import { formatDateTime, formatRelativeTime, formatSize } from '../i18n/format'
 import { uiFor } from '../source-types'
-import { followsFiles } from '../workspace'
+import { eventsOfRow, followsFiles } from '../workspace'
 import type { MenuItem } from './ContextMenu'
 import { EnvironmentBadge } from './EnvironmentBadge'
 import { ChevronIcon, ContainerIcon, KeyIcon, ReloadIcon, WarningIcon } from './icons'
@@ -580,6 +580,9 @@ export function SourceTree(props: Props) {
     const refresh = { label: t('sourceActions.refresh'), onSelect: () => refreshLogRow(chain) }
     // A Log Stream with children of its own expands, and opens its log from its menu.
     const openLog = shown.kind === 'logStream' && !opensLog(shown) ? [{ label: t('tree.openLog'), onSelect: () => onOpenLog(source, shown) }] : []
+    // A pod's or Workload's Events, the row's own whatever is folded into it.
+    const events = eventsOfRow(node)
+    const showEvents = events ? [{ label: t('tree.showEvents'), onSelect: () => onOpenLog(source, events) }] : []
     // The folded pod's Pod Status, and restarts if it's down to one container, go after the Workload's Ready Count.
     const withStatus = chain.find((level) => level.status)
     const ready = node.kubernetes?.kind === 'workload' && node.kubernetes.readyCount
@@ -592,7 +595,7 @@ export function SourceTree(props: Props) {
         : node.docker?.kind === 'standalone' ? t('dockerGroup.standalone')
         : node.name,
       icon: logIcon(node),
-      menuItems: [refresh, ...openLog, ...copyItems(chain)],
+      menuItems: [refresh, ...openLog, ...showEvents, ...copyItems(chain)],
       status:
         ready || withStatus?.status ?
           indicators(

@@ -439,6 +439,7 @@ describe('a namespace’s Events', () => {
   }
 
   const lines = [
+    '[Warning] FailedCreate replicaset/worker-5c4b: Error creating: pods "worker-5c4b-z" is forbidden: exceeded quota (×3)',
     '[Normal] Scheduled pod/api-7d9f-x2k: Successfully assigned events/api-7d9f-x2k to node-1',
     '[Normal] Pulled pod/api-7d9f-x2k: Container image "busybox" already present on machine',
     '[Normal] ScalingReplicaSet deployment/api: Scaled up replica set api-7d9f to 1 (×2)',
@@ -447,9 +448,8 @@ describe('a namespace’s Events', () => {
   ]
 
   it('are listed first at the root, though the namespace has no Workloads', async () => {
-    const sourceId = await connected('events')
-
-    expect(await core.expand(sourceId, '')).toEqual([eventsNode])
+    expect(await core.expand(await connected('events'), '')).toEqual([eventsNode, workloadsGroup('Deployment', 'deployments')])
+    expect(await core.expand(await connected('shop'), '')).toEqual([eventsNode, workloadsGroup('Pod', 'pods')])
     expect(await core.expand(await connected('batch'), '')).toEqual([eventsNode, workloadsGroup('CronJob', 'cronjobs'), workloadsGroup('Job', 'jobs')])
   })
 
@@ -477,7 +477,7 @@ describe('a namespace’s Events', () => {
     const log = await core.openLog(sourceId, 'events', { lastNLines: 'all', timestamps: true })
 
     expect(log.content.split('\n').map((line) => line.slice(0, line.indexOf(' ')))).toEqual(
-      ['10:00:00', '10:05:00', '10:10:00', '10:20:00', '10:30:00'].map((time) => `2026-10-29T${time}.000Z`)
+      ['09:50:00', '10:00:00', '10:05:00', '10:10:00', '10:20:00', '10:30:00'].map((time) => `2026-10-29T${time}.000Z`)
     )
   })
 
@@ -629,7 +629,7 @@ describe('a namespace’s Events', () => {
   it('fail to open with the permission the user is missing, the node still listed', async () => {
     const sourceId = await connected('noevents')
 
-    expect(await core.expand(sourceId, '')).toEqual([eventsNode])
+    expect(await core.expand(sourceId, '')).toEqual([eventsNode, workloadsGroup('Pod', 'pods')])
     await expect(core.openLog(sourceId, 'events')).rejects.toMatchObject({ code: 'MISSING_PERMISSION', message: 'list events in namespace noevents' })
   })
 
@@ -637,6 +637,136 @@ describe('a namespace’s Events', () => {
     const sourceId = await connected('events')
 
     expect(await core.expand(sourceId, 'events')).toEqual([expect.objectContaining({ kind: 'error', path: 'events', code: 'NOT_A_FOLDER' })])
+  })
+
+  describe('of a pod or a Workload', () => {
+    const content = async (sourceId: string, path: string) => (await core.openLog(sourceId, path, { lastNLines: 'all' })).content.split('\n')
+
+    it('of a pod are that pod’s, named for it, with no Previous Log', async () => {
+      const sourceId = await connected('events')
+
+      expect(await core.openLog(sourceId, 'events/deployments/api/api-7d9f-x2k', { lastNLines: 'all' })).toMatchObject({
+        path: 'events/deployments/api/api-7d9f-x2k',
+        name: 'api-7d9f-x2k',
+        offersPreviousLog: false,
+        restarted: false,
+        content: [lines[1], lines[2], lines[5]].join('\n')
+      })
+      await expect(core.openLog(sourceId, 'events/deployments/api/api-7d9f-x2k', { previous: true })).rejects.toMatchObject({ code: 'LOG_UNAVAILABLE' })
+    })
+
+    it('of a Deployment are its own, its ReplicaSets’ and its pods’', async () => {
+      const sourceId = await connected('events')
+
+      expect(await core.openLog(sourceId, 'events/deployments/api', { lastNLines: 'all' })).toMatchObject({ name: 'api', content: lines.slice(1).join('\n') })
+    })
+
+    it('of a Deployment with no pods are its ReplicaSets’, though they could create none', async () => {
+      expect(await content(await connected('events'), 'events/deployments/worker')).toEqual([lines[0]])
+    })
+
+    it('of a CronJob are its own, its Jobs’ and their pods’, those since deleted included, its only Job and pod folded in or not', async () => {
+      const sourceId = await connected('batch')
+
+      expect(await content(sourceId, 'events/cronjobs/hourly')).toEqual([
+        '[Normal] Pulled pod/hourly-0-vwxyz: Container image "busybox" already present on machine',
+        '[Normal] Completed job/hourly-0: Job completed',
+        '[Normal] Pulled pod/hourly-1-fghij: Container image "busybox" already present on machine',
+        '[Normal] Completed job/hourly-1: Job completed',
+        '[Normal] SawCompletedJob cronjob/hourly: Saw completed job: hourly-1, condition: Complete',
+        '[Warning] BackOff pod/hourly-2-klmno: Back-off restarting failed container',
+        '[Warning] BackoffLimitExceeded job/hourly-2: Job has reached the specified backoff limit'
+      ])
+      expect(await content(sourceId, 'events/cronjobs/nightly')).toEqual([
+        '[Normal] SuccessfulCreate cronjob/nightly: Created job nightly-1',
+        '[Normal] Scheduled pod/nightly-1-abcde: Successfully assigned batch/nightly-1-abcde to node-1'
+      ])
+    })
+
+    it('of a CronJob’s Job, or its pod, are theirs alone', async () => {
+      const sourceId = await connected('batch')
+
+      expect(await content(sourceId, 'events/cronjobs/hourly/hourly-2')).toEqual([
+        '[Warning] BackOff pod/hourly-2-klmno: Back-off restarting failed container',
+        '[Warning] BackoffLimitExceeded job/hourly-2: Job has reached the specified backoff limit'
+      ])
+      expect(await content(sourceId, 'events/cronjobs/hourly/hourly-2/hourly-2-klmno')).toEqual([
+        '[Warning] BackOff pod/hourly-2-klmno: Back-off restarting failed container'
+      ])
+      expect(await content(sourceId, 'events/jobs/migrate')).toEqual(['[Normal] Completed job/migrate: Job completed'])
+    })
+
+    it('are none for what is not a pod or a Workload in the tree', async () => {
+      const sourceId = await connected('batch')
+
+      for (const path of ['events/cronjobs/monthly', 'events/cronjobs', 'events/cronjobs/nightly/nightly-1/nightly-1-abcde/report', 'events/nothing']) {
+        await expect(core.openLog(sourceId, path), path).rejects.toMatchObject({ code: expect.stringMatching(/^NOT_(FOUND|A_LOG_STREAM)$/) })
+      }
+    })
+
+    it('are not listed in the tree', async () => {
+      const sourceId = await connected('events')
+
+      expect((await core.expand(sourceId, 'deployments/api')).map((node) => node.path)).toEqual(['deployments/api/api-7d9f-x2k'])
+    })
+
+    it('fail to open with the permission the user is missing', async () => {
+      await expect(core.openLog(await connected('noevents'), 'events/pods/counter')).rejects.toMatchObject({
+        code: 'MISSING_PERMISSION',
+        message: 'list events in namespace noevents'
+      })
+    })
+
+    describe('followed', () => {
+      let updates: ReturnType<typeof followUpdates>
+
+      beforeEach(() => {
+        updates = followUpdates(core)
+      })
+
+      afterEach(() => updates.unsubscribe())
+
+      it('append only the Events of the pod', async () => {
+        const log = await core.followLog(await connected('events'), 'events/deployments/api/api-7d9f-x2k', { lastNLines: 1 })
+        await apiServer.events.watchedTimes(1)
+
+        apiServer.events.send(podEvent('BackOff', 'web-1', 'Back-off restarting failed container', '2026-10-29T10:31:00Z'))
+        apiServer.events.send(podEvent('Unhealthy', 'api-7d9f-x2k', 'Readiness probe failed', '2026-10-29T10:32:00Z'))
+
+        expect(log.content).toBe(lines.at(-1))
+        await vi.waitFor(() => expect(updates.of(log.followId)).toEqual(['[Warning] Unhealthy pod/api-7d9f-x2k: Readiness probe failed']))
+      })
+
+      it('append the Events of a Workload’s pods created since it started', async () => {
+        const log = await core.followLog(await connected('events'), 'events/deployments/api', { lastNLines: 1 })
+        await apiServer.events.watchedTimes(1)
+
+        apiServer.events.addPod('api-7d9f-n3w')
+        apiServer.events.addPod('web-1', 'web-5d6f')
+        apiServer.events.send(podEvent('BackOff', 'web-1', 'Back-off restarting failed container', '2026-10-29T10:31:00Z'))
+        apiServer.events.send(podEvent('Scheduled', 'api-7d9f-n3w', 'Successfully assigned events/api-7d9f-n3w to node-1', '2026-10-29T10:32:00Z', { type: 'Normal' }))
+        apiServer.events.send(podEvent('Unhealthy', 'api-7d9f-x2k', 'Readiness probe failed', '2026-10-29T10:33:00Z'))
+
+        await vi.waitFor(() =>
+          expect(updates.of(log.followId)).toEqual([
+            '[Normal] Scheduled pod/api-7d9f-n3w: Successfully assigned events/api-7d9f-n3w to node-1',
+            '[Warning] Unhealthy pod/api-7d9f-x2k: Readiness probe failed'
+          ])
+        )
+      })
+
+      it('take in a Workload’s pods created since it started when starting over', async () => {
+        const log = await core.followLog(await connected('events'), 'events/deployments/api', { lastNLines: 1 })
+        await apiServer.events.watchedTimes(1)
+
+        // Missed by the watch, which Kubernetes then no longer carries on.
+        apiServer.events.addPod('api-7d9f-n3w')
+        apiServer.events.record(podEvent('Unhealthy', 'api-7d9f-n3w', 'Readiness probe failed', '2026-10-29T10:32:00Z'))
+        apiServer.events.expire()
+
+        await vi.waitFor(() => expect(updates.of(log.followId)).toEqual(['<startedOver>', '[Warning] Unhealthy pod/api-7d9f-n3w: Readiness probe failed']))
+      })
+    })
   })
 })
 

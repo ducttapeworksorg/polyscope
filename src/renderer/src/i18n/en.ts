@@ -266,6 +266,7 @@ export const en = {
   'tree.menuLabel': 'Actions for {name}',
   'tree.follow': 'Follow',
   'tree.openLog': 'Open log',
+  'tree.showEvents': 'Show Events',
   'tree.copyName': 'Copy name',
   'tree.copyJobName': 'Copy Job name',
   'tree.copyPodName': 'Copy pod name',
@@ -359,6 +360,7 @@ export const en = {
   'viewer.logStreamGone': '{name} no longer exists. Showing what was last read from it.',
   'viewer.followSlowed': 'Following slowed: AWS is throttling',
   'viewer.noEvents': 'No Events in this namespace. Kubernetes keeps Events for about an hour by default, so older ones are gone.',
+  'viewer.noEventsOf': 'No Events for {name}. Kubernetes keeps Events for about an hour by default, so older ones are gone.',
   'viewer.allLevelsHidden': 'Every Log Level is hidden: only the lines with none show. Turn a level on to see its lines.',
   'viewer.reconnect': 'Reconnect',
   'viewer.reconnecting': 'Reconnecting…',
@@ -454,6 +456,7 @@ export const en = {
   'logView.mark.rotated': 'file rotated, following the new one from its start',
   'logView.previous': '{name} (previous)',
   'logView.events': 'Events',
+  'logView.eventsOf': '{name} · Events',
   'status.lines': '{count} lines',
   'status.oneLine': '1 line',
 

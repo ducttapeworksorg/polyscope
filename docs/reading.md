@@ -70,6 +70,8 @@ While following, the log marks what happened in line: a container restarting, Ku
 [Warning] BackOff pod/api-7d9f-x2k: Back-off restarting failed container (×14)
 ```
 
+Right-click a pod or a Workload in the tree and choose **Show Events** to open a tab of just its Events, titled like `api-7d9f-x2k · Events`. A pod's are that pod's alone; a Workload's are its own and those of everything it owns or owned: a Deployment's ReplicaSets, a CronJob's Jobs, and their pods, those since deleted included (told by the names Kubernetes gave them). So a Deployment whose ReplicaSet can't create pods (`FailedCreate`, say, for an exceeded quota) shows why, though there's no pod to open. A row standing in for a Workload's only pod shows the Workload's Events. Followed, a Workload's Events take in those of the pods, ReplicaSets and Jobs it creates meanwhile. These Events aren't listed in the tree, and read like the namespace's in every other way.
+
 - Each line gives the Event's type (**Normal** or **Warning**), its reason, the object it's about as `kind/name`, and its message, then how many times it has happened when that's more than once.
 - Lines go by when each Event was last seen, oldest first. **Timestamps** shows that time.
 - Warning Events are coloured and filtered as warnings, Normal ones as info.

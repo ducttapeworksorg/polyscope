@@ -6,14 +6,16 @@ import type {
   FollowedLog,
   LanguageId,
   LastNLines,
+  LogNode,
   LogOf,
   LogSnapshot,
   OpenedFile,
   OpenOptions,
+  LogStreamNode,
   SourceInfo,
   SourcePath
 } from '@shared/core-api'
-import { followableSourceTypes, kubernetesEventsPath } from '@shared/core-api'
+import { followableSourceTypes, kubernetesEventsCapabilities, kubernetesEventsOf, kubernetesEventsPath, kubernetesEventsRowOf } from '@shared/core-api'
 import { t } from './i18n'
 import type { LogLevel } from './log-level'
 import type { SinceChoice } from './since'
@@ -83,17 +85,43 @@ export const followsFiles = (source: SourceInfo) => followableSourceTypes.includ
 export const canFollowFile = ({ source, file, follow }: Pick<OpenTab, 'source' | 'file' | 'follow'>) =>
   followsFiles(source) && !follow && (isLog(file) ? file.of === 'file' : file.view === 'editor' || file.view === 'large')
 
-/** Whether a Log Stream is a Kubernetes Logs Source's namespace Events. */
-const isNamespaceEvents = (source: Pick<SourceInfo, 'type'>, path: SourcePath) => source.type === 'kubernetesLogs' && path === kubernetesEventsPath
+/**
+ * What Events a Kubernetes Logs Source's Log Stream is: the namespace's, or those of a pod or Workload (reached from its
+ * row); undefined if it's no Events.
+ */
+const eventsKind = (source: Pick<SourceInfo, 'type'>, path: SourcePath) =>
+  source.type !== 'kubernetesLogs' ? undefined
+  : path === kubernetesEventsPath ? 'namespace'
+  : kubernetesEventsRowOf(path) !== undefined ? 'object'
+  : undefined
 
-/** Whether a log tab shows a namespace's Events, and none were read: Kubernetes keeps them only a while. */
-export const showsNoEvents = ({ source, file }: Pick<OpenTab, 'source' | 'file'>) =>
-  file.view === 'log' && file.of === 'logStream' && isNamespaceEvents(source, file.path) && file.content === ''
+/**
+ * What a log tab of Events says when none were read, the namespace's or a pod's or Workload's: that Kubernetes keeps
+ * them only a while. Undefined when some were, or it's no Events.
+ */
+export const noEventsNote = ({ source, file }: Pick<OpenTab, 'source' | 'file'>) => {
+  const kind = file.view === 'log' && file.of === 'logStream' && file.content === '' ? eventsKind(source, file.path) : undefined
+  return kind && (kind === 'namespace' ? t('viewer.noEvents') : t('viewer.noEventsOf', { name: file.name }))
+}
 
-/** What a tab is called: its file's or container's name, or Events, marked for a Previous Log. */
+/** What a tab is called: its file's or container's name, Events or a pod's or Workload's Events, marked for a Previous Log. */
 export const tabName = ({ source, file }: { source: Pick<SourceInfo, 'type'>; file: { path: SourcePath; name: string; previous?: boolean } }) => {
-  const name = isNamespaceEvents(source, file.path) ? t('logView.events') : file.name
+  const events = eventsKind(source, file.path)
+  const name =
+    events === 'namespace' ? t('logView.events')
+    : events === 'object' ? t('logView.eventsOf', { name: file.name })
+    : file.name
   return file.previous ? t('logView.previous', { name }) : name
+}
+
+/**
+ * What a Kubernetes Logs Source's row offers Show Events for: the Events of its pod or Workload (its own and those of
+ * everything it owns), whatever is folded into the row; nothing for any other row. They aren't listed in the tree.
+ */
+export function eventsOfRow(node: LogNode): LogStreamNode | undefined {
+  if (node.kind !== 'group' || (node.kubernetes?.kind !== 'pod' && node.kubernetes?.kind !== 'workload')) return undefined
+  const path = kubernetesEventsOf(node.path)
+  return { kind: 'logStream', name: node.name, path, capabilities: kubernetesEventsCapabilities, kubernetes: { kind: 'events' } }
 }
 
 /** A file or Log Stream open in the viewer. Tabs live only in the renderer and are never persisted. */

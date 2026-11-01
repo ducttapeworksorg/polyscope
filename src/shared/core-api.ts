@@ -675,6 +675,19 @@ export type KubernetesLogStream =
 /** The path, and name, of a Kubernetes Logs Source's Log Stream of its namespace's Events: never a group's. */
 export const kubernetesEventsPath = 'events'
 
+/**
+ * The path of a Kubernetes Logs Source's Log Stream of the Events of the pod or Workload at `path`, a Workload's
+ * including those of everything it owns: reached from the row's Show Events, never listed in the tree.
+ */
+export const kubernetesEventsOf = (path: SourcePath) => `${kubernetesEventsPath}/${path}`
+
+/** The path of the pod or Workload whose Events are at `path`, as kubernetesEventsOf gives it; undefined for any other path. */
+export const kubernetesEventsRowOf = (path: SourcePath) =>
+  path.startsWith(`${kubernetesEventsPath}/`) ? path.slice(kubernetesEventsPath.length + 1) : undefined
+
+/** The capabilities of Kubernetes Logs every Log Stream of Events lacks: they don't restart, so have no Previous Log (ADR 0010). */
+export const kubernetesEventsCapabilities: LogStreamCapabilities = { previousLog: false, restarts: false }
+
 export type ContainerRole = 'init' | 'sidecar'
 
 /**
