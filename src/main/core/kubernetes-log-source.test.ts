@@ -49,11 +49,6 @@ describe('Kubernetes Logs against a stand-in API server', () => {
   })
 
   describeLogSourceContract('Kubernetes Logs', capabilities, async () => ({ logSource, counter }))
-
-  it('cannot follow the namespace’s Events yet', async () => {
-    const events = createKubernetesLogSource(kubeConfigFor('fake'), 'events')
-    await expect(events.followLog('events', {}, () => undefined)).rejects.toMatchObject({ code: 'NOT_FOLLOWABLE' })
-  })
 })
 
 describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () => {

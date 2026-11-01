@@ -5,7 +5,8 @@
 // `crashing` holds a pod `crasher` whose restarted containers' previous runs Kubernetes has removed; `files` holds
 // the Deployments of `filesDeployments`, for a Kubernetes Files Source's tree (it can't exec into their pods); `batch`
 // holds the CronJobs and Jobs of `batchJobs`; `events` holds no Workloads, only the Events of `namespaceEvents`, and
-// `noevents` nothing, listing its Events denied the way RBAC denies it.
+// `noevents` nothing, listing its Events denied the way RBAC denies it. Events in `events` can be watched, the test
+// changing them, closing the watch or answering it "410 Gone" through the stand-in's `events`.
 // Given a token, it turns away requests that don't bear it.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
@@ -164,6 +165,85 @@ export const namespaceEvents = [
   })
 ]
 
+/** An Event, with whichever of its counts and times it carries. */
+type Event = Omit<ReturnType<typeof event>, 'metadata'> & { metadata: ReturnType<typeof event>['metadata'] & Record<string, unknown> } & Record<string, unknown>
+
+/** An Event in `events` as the test gives it: of a pod, Warning unless said, with how many times and when it was last seen. */
+export const podEvent = (reason: string, pod: string, message: string, lastTimestamp: string, { count = 1, type = 'Warning' } = {}) =>
+  event(type, reason, 'Pod', pod, message, { count, firstTimestamp: lastTimestamp, lastTimestamp })
+
+/**
+ * The Events in `events`, as listed and watched: each change gives them a new resourceVersion, and a watch from one
+ * first sends the changes since it. A watch from one older than the last `expire` answers "410 Gone", as the API
+ * server does once it no longer keeps changes that far back.
+ */
+function eventsStore() {
+  let version = 1
+  let expiredBelow = 0
+  const items = new Map<string, Event>(namespaceEvents.map((e) => [e.metadata.name, e]))
+  /** Every change, as a watch sends it, with its resourceVersion. */
+  const changes: { version: number; line: string }[] = []
+  const watches = new Set<ServerResponse>()
+  const waiters = new Set<() => void>()
+  const watched: number[] = []
+  const record = (e: Event) => {
+    const type = items.has(e.metadata.name) ? 'MODIFIED' : 'ADDED'
+    version++
+    const object = { ...e, metadata: { ...e.metadata, resourceVersion: String(version) } }
+    items.set(e.metadata.name, object)
+    const line = `${JSON.stringify({ type, object })}\n`
+    changes.push({ version, line })
+    return line
+  }
+  const gone = (response: ServerResponse) => {
+    const status = { kind: 'Status', apiVersion: 'v1', status: 'Failure', reason: 'Expired', code: 410, message: 'too old resource version' }
+    response.end(`${JSON.stringify({ type: 'ERROR', object: status })}\n`)
+  }
+  return {
+    list: () => ({ kind: 'EventList', apiVersion: 'v1', metadata: { resourceVersion: String(version) }, items: [...items.values()] }),
+    watch(url: URL, response: ServerResponse) {
+      const from = Number(url.searchParams.get('resourceVersion') ?? version)
+      watched.push(from)
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.flushHeaders()
+      for (const waiter of waiters) waiter()
+      if (from < expiredBelow) return gone(response)
+      for (const change of changes.filter((c) => c.version > from)) response.write(change.line)
+      watches.add(response)
+      response.on('close', () => watches.delete(response))
+    },
+    /** Every watch asked for so far, by the resourceVersion each starts from. */
+    watched,
+    /** How many watches are open. */
+    open: () => watches.size,
+    /** Resolves once `count` watches in all have been asked for. */
+    async watchedTimes(count: number) {
+      while (watched.length < count) {
+        await new Promise<void>((resolve) => {
+          const waiter = () => (waiters.delete(waiter), resolve())
+          waiters.add(waiter)
+        })
+      }
+    },
+    /** Changes an Event, or adds it, without telling the watches open: one they miss. */
+    record: (e: Event) => void record(e),
+    /** Changes an Event, or adds it, telling every watch open; a watch opened later from before it sends it first. */
+    send(e: Event) {
+      const line = record(e)
+      for (const response of watches) response.write(line)
+    },
+    /** Ends every watch, as the API server does now and then. */
+    close() {
+      for (const response of watches) response.end()
+    },
+    /** Keeps no changes up to now: every watch open, and any from before now, answers "410 Gone". */
+    expire() {
+      expiredBelow = version
+      for (const response of watches) gone(response)
+    }
+  }
+}
+
 const json = (response: ServerResponse, status: number, body: unknown) =>
   response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
 
@@ -192,7 +272,7 @@ function sendLog(lines: { time: string; text: string }[], url: URL, response: Se
   return param('follow') === 'true' ? undefined : response.end()
 }
 
-function respond(request: IncomingMessage, response: ServerResponse, token: string | undefined) {
+function respond(request: IncomingMessage, response: ServerResponse, token: string | undefined, events: ReturnType<typeof eventsStore>) {
   if (token !== undefined && request.headers.authorization !== `Bearer ${token}`) {
     return json(response, 401, { kind: 'Status', status: 'Failure', reason: 'Unauthorized', code: 401, message: 'Unauthorized' })
   }
@@ -209,7 +289,9 @@ function respond(request: IncomingMessage, response: ServerResponse, token: stri
     const message = `events is forbidden: User "jane" cannot list resource "events" in API group "" in the namespace "noevents"`
     return json(response, 403, { kind: 'Status', status: 'Failure', reason: 'Forbidden', code: 403, message })
   }
-  if (namespace === 'events' && rest === '/events') return json(response, 200, { kind: 'EventList', apiVersion: 'v1', metadata: {}, items: namespaceEvents })
+  if (namespace === 'events' && rest === '/events') {
+    return url.searchParams.get('watch') === 'true' || url.searchParams.get('watch') === '1' ? events.watch(url, response) : json(response, 200, events.list())
+  }
   if (namespace === 'locked' && rest === '/deployments') {
     return json(response, 200, { kind: 'DeploymentList', apiVersion: 'apps/v1', metadata: {}, items: [{ metadata: { name: 'web', uid: 'web' } }] })
   }
@@ -290,10 +372,11 @@ export const standInCluster = (server: string, caPath: string | undefined, proxy
 /**
  * Starts the stand-in; `url` is its https address on 127.0.0.1, `caPath` a PEM file of the root CA that trusts it, and
  * `issuingCaPath` of the issuing CA between them.
- * With a `token`, only requests bearing it are answered.
+ * With a `token`, only requests bearing it are answered. `events` changes the Events in `events` and their watches.
  */
 export async function startTestApiServer({ token }: { token?: string } = {}) {
-  const server = createServer((request, response) => respond(request, response, token))
+  const events = eventsStore()
+  const server = createServer((request, response) => respond(request, response, token, events))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as { port: number }
   const front = await startTlsFront(`http://127.0.0.1:${port}`)
@@ -301,6 +384,7 @@ export async function startTestApiServer({ token }: { token?: string } = {}) {
     url: front.url,
     caPath: front.caPath,
     issuingCaPath: front.issuingCaPath,
+    events,
     close: async () => {
       await front.close()
       server.closeAllConnections()

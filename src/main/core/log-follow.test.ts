@@ -12,6 +12,8 @@ interface FakeStream {
   options: Pick<LogFollowOptions, 'sinceTime'>
   /** Says, as a backend that polls does, whether it's slowed down. */
   slow(slowed: boolean): void
+  /** Says, as Kubernetes Events do when their watch can't carry on, that it starts over from where it was asked to follow from. */
+  startOver(): void
   send(text: string): void
   end(): void
   fail(error: CoreError): void
@@ -42,10 +44,11 @@ function fakeLogSource({ restarts = true } = {}) {
       let resolve!: () => void
       let reject!: (error: CoreError) => void
       const ended = new Promise<void>((res, rej) => ((resolve = res), (reject = rej)))
-      const { onSlowed, ...from } = options
+      const { onSlowed, onStartedOver, ...from } = options
       const stream: FakeStream = {
         options: from,
         slow: (slowed) => onSlowed?.(slowed),
+        startOver: () => onStartedOver?.(),
         stopped: false,
         send: (text) => !stream.stopped && onText(text),
         end: resolve,
@@ -299,6 +302,17 @@ describe('a Log Stream whose Source Type has no restarts', () => {
     source.stream.send(logged(6, 'one', 'two'))
     await settle()
     expect(lines()).toEqual(['one', '<failed>', '<recovered>', 'two'])
+  })
+
+  it('marks starting over, then leaves out the lines at the last one’s time it sent already', async () => {
+    await follow()
+    source.stream.send(logged(6, 'one'))
+    source.stream.send(logged(7, 'two'))
+    source.stream.startOver()
+    source.stream.send(logged(7, 'two', 'three'))
+    await settle()
+
+    expect(lines()).toEqual(['one', 'two', '<startedOver>', 'three'])
   })
 })
 

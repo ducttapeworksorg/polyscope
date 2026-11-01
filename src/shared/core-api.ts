@@ -1040,6 +1040,11 @@ export type FollowUpdate =
   | { kind: 'truncated' }
   /** Another file took a followed file's place, as log rotation does; the lines after this are the new one's. */
   | { kind: 'rotated' }
+  /**
+   * Following had to start over from the last line, so lines around here may be missing or repeated: Kubernetes Events,
+   * when their watch can no longer carry on.
+   */
+  | { kind: 'startedOver' }
   /** The stream failed, say the network dropped; it's tried again in `retryIn` milliseconds. */
   | { kind: 'failed'; code: CoreErrorCode; message: string; retryIn: number }
   /** Following again after failing. */

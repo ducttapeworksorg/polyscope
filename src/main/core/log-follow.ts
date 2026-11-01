@@ -110,6 +110,13 @@ export function startFollow(logSource: LogSource, path: SourcePath, options: Fol
     slowed = now
     emit({ kind: 'slowed', slowed })
   }
+  // The backend started over from the last line sent: it's marked, and those at that line's time are skipped again.
+  const onStartedOver = () => {
+    if (stopped) return
+    flush()
+    toSkip = atAfter
+    emit({ kind: 'startedOver' })
+  }
 
   const sendLines = (pieces: string[]) => {
     const lines: string[] = []
@@ -191,7 +198,7 @@ export function startFollow(logSource: LogSource, path: SourcePath, options: Fol
         partial = ''
         toSkip = atAfter
         try {
-          connection = await logSource.followLog(path, { ...(since !== undefined && { sinceTime: since }), onSlowed }, receive)
+          connection = await logSource.followLog(path, { ...(since !== undefined && { sinceTime: since }), onSlowed, onStartedOver }, receive)
         } catch (error) {
           // No log to give yet, say a container waiting to start: look again in a while.
           if (asCoreError(error).code !== 'LOG_UNAVAILABLE') throw error

@@ -40,7 +40,7 @@ A container's log, a CloudWatch log, or a systemd unit's journal opens with a to
 - **Last N lines**: how much of the log to fetch and keep: 1K, 10K (the default, set in **Settings**), 50K, 100K, **All**, or a number you type. Choosing **All** for a log over the Large File threshold asks first.
 - **Since**, for Docker and Kubernetes containers, Kubernetes Events, CloudWatch logs and systemd units: show only the lines logged since a time: **Any time** (the default), **15 min**, **1 h**, **6 h** or **24 h** ago, or a date and time you type, like `2026-10-18 09:00`, or a time alone, like `09:00`, for today. It's read in local time or, with **UTC** on, in UTC. **Last N lines** still caps how many lines show, and **All** shows every line since then, asking first only if those are over the Large File threshold. **Follow** goes on from the last line shown, and a Kubernetes container's **Previous Log** shows only its lines since then too. Each new tab starts at **Any time**.
 - **Load earlier**, for CloudWatch logs: add the lines before the first one shown, as many as **Last N lines** says. With a **Since**, it goes back only as far as the Since, and once it gets there it's no longer offered: there's nothing earlier to show.
-- **Follow**: show new lines as they're logged. **Pause** holds new lines back while you read, and **Resume** shows them. Kubernetes Events can't be followed yet.
+- **Follow**: show new lines as they're logged. **Pause** holds new lines back while you read, and **Resume** shows them.
 - **Previous**: show the container's **Previous Log**, the log of its run before it last restarted, in the same tab, marked "(previous)". It has ended, so there's nothing to Follow; turn **Previous** off to go back to the current log, Following it again. It's available once the container has restarted, which a Follow notices as it happens; Kubernetes keeps only the run just before the current one, and not always that.
 - **Timestamps**: start each line with when it was logged, in local time or, with **UTC**, in UTC.
 - **Wrap**: wrap long lines.
@@ -60,7 +60,7 @@ The **Error**, **Warning**, **Info** and **Debug** buttons show or hide the line
 - Search, copying and **Save a copy…** cover only the lines shown.
 - It stays as it is when you switch to the **Previous Log** and back. With all four off, only the lines with no level show, and the log says so.
 
-While following, the log marks what happened in line: a container restarting, the connection dropping and recovering, or the container, pod, CloudWatch log or Source going away.
+While following, the log marks what happened in line: a container restarting, Kubernetes Events starting over, the connection dropping and recovering, or the container, pod, CloudWatch log or Source going away.
 
 ### Kubernetes Events
 
@@ -74,7 +74,10 @@ While following, the log marks what happened in line: a container restarting, th
 - Lines go by when each Event was last seen, oldest first. **Timestamps** shows that time.
 - Warning Events are coloured and filtered as warnings, Normal ones as info.
 - **Since** keeps the Events last seen since then, even ones first seen before, and **Last N lines** counts one line per Event.
-- Events have no **Previous** log, and can't be followed yet: open Events again, or change **Last N lines** or **Since**, to read them afresh.
+- Events have no **Previous** log.
+- **Follow** adds a line each time an Event happens, and again each time one happens again, with its new count and when it was last seen. Lines already shown stay as they are.
+- Kubernetes closes a watch on Events now and then; the Follow carries on from where it was without a word. If it can't, having been away too long ("410 Gone"), it starts over from the last line shown and marks it: `── following started over, so Events around here may be missing or repeated ──`.
+- Following Events needs permission to watch them too (the `watch` verb on `events`).
 - Kubernetes keeps Events for about an hour by default (the API server's `--event-ttl`), so older problems may have none left. An empty Events log says so.
 - Reading Events needs permission to list them in the namespace (the `list` verb on `events`). Without it, **Events** is still listed, and opening it says so: `Missing permission: list events in namespace shop`.
 

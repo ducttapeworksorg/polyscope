@@ -7,7 +7,7 @@ import type { ContainerRole, FollowEvent, LogGroupNode, LogNode, NewKubernetesLo
 import { createCore, type Core } from './core'
 import { kubeConfigFor } from './kubeconfig'
 import { createKubernetesLogSource } from './kubernetes-log-source'
-import { standInCluster, startTestApiServer } from './kubernetes-test-api-server'
+import { podEvent, standInCluster, startTestApiServer } from './kubernetes-test-api-server'
 import {
   counterLines,
   hasRestrictedContext,
@@ -503,8 +503,127 @@ describe('a namespace’s Events', () => {
     await expect(core.openLog(sourceId, 'events', { previous: true })).rejects.toMatchObject({ code: 'LOG_UNAVAILABLE' })
   })
 
-  it('cannot be followed yet', async () => {
-    await expect(core.followLog(await connected('events'), 'events')).rejects.toMatchObject({ code: 'NOT_FOLLOWABLE' })
+  describe('followed', () => {
+    let updates: ReturnType<typeof followUpdates>
+
+    beforeEach(() => {
+      updates = followUpdates(core)
+    })
+
+    afterEach(() => updates.unsubscribe())
+
+    const failing = podEvent('BackOff', 'web-1', 'Back-off restarting failed container', '2026-10-29T10:32:00Z', { count: 2 })
+
+    it('append new Events as the snapshot gives them', async () => {
+      const log = await core.followLog(await connected('events'), 'events', { lastNLines: 1 })
+      await apiServer.events.watchedTimes(1)
+
+      apiServer.events.send(podEvent('Scheduled', 'web-2', 'Successfully assigned events/web-2 to node-1', '2026-10-29T10:31:00Z', { type: 'Normal' }))
+      apiServer.events.send(failing)
+
+      expect(log.content).toBe(lines.at(-1))
+      await vi.waitFor(() =>
+        expect(updates.of(log.followId)).toEqual([
+          '[Normal] Scheduled pod/web-2: Successfully assigned events/web-2 to node-1',
+          '[Warning] BackOff pod/web-1: Back-off restarting failed container (×2)'
+        ])
+      )
+    })
+
+    it('append an Event again, with its new count, each time it happens again', async () => {
+      const log = await core.followLog(await connected('events'), 'events', { lastNLines: 1, timestamps: true })
+      await apiServer.events.watchedTimes(1)
+
+      apiServer.events.send(failing)
+      apiServer.events.send({ ...failing, count: 3, lastTimestamp: '2026-10-29T10:33:00Z' })
+
+      await vi.waitFor(() =>
+        expect(updates.of(log.followId)).toEqual([
+          '2026-10-29T10:32:00.000Z [Warning] BackOff pod/web-1: Back-off restarting failed container (×2)',
+          '2026-10-29T10:33:00.000Z [Warning] BackOff pod/web-1: Back-off restarting failed container (×3)'
+        ])
+      )
+    })
+
+    it('append nothing for a change to an Event that leaves its count and last-seen time as they were', async () => {
+      const log = await core.followLog(await connected('events'), 'events', { lastNLines: 1 })
+      await apiServer.events.watchedTimes(1)
+
+      apiServer.events.send(failing)
+      apiServer.events.send({ ...failing, metadata: { ...failing.metadata, annotations: { noted: 'yes' } } })
+      apiServer.events.send(podEvent('Unhealthy', 'web-1', 'Readiness probe failed', '2026-10-29T10:34:00Z'))
+
+      await vi.waitFor(() => expect(updates.of(log.followId)).toHaveLength(2))
+      expect(updates.of(log.followId)).toEqual([
+        '[Warning] BackOff pod/web-1: Back-off restarting failed container (×2)',
+        '[Warning] Unhealthy pod/web-1: Readiness probe failed'
+      ])
+    })
+
+    it('with Since, append only the Events last seen since then', async () => {
+      const log = await core.followLog(await connected('events'), 'events', { since: '2026-10-29T11:00:00Z' })
+      await apiServer.events.watchedTimes(1)
+
+      apiServer.events.send(failing)
+      apiServer.events.send(podEvent('Unhealthy', 'web-1', 'Readiness probe failed', '2026-10-29T11:01:00Z'))
+
+      expect(log.content).toBe('')
+      await vi.waitFor(() => expect(updates.of(log.followId)).toEqual(['[Warning] Unhealthy pod/web-1: Readiness probe failed']))
+    })
+
+    it('carry on quietly from where they were when the API server closes the watch', async () => {
+      const log = await core.followLog(await connected('events'), 'events', { lastNLines: 1 })
+      await apiServer.events.watchedTimes(1)
+      apiServer.events.send(failing)
+      await vi.waitFor(() => expect(updates.of(log.followId)).toHaveLength(1))
+
+      apiServer.events.close()
+      // While no watch is open: the next sends it, carrying on from the change the last sent.
+      apiServer.events.send({ ...failing, count: 3, lastTimestamp: '2026-10-29T10:33:00Z' })
+      await apiServer.events.watchedTimes(2)
+
+      await vi.waitFor(() =>
+        expect(updates.of(log.followId)).toEqual([
+          '[Warning] BackOff pod/web-1: Back-off restarting failed container (×2)',
+          '[Warning] BackOff pod/web-1: Back-off restarting failed container (×3)'
+        ])
+      )
+      expect(apiServer.events.watched).toEqual([1, 2])
+    })
+
+    it('start over, marking it, when the watch can no longer carry on, then carry on', async () => {
+      const log = await core.followLog(await connected('events'), 'events', { lastNLines: 1 })
+      await apiServer.events.watchedTimes(1)
+      apiServer.events.send(failing)
+      await vi.waitFor(() => expect(updates.of(log.followId)).toHaveLength(1))
+
+      // Missed by the watch, which Kubernetes then no longer carries on.
+      apiServer.events.record({ ...failing, count: 3, lastTimestamp: '2026-10-29T10:33:00Z' })
+      apiServer.events.expire()
+      await apiServer.events.watchedTimes(2)
+      apiServer.events.send(podEvent('Unhealthy', 'web-1', 'Readiness probe failed', '2026-10-29T10:34:00Z'))
+
+      await vi.waitFor(() =>
+        expect(updates.of(log.followId)).toEqual([
+          '[Warning] BackOff pod/web-1: Back-off restarting failed container (×2)',
+          '<startedOver>',
+          '[Warning] BackOff pod/web-1: Back-off restarting failed container (×3)',
+          '[Warning] Unhealthy pod/web-1: Readiness probe failed'
+        ])
+      )
+    })
+
+    it('end when the Source is disconnected, closing the watch', async () => {
+      const sourceId = await connected('events')
+      const log = await core.followLog(sourceId, 'events', { lastNLines: 1 })
+      await apiServer.events.watchedTimes(1)
+
+      await core.disconnect(sourceId)
+
+      expect(updates.of(log.followId)).toEqual(['<ended>'])
+      expect(updates.events.at(-1)).toMatchObject({ kind: 'ended', reason: 'disconnected' })
+      await vi.waitFor(() => expect(apiServer.events.open()).toBe(0))
+    })
   })
 
   it('fail to open with the permission the user is missing, the node still listed', async () => {
