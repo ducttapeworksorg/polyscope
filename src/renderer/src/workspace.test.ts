@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { LogNode, SourceInfo, TextFile, WorkloadKind } from '@shared/core-api'
+import type { LargeFile, LogNode, SourceInfo, TextFile, WorkloadKind } from '@shared/core-api'
 import {
   addEarlierLines,
   dropEarlier,
@@ -13,6 +13,9 @@ import {
   cycleTab,
   emptyWorkspace,
   endFollow,
+  followIdsOf,
+  largeFileIdsOf,
+  reviseTabs,
   hiddenLevelsOf,
   markLogStreamGone,
   markPodGone,
@@ -33,6 +36,7 @@ import {
   sinceOffered,
   tabName,
   toggleLevel,
+  type Pane,
   type TabContent,
   type Workspace
 } from './workspace'
@@ -51,12 +55,24 @@ const file = (path: string, content = ''): TextFile => ({
 const contentOf = (opened: TabContent) => ('content' in opened ? opened.content : null)
 const tab = (key: string) => ({ key, source, file: file(key) })
 
-/** Each tab as its key, with a '*' when it's the preview tab and brackets around the active one. */
-const shape = ({ tabs, activeKey }: Workspace) =>
+/** Each tab of a Pane as its key, with a '*' when it's the preview tab and brackets around the active one. */
+const paneShape = ({ tabs, activeKey }: Pane) =>
   tabs.map(({ key, pinned }) => {
     const label = pinned ? key : `${key}*`
     return key === activeKey ? `[${label}]` : label
   })
+
+/** The only Pane's tabs, as `paneShape` shows them. */
+const shape = (ws: Workspace) => {
+  expect(ws.panes).toHaveLength(1)
+  return paneShape(ws.panes[0]!)
+}
+
+/** The tabs of the only Pane. */
+const tabsOf = (ws: Workspace) => {
+  expect(ws.panes).toHaveLength(1)
+  return ws.panes[0]!.tabs
+}
 
 const open = (...keys: string[]) => keys.reduce((ws, key) => pinTab(openTab(ws, tab(key)), key), emptyWorkspace)
 
@@ -95,7 +111,7 @@ describe('preview tabs', () => {
     const ws = openTab(open('a', 'b'), { ...tab('a'), file: file('a', 'newer') })
 
     expect(shape(ws)).toEqual(['[a]', 'b'])
-    expect(contentOf(ws.tabs[0]!.file)).toBe('')
+    expect(contentOf(tabsOf(ws)[0]!.file)).toBe('')
   })
 
   it('pins a preview tab that is opened again as pinned, and never unpins one', () => {
@@ -140,7 +156,7 @@ describe('reloading tabs', () => {
     const ws = reopenTab(activateTab(open('a', 'b'), 'a'), 'b', file('b', 'fresh'), {})
 
     expect(shape(ws)).toEqual(['[a]', 'b'])
-    expect(contentOf(ws.tabs[1]!.file)).toBe('fresh')
+    expect(contentOf(tabsOf(ws)[1]!.file)).toBe('fresh')
   })
 
   it('ignores a file for a tab closed while it was being read', () => {
@@ -157,7 +173,7 @@ describe('reopening a tab another way', () => {
     const ws = reopenTab(preview, 'a', { ...file('a', 'latin'), encoding: 'latin1' }, { encoding: 'latin1' })
 
     expect(shape(ws)).toEqual(['[a]'])
-    expect(ws.tabs[0]).toMatchObject({ openAs: { encoding: 'latin1' }, file: { content: 'latin' } })
+    expect(tabsOf(ws)[0]).toMatchObject({ openAs: { encoding: 'latin1' }, file: { content: 'latin' } })
   })
 
 })
@@ -167,13 +183,13 @@ describe('choosing a language', () => {
     const ws = setLanguage(openTab(open('a'), tab('b')), 'b', 'json')
 
     expect(shape(ws)).toEqual(['a', '[b]'])
-    expect(ws.tabs.map((t) => t.language)).toEqual([undefined, 'json'])
+    expect(tabsOf(ws).map((t) => t.language)).toEqual([undefined, 'json'])
   })
 
   it('keeps the choice across a reload', () => {
     const ws = setLanguage(open('a'), 'a', 'json')
 
-    expect(reopenTab(ws, 'a', file('a', 'fresh'), {}).tabs[0]!.language).toBe('json')
+    expect(tabsOf(reopenTab(ws, 'a', file('a', 'fresh'), {}))[0]!.language).toBe('json')
   })
 
   it('ignores a tab that is not open', () => {
@@ -187,13 +203,13 @@ describe('a tab whose pod is gone', () => {
   it('keeps what it showed, marked as from a pod that no longer exists', () => {
     const ws = markPodGone(reopenTab(open('a'), 'a', file('a', 'last read')), 'a', 'web-1')
 
-    expect(ws.tabs[0]).toMatchObject({ podGone: 'web-1', file: { content: 'last read' } })
+    expect(tabsOf(ws)[0]).toMatchObject({ podGone: 'web-1', file: { content: 'last read' } })
   })
 
   it('loses the mark once it is read again', () => {
     const ws = markPodGone(open('a'), 'a', 'web-1')
 
-    expect(reopenTab(ws, 'a', file('a', 'fresh')).tabs[0]).not.toHaveProperty('podGone')
+    expect(tabsOf(reopenTab(ws, 'a', file('a', 'fresh')))[0]).not.toHaveProperty('podGone')
   })
 
   it('ignores a tab that is not open', () => {
@@ -208,14 +224,14 @@ describe('opening a followed log', () => {
 
   it('shows its Follow on, in a new tab or in place of the preview', () => {
     const fresh = openTab(emptyWorkspace, { key: 'a', source, file: { ...log, followId: 'f' } })
-    expect(fresh.tabs[0]?.follow).toEqual({ followId: 'f', paused: false })
+    expect(tabsOf(fresh)[0]?.follow).toEqual({ followId: 'f', paused: false })
 
     const previewed = openTab(openTab(emptyWorkspace, tab('b')), { key: 'a', source, file: { ...log, followId: 'g' } })
-    expect(previewed.tabs.map((open) => [open.key, open.follow])).toEqual([['a', { followId: 'g', paused: false }]])
+    expect(tabsOf(previewed).map((open) => [open.key, open.follow])).toEqual([['a', { followId: 'g', paused: false }]])
   })
 
   it('leaves a log that isn’t followed without one', () => {
-    expect(openTab(emptyWorkspace, { key: 'a', source, file: log }).tabs[0]?.follow).toBeUndefined()
+    expect(tabsOf(openTab(emptyWorkspace, { key: 'a', source, file: log }))[0]?.follow).toBeUndefined()
   })
 })
 
@@ -271,12 +287,12 @@ describe('a log tab whose Follow is slowed', () => {
   it('says so until it no longer is', () => {
     const slowed = noteSlowed(followed(), 'f', true)
 
-    expect(slowed.tabs.map((tab) => tab.follow?.slowed ?? false)).toEqual([true, false])
-    expect(noteSlowed(slowed, 'f', false).tabs.map((tab) => tab.follow?.slowed ?? false)).toEqual([false, false])
+    expect(tabsOf(slowed).map((tab) => tab.follow?.slowed ?? false)).toEqual([true, false])
+    expect(tabsOf(noteSlowed(slowed, 'f', false)).map((tab) => tab.follow?.slowed ?? false)).toEqual([false, false])
   })
 
   it('stops saying so once its Follow ends', () => {
-    expect(endFollow(noteSlowed(followed(), 'f', true), 'f').tabs[0]?.follow).toBeUndefined()
+    expect(tabsOf(endFollow(noteSlowed(followed(), 'f', true), 'f'))[0]?.follow).toBeUndefined()
   })
 })
 
@@ -287,28 +303,28 @@ describe('a log tab whose Log Stream is gone', () => {
   it('keeps what it showed, marked as gone, when its Follow ends as the Log Stream went away', () => {
     const ws = endFollow(followed(), 'f', 'gone')
 
-    expect(ws.tabs[0]).toMatchObject({ logStreamGone: true, file: { content: 'last read' } })
-    expect(ws.tabs[0]?.follow).toBeUndefined()
+    expect(tabsOf(ws)[0]).toMatchObject({ logStreamGone: true, file: { content: 'last read' } })
+    expect(tabsOf(ws)[0]?.follow).toBeUndefined()
   })
 
   it('isn’t marked when its Follow ends otherwise', () => {
-    expect(endFollow(followed(), 'f', 'exited').tabs[0]).not.toHaveProperty('logStreamGone')
-    expect(endFollow(followed(), 'f', 'disconnected').tabs[0]).not.toHaveProperty('logStreamGone')
+    expect(tabsOf(endFollow(followed(), 'f', 'exited'))[0]).not.toHaveProperty('logStreamGone')
+    expect(tabsOf(endFollow(followed(), 'f', 'disconnected'))[0]).not.toHaveProperty('logStreamGone')
   })
 
   it('is marked when reading it again finds it gone', () => {
-    expect(markLogStreamGone(followed(), 'c').tabs[0]).toMatchObject({ logStreamGone: true, file: { content: 'last read' } })
+    expect(tabsOf(markLogStreamGone(followed(), 'c'))[0]).toMatchObject({ logStreamGone: true, file: { content: 'last read' } })
   })
 
   it('loses the mark once it is read again', () => {
-    expect(reopenLogTab(endFollow(followed(), 'f', 'gone'), 'c', log).tabs[0]).not.toHaveProperty('logStreamGone')
+    expect(tabsOf(reopenLogTab(endFollow(followed(), 'f', 'gone'), 'c', log))[0]).not.toHaveProperty('logStreamGone')
   })
 })
 
 describe('switching a container’s log view to its Previous Log', () => {
   const log = { view: 'log', of: 'logStream', path: 'p/c', name: 'c', offersPreviousLog: true, offersSince: false, previous: false, restarted: false, lastNLines: 10, timestamps: false, content: '' } as const
   const followed = (restarted = false) => openTab(emptyWorkspace, { key: 'c', source, file: { ...log, restarted, followId: 'f' } })
-  const onlyTab = (ws: Workspace) => ws.tabs[0]!
+  const onlyTab = (ws: Workspace) => tabsOf(ws)[0]!
 
   it('offers it once the container has restarted', () => {
     expect(canShowPrevious(onlyTab(followed()))).toBe(false)
@@ -318,7 +334,7 @@ describe('switching a container’s log view to its Previous Log', () => {
   it('offers it as soon as the tab’s Follow sees the container restart', () => {
     const ws = noteRestart(openTab(followed(), { key: 'd', source, file: { ...log, followId: 'g' } }, { pinned: true }), 'f')
 
-    expect(ws.tabs.map(canShowPrevious)).toEqual([true, false])
+    expect(tabsOf(ws).map(canShowPrevious)).toEqual([true, false])
   })
 
   it('goes by what a log read afresh says', () => {
@@ -370,7 +386,7 @@ describe('switching a container’s log view to its pod’s Events', () => {
   const log = (path: string, offersPreviousLog = true) =>
     ({ view: 'log', of: 'logStream', path, name: path.split('/').at(-1)!, offersPreviousLog, offersSince: true, previous: false, restarted: false, lastNLines: 10, timestamps: false, content: '' }) as const
   const container = log('deployments/api/api-7d9f-x2k/web')
-  const opened = (file: TabContent, from: SourceInfo = cluster) => openTab(emptyWorkspace, { key: 'c', source: from, file }).tabs[0]!
+  const opened = (file: TabContent, from: SourceInfo = cluster) => tabsOf(openTab(emptyWorkspace, { key: 'c', source: from, file }))[0]!
 
   it('is offered by every container’s log view in a Kubernetes Logs Source, with a Previous Log or not', () => {
     expect(offersPodEvents(opened(container))).toBe(true)
@@ -408,9 +424,9 @@ describe('switching a container’s log view to its pod’s Events', () => {
     }
 
     it('shows the pod’s Events in the same tab, Followed, titled for them', () => {
-      const tab = switched().tabs[0]!
+      const tab = tabsOf(switched())[0]!
 
-      expect(switched().tabs.map((open) => open.key)).toEqual(['c'])
+      expect(tabsOf(switched()).map((open) => open.key)).toEqual(['c'])
       expect(logShownBy(tab)).toBe('podEvents')
       expect(tab.file).toEqual(podEvents)
       expect(tab.follow).toEqual({ followId: 'e', paused: false })
@@ -419,24 +435,24 @@ describe('switching a container’s log view to its pod’s Events', () => {
     })
 
     it('still offers the container’s Previous Log, once it has restarted', () => {
-      expect(offersPrevious(switched().tabs[0]!)).toBe(true)
-      expect(canShowPrevious(switched().tabs[0]!)).toBe(false)
-      expect(canShowPrevious(switched(true).tabs[0]!)).toBe(true)
+      expect(offersPrevious(tabsOf(switched())[0]!)).toBe(true)
+      expect(canShowPrevious(tabsOf(switched())[0]!)).toBe(false)
+      expect(canShowPrevious(tabsOf(switched(true))[0]!)).toBe(true)
     })
 
     it('keeps showing them as they’re read again, with Since or Last N lines', () => {
-      const tab = reopenLogTab(switched(), 'c', { ...podEvents, lastNLines: 100 }, { path: container.path, name: 'web' }).tabs[0]!
+      const tab = tabsOf(reopenLogTab(switched(), 'c', { ...podEvents, lastNLines: 100 }, { path: container.path, name: 'web' }))[0]!
 
       expect(logShownBy(tab)).toBe('podEvents')
       expect(tab.file).toMatchObject({ lastNLines: 100 })
     })
 
     it('switches back to the container’s log or Previous Log', () => {
-      const tab = switched().tabs[0]!
+      const tab = tabsOf(switched())[0]!
 
       expect(logToShow(tab, 'log')).toEqual({ path: container.path, name: 'web', previous: false })
       expect(logToShow(tab, 'previous')).toEqual({ path: container.path, name: 'web', previous: true })
-      const back = reopenLogTab(switched(), 'c', { ...container, followId: 'g' }).tabs[0]!
+      const back = tabsOf(reopenLogTab(switched(), 'c', { ...container, followId: 'g' }))[0]!
       expect(logShownBy(back)).toBe('log')
       expect(tabName(back)).toBe('web')
       expect(back).not.toHaveProperty('podEventsOf')
@@ -444,7 +460,7 @@ describe('switching a container’s log view to its pod’s Events', () => {
 
     it('says why when they can’t be read, and can switch back', () => {
       const failed = { view: 'logFailed', of: 'logStream', path: podEvents.path, name: podEvents.name, previous: false, lastNLines: 10, timestamps: false, message: 'missing permission' } as const
-      const tab = reopenLogTab(switched(true), 'c', failed, { path: container.path, name: 'web' }).tabs[0]!
+      const tab = tabsOf(reopenLogTab(switched(true), 'c', failed, { path: container.path, name: 'web' }))[0]!
 
       expect(logShownBy(tab)).toBe('podEvents')
       expect(tab.follow).toBeUndefined()
@@ -481,7 +497,7 @@ describe('cycling through tabs', () => {
 describe('reading further back in a log view', () => {
   const log = { view: 'log', of: 'logStream', path: 'g', name: 'g', offersPreviousLog: false, offersSince: false, previous: false, restarted: false, lastNLines: 2, timestamps: false, content: 'c\nd', earlier: 'e1' } as const
   const opened = () => openTab(emptyWorkspace, { key: 'g', source, file: { ...log, followId: 'f' } })
-  const onlyTab = (ws: Workspace) => ws.tabs[0]!
+  const onlyTab = (ws: Workspace) => tabsOf(ws)[0]!
 
   it('adds the lines read before those shown, going on from where they end', () => {
     const once = addEarlierLines(opened(), 'g', 'e1', { content: 'b', earlier: 'e2' })
@@ -513,7 +529,7 @@ describe('reading further back in a log view', () => {
 describe('a log view’s Since', () => {
   const log = { view: 'log', of: 'logStream', path: 'p/c', name: 'c', offersPreviousLog: true, offersSince: true, previous: false, restarted: true, lastNLines: 10, timestamps: false, content: '' } as const
   const opened = (offersSince = true) => openTab(emptyWorkspace, { key: 'c', source, file: { ...log, offersSince } })
-  const onlyTab = (ws: Workspace) => ws.tabs[0]!
+  const onlyTab = (ws: Workspace) => tabsOf(ws)[0]!
 
   it('is offered only for a Log Stream whose Source Type offers it, as its log said when read', () => {
     expect(sinceOffered(onlyTab(opened()))).toBe(true)
@@ -541,7 +557,7 @@ describe('a log view’s Since', () => {
 describe('a log view’s Level Filter', () => {
   const log = { view: 'log', of: 'logStream', path: 'p/c', name: 'c', offersPreviousLog: true, offersSince: true, previous: false, restarted: true, lastNLines: 10, timestamps: false, content: '' } as const
   const opened = () => openTab(emptyWorkspace, { key: 'c', source, file: log })
-  const onlyTab = (ws: Workspace) => ws.tabs[0]!
+  const onlyTab = (ws: Workspace) => tabsOf(ws)[0]!
 
   it('starts showing every Log Level', () => {
     expect(hiddenLevelsOf(onlyTab(opened()))).toEqual([])
@@ -599,7 +615,7 @@ describe('a Kubernetes Logs Source’s Events', () => {
   it('offer no Previous Log', () => {
     const ws = openTab(emptyWorkspace, { key: 'k:events/pods/x', source: cluster, file: ofPod('') })
 
-    expect(offersPrevious(ws.tabs[0]!)).toBe(false)
+    expect(offersPrevious(tabsOf(ws)[0]!)).toBe(false)
   })
 
   describe('shown from a row', () => {
@@ -655,6 +671,122 @@ describe('a Kubernetes Logs Source’s Events', () => {
         capabilities: { previousLog: false, restarts: false },
         kubernetes: { kind: 'events' }
       })
+    })
+  })
+})
+
+describe('Panes', () => {
+  const sideBySide = { kind: 'sideBySide', ratio: 0.5 } as const
+  /** A Workspace of a Pane per list of keys, each opened (and pinned) in turn, the one at `active` active. */
+  const panesOf = (active: number, ...keysOf: string[][]): Workspace => ({
+    panes: keysOf.map((keys) => open(...keys).panes[0]!),
+    activePane: active,
+    layout: sideBySide
+  })
+  /** Each Pane as `paneShape` shows its tabs, the active one marked with '>'. */
+  const panesShape = (ws: Workspace) => ws.panes.map((pane, index) => `${index === ws.activePane ? '>' : ' '} ${paneShape(pane).join(' ')}`)
+  const tabIn = (ws: Workspace, key: string) => ws.panes.flatMap((pane) => pane.tabs).find((open) => open.key === key)
+
+  describe('opening', () => {
+    it('activates a file’s tab, and its Pane, when it’s open in another Pane', () => {
+      expect(panesShape(openTab(panesOf(0, ['a', 'b'], ['c', 'd']), tab('c')))).toEqual(['  a [b]', '> [c] d'])
+    })
+
+    it('opens a new file in the active Pane, in place of that Pane’s own preview tab', () => {
+      const ws = openTab(panesOf(1, ['a'], ['b']), tab('p'))
+      const previewing = { ...ws, panes: ws.panes.with(0, openTab(open('a'), tab('x')).panes[0]!) }
+
+      expect(panesShape(openTab(previewing, tab('q')))).toEqual(['  a [x*]', '> b [q*]'])
+    })
+
+    it('activates a tab in another Pane, and that Pane', () => {
+      expect(panesShape(activateTab(panesOf(0, ['a', 'b'], ['c', 'd']), 'c'))).toEqual(['  a [b]', '> [c] d'])
+    })
+  })
+
+  describe('closing', () => {
+    it('closes a Pane left with no tabs, its neighbour becoming active and the layout shrinking', () => {
+      const ws = closeTab(panesOf(0, ['a'], ['b', 'c']), 'a')
+
+      expect(panesShape(ws)).toEqual(['> b [c]'])
+      expect(ws.layout).toEqual({ kind: 'single' })
+    })
+
+    it('keeps the active Pane active when another Pane closes', () => {
+      expect(panesShape(closeTab(panesOf(1, ['a'], ['b', 'c']), 'a'))).toEqual(['> b [c]'])
+    })
+
+    it('passes an active Pane closed at the end to the one before', () => {
+      expect(panesShape(closeTab(panesOf(1, ['a'], ['b']), 'b'))).toEqual(['> [a]'])
+    })
+
+    it('closes the other tabs of a tab’s own Pane only', () => {
+      expect(panesShape(closeOtherTabs(panesOf(0, ['a', 'b'], ['c', 'd']), 'c'))).toEqual(['  a [b]', '> [c]'])
+    })
+
+    it('closes all the tabs of the active Pane only, and so that Pane', () => {
+      expect(panesShape(closeAllTabs(panesOf(1, ['a', 'b'], ['c', 'd'])))).toEqual(['> a [b]'])
+    })
+
+    it('closes a Pane whose tabs all close along with their Source', () => {
+      const ws = reviseTabs(panesOf(1, ['a'], ['b', 'c']), (open) => (open.key === 'a' ? open : undefined))
+
+      expect(panesShape(ws)).toEqual(['> [a]'])
+    })
+  })
+
+  it('cycles through the active Pane’s tabs only', () => {
+    expect(panesShape(cycleTab(panesOf(1, ['a', 'b'], ['c', 'd']), 1))).toEqual(['  a [b]', '> [c] d'])
+  })
+
+  describe('changing a tab by its key, in whichever Pane holds it', () => {
+    const ws = () => openTab(panesOf(1, ['a'], ['c']), tab('p'))
+
+    it('pins it', () => {
+      expect(panesShape(pinTab(ws(), 'p'))).toEqual(['  [a]', '> c [p]'])
+    })
+
+    it('reloads it, chooses its language and filters its Log Levels, leaving the active Pane as it is', () => {
+      const changed = toggleLevel(setLanguage(reopenTab(panesOf(1, ['a'], ['c']), 'a', file('a', 'fresh')), 'a', 'json'), 'a', 'debug')
+
+      expect(tabIn(changed, 'a')).toMatchObject({ language: 'json', hiddenLevels: ['debug'], file: { content: 'fresh' } })
+      expect(changed.activePane).toBe(1)
+    })
+
+    it('changes how its log is shown, reads further back in it, and switches it to its Previous Log', () => {
+      const log = { view: 'log', of: 'logStream', path: 'g', name: 'g', offersPreviousLog: true, offersSince: false, previous: false, restarted: true, lastNLines: 2, timestamps: false, content: 'c', earlier: 'e1' } as const
+      const ws: Workspace = { ...panesOf(1, ['b']), panes: [openTab(emptyWorkspace, { key: 'g', source, file: log }).panes[0]!, open('b').panes[0]!] }
+
+      expect(tabIn(setLogView(ws, 'g', { wrap: true, since: { minutesAgo: 60 } }), 'g')).toMatchObject({ wrap: true, since: { minutesAgo: 60 } })
+      expect(tabIn(addEarlierLines(ws, 'g', 'e1', { content: 'a\nb' }), 'g')?.loadedEarlier).toEqual({ content: 'a\nb' })
+      expect(tabIn(dropEarlier(ws, 'g'), 'g')?.earlierDropped).toBe(true)
+      expect(tabIn(reopenLogTab(ws, 'g', { ...log, previous: true }), 'g')?.file).toMatchObject({ previous: true })
+    })
+
+    it('marks its pod or Log Stream gone', () => {
+      expect(tabIn(markPodGone(panesOf(1, ['a'], ['c']), 'a', 'web-1'), 'a')).toMatchObject({ podGone: 'web-1' })
+      expect(tabIn(markLogStreamGone(panesOf(1, ['a'], ['c']), 'a'), 'a')).toMatchObject({ logStreamGone: true })
+    })
+  })
+
+  describe('Follows and Large Files', () => {
+    const log = { view: 'log', of: 'logStream', path: 'g', name: 'g', offersPreviousLog: true, offersSince: false, previous: false, restarted: false, lastNLines: 10, timestamps: false, content: '' } as const
+    const large: LargeFile = { view: 'large', path: 'l', name: 'l', size: 1, modifiedTime: 0, largeFileId: 'L', encoding: 'utf-8', lastLines: [] }
+    const ws = () => {
+      const left = openTab(openTab(emptyWorkspace, { key: 'g', source, file: { ...log, followId: 'f' } }), { key: 'l', source, file: large }, { pinned: true })
+      const right = openTab(emptyWorkspace, { key: 'h', source, file: { ...log, path: 'h', followId: 'f2' } })
+      return { panes: [left.panes[0]!, right.panes[0]!], activePane: 1, layout: sideBySide } satisfies Workspace
+    }
+
+    it('gathers the live Follows and Large Files of every Pane', () => {
+      expect(followIdsOf(ws())).toEqual(new Set(['f', 'f2']))
+      expect(largeFileIdsOf(ws())).toEqual(new Set(['L']))
+    })
+
+    it('notes a restart, a slowed Follow and a Follow ending in whichever Pane it goes on', () => {
+      expect(tabIn(noteRestart(ws(), 'f'), 'g')?.restarted).toBe(true)
+      expect(tabIn(noteSlowed(ws(), 'f', true), 'g')?.follow?.slowed).toBe(true)
+      expect(tabIn(endFollow(ws(), 'f', 'gone'), 'g')).toMatchObject({ follow: undefined, logStreamGone: true })
     })
   })
 })

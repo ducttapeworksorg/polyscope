@@ -208,13 +208,76 @@ export interface FollowState {
   slowed?: true
 }
 
-/** The open tabs, in order, and which one is shown. */
-export interface Workspace {
+/** One of the areas the viewer is split into: its open tabs, in order, and which one is shown. */
+export interface Pane {
   tabs: OpenTab[]
   activeKey: string | null
 }
 
-export const emptyWorkspace: Workspace = { tabs: [], activeKey: null }
+/**
+ * How the Panes are arranged: one alone, or two side by side or one above the other, `ratio` being the first's share
+ * of the room. Each layout holds a fixed number of Panes.
+ */
+export type Layout = { kind: 'single' } | { kind: 'sideBySide' | 'stacked'; ratio: number }
+
+/**
+ * The open tabs, in Panes: a file or Log Stream is open in at most one tab across them all. The active Pane is the one
+ * last focused; there's always at least one, which is empty only while no tab is open.
+ */
+export interface Workspace {
+  panes: Pane[]
+  activePane: number
+  layout: Layout
+}
+
+const emptyPane: Pane = { tabs: [], activeKey: null }
+
+export const emptyWorkspace: Workspace = { panes: [emptyPane], activePane: 0, layout: { kind: 'single' } }
+
+/** The Pane last focused, where what's opened goes. */
+export const activePaneOf = (ws: Workspace): Pane => ws.panes[ws.activePane] ?? emptyPane
+
+/** The active Pane's active tab, which the status bar describes. */
+export const activeTabOf = (ws: Workspace): OpenTab | null => {
+  const pane = activePaneOf(ws)
+  return pane.tabs.find((tab) => tab.key === pane.activeKey) ?? null
+}
+
+/** Every open tab, in whichever Pane. */
+export const allTabsOf = (ws: Workspace): OpenTab[] => ws.panes.flatMap((pane) => pane.tabs)
+
+/** The open tab with `key`, in whichever Pane holds it. */
+export const findTab = (ws: Workspace, key: string): OpenTab | undefined => allTabsOf(ws).find((tab) => tab.key === key)
+
+const paneIndexOf = (ws: Workspace, key: string) => ws.panes.findIndex((pane) => pane.tabs.some((tab) => tab.key === key))
+
+/** Changes the Pane at `index`. */
+const withPane = (ws: Workspace, index: number, pane: Pane): Workspace => ({ ...ws, panes: ws.panes.with(index, pane) })
+
+/** The layout shrunk to fit `count` Panes. */
+const layoutFor = (layout: Layout, count: number): Layout => (count <= 1 ? { kind: 'single' } : layout)
+
+/**
+ * Drops the Panes left with no tabs, unless it's the only one, shrinking the layout to fit; an active Pane dropped
+ * passes to its neighbour (the one after, or at the end the one before).
+ */
+function withoutEmptyPanes(ws: Workspace): Workspace {
+  if (ws.panes.every((pane) => pane.tabs.length) || ws.panes.length === 1) return ws
+  const kept = ws.panes.filter((pane) => pane.tabs.length)
+  if (!kept.length) return emptyWorkspace
+  const emptiedBefore = ws.panes.slice(0, ws.activePane).filter((pane) => !pane.tabs.length).length
+  const activePane = Math.min(ws.activePane - emptiedBefore, kept.length - 1)
+  return { panes: kept, activePane, layout: layoutFor(ws.layout, kept.length) }
+}
+
+/** Changes every tab, in whichever Pane: dropping one when `change` gives none, its Pane's first left taking over if it was active. */
+export function reviseTabs(ws: Workspace, change: (tab: OpenTab) => OpenTab | undefined): Workspace {
+  const panes = ws.panes.map(({ tabs, activeKey }) => {
+    const revised = tabs.flatMap((tab) => change(tab) ?? [])
+    return { tabs: revised, activeKey: revised.some((tab) => tab.key === activeKey) ? activeKey : (revised[0]?.key ?? null) }
+  })
+  return withoutEmptyPanes({ ...ws, panes })
+}
 
 /** The Follow a log was read with, if any, running: its tab shows it and stops it when done with it. */
 const followOf = (file: TabContent): FollowState | undefined => ('followId' in file ? { followId: file.followId, paused: false } : undefined)
@@ -227,59 +290,77 @@ const restartedOf = (file: TabContent): Pick<OpenTab, 'restarted' | 'offersPrevi
   file.view === 'log' && file.of === 'logStream' ? { restarted: file.restarted, offersPreviousLog: file.offersPreviousLog, offersSince: file.offersSince } : {}
 
 /**
- * Shows a file: activating its tab if it's open already, otherwise putting it in place of the
- * preview tab or, with none, right after the active tab. Opening as pinned pins it for good.
+ * Shows a file: activating its tab, and that tab's Pane, if it's open already in any Pane; otherwise putting it, in
+ * the active Pane, in place of its preview tab or, with none, right after its active tab. Opening as pinned pins it
+ * for good.
  */
 export function openTab(ws: Workspace, tab: Pick<OpenTab, 'key' | 'source' | 'file'>, { pinned = false } = {}): Workspace {
   const { key } = tab
-  if (ws.tabs.some((open) => open.key === key)) {
+  if (findTab(ws, key)) {
     const shown = activateTab(ws, key)
     return pinned ? pinTab(shown, key) : shown
   }
   const added = { ...tab, follow: followOf(tab.file), ...restartedOf(tab.file), pinned }
-  const preview = pinned ? -1 : ws.tabs.findIndex((open) => !open.pinned)
-  if (preview >= 0) return { tabs: ws.tabs.with(preview, added), activeKey: key }
-  const active = ws.tabs.findIndex((open) => open.key === ws.activeKey)
-  const at = active >= 0 ? active + 1 : ws.tabs.length
-  return { tabs: ws.tabs.toSpliced(at, 0, added), activeKey: key }
+  const { tabs, activeKey } = activePaneOf(ws)
+  const preview = pinned ? -1 : tabs.findIndex((open) => !open.pinned)
+  if (preview >= 0) return withPane(ws, ws.activePane, { tabs: tabs.with(preview, added), activeKey: key })
+  const active = tabs.findIndex((open) => open.key === activeKey)
+  const at = active >= 0 ? active + 1 : tabs.length
+  return withPane(ws, ws.activePane, { tabs: tabs.toSpliced(at, 0, added), activeKey: key })
 }
 
-export const activateTab = (ws: Workspace, key: string): Workspace => ({ ...ws, activeKey: key })
+/** Activates a tab, and the Pane holding it. */
+export function activateTab(ws: Workspace, key: string): Workspace {
+  const index = paneIndexOf(ws, key)
+  if (index < 0) return ws
+  return { ...withPane(ws, index, { ...ws.panes[index]!, activeKey: key }), activePane: index }
+}
 
-/** Activates the tab `delta` places on from the active one (back, if negative), wrapping around at either end. */
+/**
+ * Activates the tab `delta` places on from the active one (back, if negative) in the active Pane, wrapping around at
+ * either end.
+ */
 export function cycleTab(ws: Workspace, delta: number): Workspace {
-  const { tabs } = ws
+  const { tabs, activeKey } = activePaneOf(ws)
   if (!tabs.length) return ws
-  const active = tabs.findIndex((open) => open.key === ws.activeKey)
+  const active = tabs.findIndex((open) => open.key === activeKey)
   const next = (((active + delta) % tabs.length) + tabs.length) % tabs.length
   return activateTab(ws, tabs[next]!.key)
 }
 
-export const pinTab = (ws: Workspace, key: string): Workspace => ({
-  ...ws,
-  tabs: ws.tabs.map((open) => (open.key === key && !open.pinned ? { ...open, pinned: true } : open))
-})
+export const pinTab = (ws: Workspace, key: string): Workspace => updateTab(ws, key, (tab) => (tab.pinned ? tab : { ...tab, pinned: true }))
 
-/** Closes a tab; if it was active, the tab taking its place (or, at the end, the one before) becomes active. */
+/**
+ * Closes a tab; if it was active in its Pane, the tab taking its place (or, at the end, the one before) becomes active.
+ * A Pane left with no tabs closes.
+ */
 export function closeTab(ws: Workspace, key: string): Workspace {
-  const index = ws.tabs.findIndex((open) => open.key === key)
+  const index = paneIndexOf(ws, key)
   if (index < 0) return ws
-  const tabs = ws.tabs.toSpliced(index, 1)
-  if (key !== ws.activeKey) return { ...ws, tabs }
-  return { tabs, activeKey: tabs[Math.min(index, tabs.length - 1)]?.key ?? null }
+  const pane = ws.panes[index]!
+  const at = pane.tabs.findIndex((open) => open.key === key)
+  const tabs = pane.tabs.toSpliced(at, 1)
+  const activeKey = key !== pane.activeKey ? pane.activeKey : (tabs[Math.min(at, tabs.length - 1)]?.key ?? null)
+  return withoutEmptyPanes(withPane(ws, index, { tabs, activeKey }))
 }
 
+/** Closes every tab but one in its Pane, which it's left active in, the Pane becoming active too. */
 export function closeOtherTabs(ws: Workspace, key: string): Workspace {
-  const kept = ws.tabs.filter((open) => open.key === key)
-  return kept.length ? { tabs: kept, activeKey: key } : ws
+  const index = paneIndexOf(ws, key)
+  if (index < 0) return ws
+  return { ...withPane(ws, index, { tabs: ws.panes[index]!.tabs.filter((open) => open.key === key), activeKey: key }), activePane: index }
 }
 
-export const closeAllTabs = (_ws: Workspace): Workspace => emptyWorkspace
+/** Closes every tab in the active Pane, which then closes too unless it's the only one. */
+export const closeAllTabs = (ws: Workspace): Workspace => withoutEmptyPanes(withPane(ws, ws.activePane, emptyPane))
 
-/** Changes one tab; a tab closed meanwhile (say, while its file was being read) stays closed. */
-function updateTab(ws: Workspace, key: string, change: Partial<OpenTab>): Workspace {
-  if (!ws.tabs.some((open) => open.key === key)) return ws
-  return { ...ws, tabs: ws.tabs.map((open) => (open.key === key ? { ...open, ...change } : open)) }
+/** Changes one tab, in whichever Pane holds it; a tab closed meanwhile (say, while its file was being read) stays closed. */
+function updateTab(ws: Workspace, key: string, change: Partial<OpenTab> | ((tab: OpenTab) => OpenTab)): Workspace {
+  const index = paneIndexOf(ws, key)
+  if (index < 0) return ws
+  const pane = ws.panes[index]!
+  const changed = (tab: OpenTab) => (typeof change === 'function' ? change(tab) : { ...tab, ...change })
+  return withPane(ws, index, { ...pane, tabs: pane.tabs.map((open) => (open.key === key ? changed(open) : open)) })
 }
 
 /**
@@ -287,11 +368,11 @@ function updateTab(ws: Workspace, key: string, change: Partial<OpenTab>): Worksp
  * it) so reloads read it the same way. Like any change to a tab, it pins it.
  */
 export function reopenTab(ws: Workspace, key: string, file: TabContent, openAs: OpenOptions = {}): Workspace {
-  const tab = ws.tabs.find((open) => open.key === key)
-  if (!tab) return ws
-  // Read afresh, so from a pod that's there.
-  const { podGone: _, ...reopened } = tab
-  return { ...ws, tabs: ws.tabs.map((open) => (open === tab ? { ...reopened, file, openAs, pinned: true } : open)) }
+  return updateTab(ws, key, (tab) => {
+    // Read afresh, so from a pod that's there.
+    const { podGone: _, ...reopened } = tab
+    return { ...reopened, file, openAs, pinned: true }
+  })
 }
 
 /** Marks a tab as showing what was last read from `pod`, which no longer exists; its content stays. */
@@ -314,7 +395,7 @@ export function earlierOf({ file, loadedEarlier, earlierDropped }: Pick<OpenTab,
  * again, or has had them added already.
  */
 export function addEarlierLines(ws: Workspace, key: string, earlier: string, read: EarlierLog): Workspace {
-  const tab = ws.tabs.find((open) => open.key === key)
+  const tab = findTab(ws, key)
   if (!tab || earlierOf(tab) !== earlier) return ws
   const content = joinLines(read.content, tab.loadedEarlier?.content ?? '')
   return updateTab(ws, key, { loadedEarlier: { content, ...(read.earlier !== undefined && { earlier: read.earlier }) } })
@@ -329,13 +410,12 @@ export const dropEarlier = (ws: Workspace, key: string): Workspace => updateTab(
  * Previous Log and Since; read without, it shows its Log Stream again.
  */
 export function reopenLogTab(ws: Workspace, key: string, file: TabContent, podEventsOf?: ContainerLog): Workspace {
-  const tab = ws.tabs.find((open) => open.key === key)
-  if (!tab) return ws
-  // Read afresh, so from a Log Stream that's there, and with only the lines just read.
-  const { logStreamGone: _, loadedEarlier: __, earlierDropped: ___, podEventsOf: ____, ...reopened } = tab
-  // Showing the pod's Events, the tab keeps what its container said of its Previous Log and Since.
-  const fresh = { ...reopened, file, follow: followOf(file), ...(podEventsOf ? { podEventsOf } : restartedOf(file)), pinned: true }
-  return { ...ws, tabs: ws.tabs.map((open) => (open === tab ? fresh : open)) }
+  return updateTab(ws, key, (tab) => {
+    // Read afresh, so from a Log Stream that's there, and with only the lines just read.
+    const { logStreamGone: _, loadedEarlier: __, earlierDropped: ___, podEventsOf: ____, ...reopened } = tab
+    // Showing the pod's Events, the tab keeps what its container said of its Previous Log and Since.
+    return { ...reopened, file, follow: followOf(file), ...(podEventsOf ? { podEventsOf } : restartedOf(file)), pinned: true }
+  })
 }
 
 /** Changes how a log tab is shown or followed, leaving its content as it is. */
@@ -351,7 +431,7 @@ export const hiddenLevelsOf = (tab: OpenTab): LogLevel[] => tab.hiddenLevels ?? 
 
 /** Hides a Log Level in a log view, or shows it again. */
 export function toggleLevel(ws: Workspace, key: string, level: LogLevel): Workspace {
-  const tab = ws.tabs.find((open) => open.key === key)
+  const tab = findTab(ws, key)
   if (!tab) return ws
   const hidden = hiddenLevelsOf(tab)
   return updateTab(ws, key, { hiddenLevels: hidden.includes(level) ? hidden.filter((other) => other !== level) : [...hidden, level] })
@@ -359,13 +439,13 @@ export function toggleLevel(ws: Workspace, key: string, level: LogLevel): Worksp
 
 /** Notes that a Follow's container restarted, so its tab can switch to the Previous Log. */
 export function noteRestart(ws: Workspace, followId: string): Workspace {
-  const tab = ws.tabs.find((open) => open.follow?.followId === followId)
+  const tab = allTabsOf(ws).find((open) => open.follow?.followId === followId)
   return tab ? updateTab(ws, tab.key, { restarted: true }) : ws
 }
 
 /** Notes whether a Follow is slowed down, so its tab can say so. */
 export function noteSlowed(ws: Workspace, followId: string, slowed: boolean): Workspace {
-  const tab = ws.tabs.find((open) => open.follow?.followId === followId)
+  const tab = allTabsOf(ws).find((open) => open.follow?.followId === followId)
   if (!tab?.follow) return ws
   const { slowed: _, ...follow } = tab.follow
   return updateTab(ws, tab.key, { follow: { ...follow, ...(slowed && { slowed }) } })
@@ -373,17 +453,20 @@ export function noteSlowed(ws: Workspace, followId: string, slowed: boolean): Wo
 
 /** Marks a Follow as over in whichever tab it was going on, leaving what it showed; and its Log Stream as gone if that's why. */
 export function endFollow(ws: Workspace, followId: string, reason?: FollowEndReason): Workspace {
-  const tab = ws.tabs.find((open) => open.follow?.followId === followId)
+  const tab = allTabsOf(ws).find((open) => open.follow?.followId === followId)
   if (!tab) return ws
   const gone = reason === 'gone' && tab.file.view === 'log' && tab.file.of === 'logStream'
   return updateTab(ws, tab.key, { follow: undefined, ...(gone && { logStreamGone: true }) })
 }
 
-/** The Large Files open in the tabs, which the core keeps (and caches) until they're closed. */
-export const largeFileIdsOf = (ws: Workspace) => new Set(ws.tabs.flatMap((tab) => (tab.file.view === 'large' ? [tab.file.largeFileId] : [])))
+/** The Large Files open in `tabs`. */
+export const largeFileIdsIn = (tabs: OpenTab[]) => new Set(tabs.flatMap((tab) => (tab.file.view === 'large' ? [tab.file.largeFileId] : [])))
 
-/** The Follows going on in the tabs. */
-export const followIdsOf = (ws: Workspace) => new Set(ws.tabs.flatMap((tab) => (tab.follow ? [tab.follow.followId] : [])))
+/** The Large Files open in the tabs of every Pane, which the core keeps (and caches) until they're closed. */
+export const largeFileIdsOf = (ws: Workspace) => largeFileIdsIn(allTabsOf(ws))
+
+/** The Follows going on in the tabs of every Pane. */
+export const followIdsOf = (ws: Workspace) => new Set(allTabsOf(ws).flatMap((tab) => (tab.follow ? [tab.follow.followId] : [])))
 
 /** Highlights a tab’s file as `language` instead of the detected one, pinning the tab. */
 export const setLanguage = (ws: Workspace, key: string, language: LanguageId): Workspace =>
