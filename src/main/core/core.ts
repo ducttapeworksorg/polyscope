@@ -53,7 +53,7 @@ import type {
   FileLogOptions,
   TreeNode
 } from '@shared/core-api'
-import { defaultAwsAuth, defaultDockerContext, filesWorkloadKinds, followableSourceTypes, workloadKinds } from '@shared/core-api'
+import { defaultAwsAuth, defaultDockerContext, filesWorkloadKinds, followableSourceTypes, streamHas, workloadKinds } from '@shared/core-api'
 import { searchRegExp } from '@shared/search'
 import { defaultSettings, isRecord, pickSettings, settingProblems, type Settings } from '@shared/settings'
 import { stripAnsi } from './ansi'
@@ -94,7 +94,7 @@ import { createLargeFileCache } from './large-file-cache'
 import { searchLargeFile, type LargeFileSearch } from './large-file-search'
 import { createLocalFileSource } from './local-file-source'
 import { startFollow, type Follow } from './log-follow'
-import { currentRunOf, type LogReadOptions, type LogSource } from './log-source'
+import { currentRunOf, type LogReadOptions, type LogSource, type LogStreamInfo } from './log-source'
 import { readCaBundle } from './network-agents'
 import { createRegistryStore, emptyRegistry, type SavedSource } from './registry-store'
 import { createS3FileSource, type S3Target } from './s3-file-source'
@@ -462,11 +462,14 @@ async function s3TargetOf(settings: S3Settings, secretKey?: string): Promise<S3T
   return { host, bucket, prefix, region, pathStyle, credentials, verifyTls, proxyUrl, ...(await caBundleOf(settings)) }
 }
 
-/** A Log Source's node, and those folded into it, without the status or restarts its Source Type doesn't offer. */
+/**
+ * A Log Source's node, and those folded into it, without the status or restarts its Source Type doesn't offer, nor the
+ * restarts a Log Stream says it lacks.
+ */
 function offered(node: LogNode, capabilities: LogCapabilities): LogNode {
   const shown = { ...node }
   if (!capabilities.status) delete shown.status
-  if (shown.kind === 'logStream' && !capabilities.restarts) delete shown.restarts
+  if (shown.kind === 'logStream' && !streamHas('restarts', capabilities, shown)) delete shown.restarts
   if (shown.kind === 'group' && shown.folded) shown.folded = offered(shown.folded, capabilities)
   return shown
 }
@@ -725,18 +728,29 @@ export function createCore(options: CoreOptions = {}): Core {
    * timestamp of the last line, and how many lines have it. Those are only known `forFollowing`, which
    * reads the lines with their timestamps whether or not they're shown.
    */
-  const readSnapshot = async (logSource: LogSource, sourceId: string, path: SourcePath, options: OpenLogOptions, forFollowing = false) => {
+  const readSnapshot = async (
+    logSource: LogSource,
+    sourceId: string,
+    path: SourcePath,
+    options: OpenLogOptions,
+    forFollowing = false,
+    /** The Log Stream, already looked up; looked up when left out. */
+    known?: LogStreamInfo
+  ) => {
     const asked = options.lastNLines === undefined ? undefined : checkLastNLines(options.lastNLines)
     const timestamps = options.timestamps === true
     const previous = options.previous === true
-    const offersPreviousLog = logSource.capabilities.previousLog
     const offersSince = logSource.capabilities.since
-    // A Source Type without Previous Logs is never asked for one.
-    if (previous && !offersPreviousLog) throw new CoreError('LOG_UNAVAILABLE', `Its Log Streams have no Previous Log: ${path}`)
+    // A Source Type without Previous Logs is never asked for one…
+    if (previous && !logSource.capabilities.previousLog) throw new CoreError('LOG_UNAVAILABLE', `Its Log Streams have no Previous Log: ${path}`)
     const sinceTime = options.since === undefined ? undefined : checkSince(options.since)
     // Nor is one without Since asked to read from a time.
     if (sinceTime !== undefined && !offersSince) throw new CoreError('LOG_UNAVAILABLE', `Its Log Streams can’t be read from a time: ${path}`)
-    const { name, hasPreviousLog, unreadable } = await logSource.logStreamAt(path)
+    const stream = known ?? (await logSource.logStreamAt(path))
+    const { name, hasPreviousLog, unreadable } = stream
+    const offersPreviousLog = streamHas('previousLog', logSource.capabilities, stream)
+    // …nor for that of a Log Stream that says it has none.
+    if (previous && !offersPreviousLog) throw new CoreError('LOG_UNAVAILABLE', `It has no Previous Log: ${path}`)
     // Not a log still to come: following it would wait for good.
     if (unreadable) throw new CoreError('LOG_UNAVAILABLE', unreadable)
     await settingsLoaded
@@ -1705,20 +1719,23 @@ export function createCore(options: CoreOptions = {}): Core {
 
     async followLog(sourceId, path, options = {}) {
       await loaded
-      const { logSource, restarts, read } = await withLogSource(sourceId, path, async (logSource) => {
+      const { logSource, restarts, read, stream } = await withLogSource(sourceId, path, async (logSource) => {
         if (options.previous) throw new CoreError('NOT_FOLLOWABLE', `A Previous Log has ended: ${path}`)
         // The snapshot has to be of the run the Follow starts from: one read while the Log Stream restarted is read again.
-        const currentRun = currentRunOf(logSource)
+        const stream = await logSource.logStreamAt(path)
+        // A Log Stream that doesn't restart has no run to look at.
+        const currentRun = currentRunOf(logSource, stream)
         const restartsNow = async () => (currentRun ? (await currentRun(path)).restarts : 0)
         let restarts = await restartsNow()
         let read: Awaited<ReturnType<typeof readSnapshot>>
         for (let tries = 1; ; tries++) {
-          read = await readSnapshot(logSource, sourceId, path, options, true)
+          // Looked up again after a restart, whose Previous Log it now has.
+          read = await readSnapshot(logSource, sourceId, path, options, true, tries === 1 ? stream : undefined)
           const after = await restartsNow()
           if (after === restarts || tries === 3) break
           restarts = after
         }
-        return { logSource, restarts, read }
+        return { logSource, restarts, read, stream }
       })
       const { snapshot, lastTimestamp, lastTimestampCount, sinceTime } = read
       // With no lines since its Since yet, it goes on from the Since, none of whose lines were shown.
@@ -1730,6 +1747,7 @@ export function createCore(options: CoreOptions = {}): Core {
         startFollow(logSource, path, {
           ...after,
           restarts,
+          stream,
           timestamps: snapshot.timestamps,
           cap: snapshot.lastNLines,
           emit

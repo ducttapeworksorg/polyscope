@@ -31,7 +31,7 @@ A **Source** whose content is a browsable hierarchy of folders and files.
 A **Source** whose content is a hierarchy of groups ending in **Log Streams**; a **Log Stream** may have children of its own too (a CloudWatch log group). What the groups are depends on its **Source Type**.
 
 **Log Stream**:
-The log output of one thing that logs (a container, a systemd unit, a CloudWatch log stream), viewable as a snapshot or live-followed.
+The log output of one thing that logs (a container, a systemd unit, a CloudWatch log stream), or the **Events** of a Kubernetes namespace, **Workload** or pod, viewable as a snapshot or live-followed.
 
 ### Kubernetes
 
@@ -43,6 +43,10 @@ The **Log Stream** of a container's prior (crashed or restarted) instance, avail
 
 **Pod Status**:
 The health of a pod as shown in the tree: its phase or failure reason (Running, Pending, CrashLoopBackOff, OOMKilled…) plus its restart count when greater than zero.
+
+**Event**:
+A record the cluster keeps, for a short while, of something that happened to an object in the namespace (a pod scheduled, an image failing to pull, a probe failing): its type (Normal or Warning), reason and message, and how many times it has happened. Something happening again counts on the same **Event**, not a new one.
+_Avoid_: k8s event, warning (Warning is one type of **Event**)
 
 **Ready Count**:
 How many of a **Workload**'s pods are ready out of how many are desired (e.g. `2/3`). Deployments, StatefulSets and DaemonSets have one; Jobs and CronJobs run to completion, so have none.
@@ -105,8 +109,9 @@ _Avoid_: plugin
 - A Kubernetes Logs **Source** covers every **Workload** in its namespace
 - In both Kubernetes **Source Types**, a Job, pod or container level with exactly one child folds into its parent: a **Workload** with one pod of one container opens its **Log Stream** directly. The folded level's details (e.g. **Pod Status**) move to the row that stands in for it; in Kubernetes Files a folded pod's details go only in its **Source**'s tooltip
 - Kubernetes Files and Kubernetes Logs are separate **Source Types**, even though both point at a cluster
-- In Kubernetes Logs, a **Log Stream** belongs to one container of one pod of one **Workload**
-- **Previous Log**, **Pod Status** and **Ready Count** belong to Kubernetes Logs; other **Log Source** types needn't have them
+- In Kubernetes Logs, a container's **Log Stream** belongs to one container of one pod of one **Workload**
+- A Kubernetes Logs **Source** has one **Log Stream** of every **Event** in its namespace. A **Workload**'s **Events** (with those of everything it owns or owned, pods since deleted included) and a pod's are opened from their rows, not nodes of their own; a container's log view can switch to its pod's **Events**, as it does to its **Previous Log**
+- **Previous Log**, **Events**, **Pod Status** and **Ready Count** belong to Kubernetes Logs; other **Log Source** types needn't have them
 - A **Log Source** type declares which of **Previous Log**, restarts, per-node status (**Pod Status**, **Container Status**) and **Since** it offers; the log view and the tree show only those
 
 ## Flagged ambiguities

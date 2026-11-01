@@ -27,6 +27,8 @@ function fakeLogSource({ restarts = true } = {}) {
   const failures: CoreError[] = []
   /** Failures to answer the next looks at the container with, one each. */
   const lookFailures: CoreError[] = []
+  /** How many times its current run was looked at. */
+  let looks = 0
 
   const logSource: LogSource = {
     capabilities: { previousLog: restarts, restarts, status: false, since: false },
@@ -60,6 +62,7 @@ function fakeLogSource({ restarts = true } = {}) {
     },
     ...(restarts && {
       async currentRun() {
+        looks++
         const failure = lookFailures.shift()
         if (failure) throw failure
         if (gone) throw new CoreError('NOT_FOUND', 'gone')
@@ -78,7 +81,10 @@ function fakeLogSource({ restarts = true } = {}) {
     get stream() {
       return streams.at(-1)!
     },
-    goAway: () => (gone = true)
+    goAway: () => (gone = true),
+    get looks() {
+      return looks
+    }
   }
 }
 
@@ -104,6 +110,7 @@ async function follow(options: Partial<FollowOptions> = {}) {
   const follow = startFollow(source.logSource, path, {
     after: at(5),
     restarts: 0,
+    stream: {},
     timestamps: false,
     cap: 1_000,
     emit: (update) => updates.push(update),
@@ -292,6 +299,22 @@ describe('a Log Stream whose Source Type has no restarts', () => {
     source.stream.send(logged(6, 'one', 'two'))
     await settle()
     expect(lines()).toEqual(['one', '<failed>', '<recovered>', 'two'])
+  })
+})
+
+describe('a Log Stream that lacks its Source Type’s restarts', () => {
+  const stream = { capabilities: { previousLog: false, restarts: false } as const }
+
+  it('ends when its stream does, marking no restart and never looking at its run', async () => {
+    await follow({ stream })
+    source.instance.restarts = 1
+    source.stream.send(logged(6, 'last'))
+    source.stream.end()
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(lines()).toEqual(['last', '<ended>'])
+    expect(source.streams).toHaveLength(1)
+    expect(source.looks).toBe(0)
   })
 })
 

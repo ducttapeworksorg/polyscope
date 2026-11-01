@@ -569,6 +569,25 @@ export interface LogCapabilities {
 }
 
 /**
+ * Which of its Source Type's capabilities one Log Stream lacks (ADR 0010): a Kubernetes Logs Source's Events have no
+ * Previous Log and don't restart. A Log Stream can only take capabilities away, never give itself one its Source Type
+ * lacks, and says so only of capabilities its Source Type has.
+ */
+export interface LogStreamCapabilities {
+  /** It has no Previous Log, though its Source Type's Log Streams have. */
+  previousLog?: false
+  /** It doesn't restart, though its Source Type's Log Streams do. */
+  restarts?: false
+}
+
+/** Whether a Log Stream has a capability: its Source Type has it, and it doesn't say it lacks it. */
+export const streamHas = (
+  capability: keyof LogStreamCapabilities,
+  sourceType: LogCapabilities,
+  stream: { capabilities?: LogStreamCapabilities } = {}
+): boolean => sourceType[capability] && stream.capabilities?.[capability] !== false
+
+/**
  * A node in a Log Source's tree: a group, or a Log Stream, the log output of one thing that logs. A Log Stream may
  * have children of its own too. What the groups are depends on the Source Type (see `kubernetes`). A group with
  * exactly one child may carry it folded in (see `folded`).
@@ -607,6 +626,8 @@ export interface LogStreamNode extends LogNodeBase {
   hasChildren?: true
   /** How many times it has restarted, from a Source Type with restarts; left out until it has. */
   restarts?: number
+  /** Which of its Source Type's capabilities it lacks, as LogStreamCapabilities says; left out when it has them all. */
+  capabilities?: LogStreamCapabilities
   /** What the Log Stream is, in a Kubernetes Logs Source. */
   kubernetes?: KubernetesLogStream
   /** What the Log Stream is, in a Docker Logs Source. */
@@ -938,13 +959,16 @@ export interface LogSnapshot {
   path: SourcePath
   /** The Log Stream's name: a container's, say. */
   name: string
-  /** Whether its Source Type has Previous Logs, so its log view offers to switch to one. */
+  /**
+   * Whether it has Previous Logs (its Source Type has, and it doesn't say it lacks them), so its log view offers to
+   * switch to one.
+   */
   offersPreviousLog: boolean
   /** Whether its Source Type can read from a time on, so its log view offers Since. */
   offersSince: boolean
   /** Whether this is the Log Stream's Previous Log: the log of its run before the current one. */
   previous: boolean
-  /** Whether it had a Previous Log to switch to when read: it had restarted. Never, from a Source Type without Previous Logs. */
+  /** Whether it had a Previous Log to switch to when read: it had restarted. Never, for a Log Stream without Previous Logs. */
   restarted: boolean
   /** The lines asked for; the snapshot holds at most that many. */
   lastNLines: LastNLines
