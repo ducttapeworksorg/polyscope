@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test'
 import { allowedCloudWatchOperations, startTestCloudWatchEndpoint, type TestCloudWatchEndpoint } from '../../src/main/core/cloudwatch-test-endpoint'
 import { cloudWatchSegment as segment } from '../../src/shared/core-api'
+import { unfoldLogToolbar } from './log-toolbar'
 
 let dir: string
 let app: ElectronApplication
@@ -141,14 +142,18 @@ test('a CloudWatch log saved as a copy has its lines as shown, with their timest
   const saved = window.getByRole('region', { name: 'Saved copies' })
 
   await answerSaveDialog(join(saves, 'plain.log'))
+  await unfoldLogToolbar(window)
   await window.getByRole('button', { name: 'Save a copy…' }).click()
   await expect(saved.getByText(`to ${join(saves, 'plain.log')}`)).toBeVisible()
   expect(await readFile(join(saves, 'plain.log'), 'utf8')).toBe('[abc] START RequestId: 1\n')
 
+  await unfoldLogToolbar(window)
   await window.getByRole('button', { name: 'Timestamps', exact: true }).click()
+  await unfoldLogToolbar(window)
   await window.getByRole('button', { name: 'UTC', exact: true }).click()
   await expect(editor).toContainText('2026-10-12 10:00:00.000Z')
   await answerSaveDialog(join(saves, 'utc.log'))
+  await unfoldLogToolbar(window)
   await window.getByRole('button', { name: 'Save a copy…' }).click()
   await expect(saved.getByText(`to ${join(saves, 'utc.log')}`)).toBeVisible()
   expect(await readFile(join(saves, 'utc.log'), 'utf8')).toBe('2026-10-12 10:00:00.000Z [abc] START RequestId: 1\n')
@@ -184,6 +189,7 @@ async function openBusyGroup(window: Page) {
   await window.getByRole('treeitem', { name: segment('/aws/lambda/busy') }).click({ button: 'right' })
   await window.getByRole('menuitem', { name: 'Open log' }).click()
   await expect(window.getByTestId('editor')).toContainText('[busy] event 29')
+  await unfoldLogToolbar(window)
   await window.getByRole('textbox', { name: 'Number of lines' }).fill('10')
   await window.getByRole('textbox', { name: 'Number of lines' }).press('Enter')
   await expect(window.getByRole('button', { name: 'Load earlier' })).toBeVisible()
@@ -210,6 +216,7 @@ test('a CloudWatch log group deleted while its tab is open says it’s gone when
   await expect(window.getByRole('button', { name: 'Follow' })).toHaveAttribute('aria-pressed', 'false')
 
   removeGroup('/aws/lambda/busy')
+  await unfoldLogToolbar(window)
   await window.getByRole('button', { name: 'Load earlier' }).click()
 
   await expect(window.getByText(`${segment('/aws/lambda/busy')} no longer exists`)).toBeVisible()

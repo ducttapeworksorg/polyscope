@@ -899,6 +899,65 @@ body.is-resizing {
   margin-left: auto;
 }
 
+/* A log view's toolbar keeps to one line, folding what there's no room for into its "…" menu. */
+.log-toolbar--folding {
+  position: relative;
+  flex-wrap: nowrap;
+  /* Narrower than the Level Filter, Follow, Pause and "…" together, the narrowest it's meant for, it scrolls across. */
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.log-toolbar__item {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.log-toolbar--folding .log-toolbar__toggles {
+  flex-shrink: 0;
+}
+
+/* A copy of the "…" button, laid out as in the toolbar but never seen, to measure it. */
+.log-toolbar__measure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  width: max-content;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.log-toolbar__more {
+  position: fixed;
+  z-index: 10;
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  max-width: calc(100vw - 16px);
+  padding: 8px;
+  border: 1px solid var(--slate-600);
+  border-radius: 6px;
+  background: var(--slate-800);
+  box-shadow: 0 10px 28px var(--shadow);
+  white-space: normal;
+}
+
+.log-toolbar__more[hidden] {
+  display: none;
+}
+
+.log-toolbar__more-item {
+  max-width: 100%;
+}
+
+.log-toolbar__more .log-toolbar__lines {
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
 .log-toolbar__toggle {
   height: 24px;
   padding: 0 10px;

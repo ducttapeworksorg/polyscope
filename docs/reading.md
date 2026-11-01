@@ -48,6 +48,8 @@ A container's log, a CloudWatch log, or a systemd unit's journal opens with a to
 - **Error**, **Warning**, **Info**, **Debug**: show or hide each level's lines. See below.
 - **Save a copy…**: keep the log on your computer, say to attach it to a bug report. See below.
 
+The toolbar stays on one line. When the log view is too narrow for all of it, the controls used least fold into a **…** menu at its end, the first to go being **Save a copy…**, then **UTC**, **Load earlier**, **Since**, **Last N lines**, **Timestamps**, **Wrap**, **Previous** and **Events**. The Level Filter, **Follow** and **Pause** always stay in view. Click **…** (or focus it and press <kbd>Enter</kbd>) to show the folded controls: they work just as in the toolbar, showing which are on, and <kbd>Tab</kbd> moves through them. <kbd>Esc</kbd> or a click elsewhere closes the menu. With room again, the toolbar unfolds. Narrower still than the Level Filter, **Follow**, **Pause** and **…** together, the toolbar scrolls across.
+
 Colour codes and other ANSI escape sequences that loggers write into their output are removed, from logs, files that open as logs (`.log`, `.out`, `.err`) and Large Files alike, so a log shows, is searched and is saved as plain text; **Save a copy…** of a file keeps the file's original bytes, sequences and all.
 
 ### Showing only some Log Levels
