@@ -11,13 +11,14 @@ export interface FoundLogLevel {
 }
 
 // Every wording of a level that loggers write, in lower case, and whether it's one in upper case anywhere (strong) or
-// only where it's delimited (weak), as Microsoft.Extensions.Logging's console `fail:` and winston's `http:` are.
+// only where it's delimited (weak), as Microsoft.Extensions.Logging's console `fail:`, winston's `http:` and a Kubernetes
+// Event's `[Normal]` are.
 const forms = new Map<string, { level: LogLevel; strong: boolean }>(
   (
     [
       ['error', 'error err eror fatal ftl fatl critical crit severe panic exception', 'fail'],
       ['warning', 'warning warn wrn', ''],
-      ['info', 'info inf information notice success config', 'http'],
+      ['info', 'info inf information notice success config', 'http normal'],
       ['debug', 'debug dbg dbug trace trc verbose vrb verb fine finer finest silly', 'trce']
     ] as const
   ).flatMap(([level, strong, weak]) => [

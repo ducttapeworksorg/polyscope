@@ -81,6 +81,30 @@ describe('a Log Level word in lower or title case', () => {
   })
 })
 
+describe('an Event', () => {
+  it.each([
+    ['[Normal] Scheduled pod/x: Successfully assigned default/x to node-1'],
+    ['2026-10-29T12:00:00Z [Normal] Scheduled pod/x: Successfully assigned default/x to node-1'],
+    ['Normal: Scheduled pod/x'],
+    ['2026-10-29 12:00:00.123 Normal: Scheduled pod/x']
+  ])('of type Normal is info when the type is set apart: %s', (line) => {
+    expect(levelAndText(line)).toEqual({ level: 'info', text: 'Normal' })
+  })
+
+  it('of type Warning is a warning', () => {
+    expect(levelAndText('[Warning] BackOff pod/x: Back-off restarting failed container')).toEqual({ level: 'warning', text: 'Warning' })
+  })
+
+  it('has no level from Normal as a word of a message', () => {
+    expect(levelAndText('Normal operation resumed')).toBeUndefined()
+    expect(levelAndText('NORMAL operation resumed')).toBeUndefined()
+  })
+
+  it('type said by a level field is info', () => {
+    expect(levelAndText('level=normal msg=x')).toEqual({ level: 'info', text: 'normal' })
+  })
+})
+
 describe('a klog line', () => {
   it.each([
     ['I1029 12:00:00.123456    1 controller.go:42] synced', 'info'],
