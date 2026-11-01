@@ -49,6 +49,47 @@ describe('a Log Source Type with Previous Logs', () => {
   })
 })
 
+describe('a Log Stream without its Source Type’s Previous Log and restarts', () => {
+  const all: LogCapabilities = { previousLog: true, restarts: true, status: true, since: true }
+
+  it('is listed saying so, and telling no restarts', async () => {
+    await connected({ capabilities: all, reportsAnyway: { restarts: true } })
+
+    expect(await core.expand(sourceId, 'app')).toContainEqual({
+      kind: 'logStream',
+      name: 'events',
+      path: 'app/events',
+      status: { reason: 'Running', health: 'healthy', restarts: 0 },
+      capabilities: { previousLog: false, restarts: false }
+    })
+  })
+
+  it('opens offering no Previous Log, and is never asked for one', async () => {
+    const fake = await connected({ capabilities: all })
+
+    expect(await core.openLog(sourceId, 'app/events', { lastNLines: 1 })).toMatchObject({ offersPreviousLog: false, restarted: false, content: 'line 100' })
+    await expect(core.openLog(sourceId, 'app/events', { previous: true })).rejects.toMatchObject({ code: 'LOG_UNAVAILABLE' })
+    expect(fake.previousAsked).toEqual([])
+  })
+
+  it('is followed without its run being looked at, and ends with its stream, marking no restart', async () => {
+    const fake = await connected({ capabilities: all })
+    const events: FollowEvent[] = []
+    const unsubscribe = core.onFollowEvent((event) => events.push(event))
+    try {
+      const { followId, restarted } = await core.followLog(sourceId, 'app/events', { lastNLines: 2 })
+      fake.endStreams()
+
+      await vi.waitFor(() => expect(events).toContainEqual({ kind: 'ended', reason: 'exited', followId }))
+      expect(restarted).toBe(false)
+      expect(events.map(({ kind }) => kind)).not.toContain('restarted')
+      expect(fake.runsAsked).toEqual([])
+    } finally {
+      unsubscribe()
+    }
+  })
+})
+
 describe('a Log Source Type without Since', () => {
   it('opens a Log Stream offering no Since, and is never asked to read from a time', async () => {
     const fake = await connected({ capabilities: none })
@@ -138,7 +179,8 @@ describe('a Log Source Type without status or restarts', () => {
     expect(await core.expand(sourceId, '')).toEqual([{ kind: 'group', name: 'app', path: 'app' }])
     expect(await core.expand(sourceId, 'app')).toEqual([
       { kind: 'logStream', name: 'counter', path: 'app/counter' },
-      { kind: 'logStream', name: 'server', path: 'app/server', hasChildren: true }
+      { kind: 'logStream', name: 'server', path: 'app/server', hasChildren: true },
+      { kind: 'logStream', name: 'events', path: 'app/events' }
     ])
   })
 })

@@ -1,4 +1,4 @@
-import type { LogCapabilities, LogNode, NodeStatus, SourcePath } from '@shared/core-api'
+import { streamHas, type LogCapabilities, type LogNode, type LogStreamCapabilities, type NodeStatus, type SourcePath } from '@shared/core-api'
 import { CoreError } from './core-error'
 import type { LogConnection, LogSource } from './log-source'
 
@@ -17,19 +17,23 @@ export interface FakeLogSourceOptions {
 
 /**
  * An in-memory Log Source with a small tree: a group `app` holding the Log Stream `app/counter`, which logged
- * `line 1` to `line 100` and goes on running, and the Log Stream `app/server`, which has a Log Stream of its own,
- * `app/server/worker`. Every Log Stream logs the same lines.
+ * `line 1` to `line 100` and goes on running, the Log Stream `app/server`, which has a Log Stream of its own,
+ * `app/server/worker`, and the Log Stream `app/events`, which lacks its Source Type's Previous Log and restarts (as far as
+ * it has them). Every Log Stream logs the same lines.
  */
 export function createFakeLogSource({ capabilities, reportsAnyway = {} }: FakeLogSourceOptions) {
   const { status = capabilities.status, restarts = capabilities.restarts } = reportsAnyway
   const withStatus = status ? { status: running } : {}
   const withRestarts = restarts ? { restarts: 2 } : {}
+  const narrowed: LogStreamCapabilities = { ...(capabilities.previousLog && { previousLog: false }), ...(capabilities.restarts && { restarts: false }) }
+  const withNarrowed = Object.keys(narrowed).length ? { capabilities: narrowed } : {}
   const worker: LogNode = { kind: 'logStream', name: 'worker', path: 'app/server/worker', ...withStatus }
   const tree: Record<SourcePath, LogNode[]> = {
     '': [{ kind: 'group', name: 'app', path: 'app', ...withStatus }],
     app: [
       { kind: 'logStream', name: 'counter', path: 'app/counter', ...withStatus },
-      { kind: 'logStream', name: 'server', path: 'app/server', hasChildren: true, ...withStatus, ...withRestarts }
+      { kind: 'logStream', name: 'server', path: 'app/server', hasChildren: true, ...withStatus, ...withRestarts },
+      { kind: 'logStream', name: 'events', path: 'app/events', ...withStatus, ...withNarrowed }
     ],
     'app/server': [worker]
   }
@@ -39,11 +43,17 @@ export function createFakeLogSource({ capabilities, reportsAnyway = {} }: FakeLo
     if (!path) throw new CoreError('NOT_A_LOG_STREAM', 'The root has no log')
     if (!node) throw new CoreError('NOT_FOUND', `Nothing at ${path}`)
     if (node.kind !== 'logStream') throw new CoreError('NOT_A_LOG_STREAM', `Only Log Streams have logs: ${path}`)
-    return { name: node.name, ...(capabilities.previousLog && { hasPreviousLog: false }) }
+    return {
+      name: node.name,
+      ...(streamHas('previousLog', capabilities, node) && { hasPreviousLog: false }),
+      ...(node.capabilities && { capabilities: node.capabilities })
+    }
   }
   const connections = new Set<{ end(): void }>()
   /** Every Previous Log it was asked for, by path. */
   const previousAsked: SourcePath[] = []
+  /** Every Log Stream whose current run it was asked for, by path. */
+  const runsAsked: SourcePath[] = []
   /** Every read it was asked for with a Since. */
   const sinceAsked: { path: SourcePath; sinceTime: string; previous: boolean }[] = []
 
@@ -89,12 +99,18 @@ export function createFakeLogSource({ capabilities, reportsAnyway = {} }: FakeLo
       }
       return { ended, stop } satisfies LogConnection
     },
-    ...(capabilities.restarts && { currentRun: async () => ({ restarts: 0, state: 'running' as const, finished: false }) })
+    ...(capabilities.restarts && {
+      async currentRun(path: SourcePath) {
+        runsAsked.push(path)
+        return { restarts: 0, state: 'running' as const, finished: false }
+      }
+    })
   }
 
   return {
     logSource,
     previousAsked,
+    runsAsked,
     sinceAsked,
     /** Ends every stream being followed, as when the things logging stop. */
     endStreams() {

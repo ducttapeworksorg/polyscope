@@ -1,4 +1,4 @@
-import type { LogCapabilities, LogNode, SourcePath } from '@shared/core-api'
+import { streamHas, type LogCapabilities, type LogNode, type LogStreamCapabilities, type SourcePath } from '@shared/core-api'
 
 /** How much of a log to read. */
 export interface LogReadOptions {
@@ -68,8 +68,10 @@ export interface LogStreamRun {
 export interface LogStreamInfo {
   /** The Log Stream's name, as its node's. */
   name: string
-  /** Whether it has a Previous Log to switch to, having restarted; only from a Source Type with Previous Logs. */
+  /** Whether it has a Previous Log to switch to, having restarted; only for a Log Stream with Previous Logs. */
   hasPreviousLog?: boolean
+  /** Which of its Source Type's capabilities it lacks, as its node says; left out when it has them all. */
+  capabilities?: LogStreamCapabilities
   /**
    * Set, to why, when its log can't be read at all, nor will be by waiting: say a Docker container whose log driver
    * sends its log somewhere the engine can't read it back from.
@@ -131,7 +133,8 @@ export interface LogSource {
   followLog(path: SourcePath, options: LogFollowOptions, onText: (text: string) => void): Promise<LogConnection>
   /**
    * A Log Stream's current run, looked at often while a Follow waits for a restart, so it may trust the path to be a
-   * Log Stream's. Fails with NOT_FOUND once it's gone. Only, and always, from a Source Type with restarts.
+   * Log Stream's. Fails with NOT_FOUND once it's gone. Only, and always, from a Source Type with restarts; asked only
+   * of a Log Stream that doesn't say it lacks them.
    */
   currentRun?(path: SourcePath): Promise<LogStreamRun>
   /**
@@ -146,5 +149,6 @@ export interface LogSource {
   onDropped?(listener: () => void): void
 }
 
-/** A Log Source's way to look at a Log Stream's current run; undefined unless its Source Type has restarts. */
-export const currentRunOf = (logSource: LogSource) => (logSource.capabilities.restarts ? logSource.currentRun?.bind(logSource) : undefined)
+/** A Log Source's way to look at a Log Stream's current run; undefined unless the Log Stream, as looked up, restarts. */
+export const currentRunOf = (logSource: LogSource, stream: Pick<LogStreamInfo, 'capabilities'>) =>
+  streamHas('restarts', logSource.capabilities, stream) ? logSource.currentRun?.bind(logSource) : undefined

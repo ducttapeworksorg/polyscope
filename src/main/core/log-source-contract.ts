@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { LogCapabilities, LogNode, SourcePath } from '@shared/core-api'
+import { streamHas, type LogCapabilities, type LogNode, type LogStreamNode, type SourcePath } from '@shared/core-api'
 import type { LogSource } from './log-source'
 
 export interface LogContractSubject {
   logSource: LogSource
-  /** A Log Stream that has logged `line 1` to `line 100`, one per line, and nothing else, and goes on running. It has no children, hasn't restarted, and is under a group, or the root of a flat tree. */
+  /** A Log Stream that has logged `line 1` to `line 100`, one per line, and nothing else, and goes on running. It has no children, hasn't restarted, lacks none of its Source Type's capabilities, and is under a group, or the root of a flat tree. */
   counter: SourcePath
   /** A Log Stream that logs a line a second, for good: read with Since when given. */
   ticker?: SourcePath
@@ -29,6 +29,10 @@ const withFolded = (node: LogNode): LogNode[] => (node.kind === 'group' && node.
 /** Every node of a tree, with those folded into others: all the nodes it shows. */
 const shownNodes = async (source: LogSource) => (await walk(source)).flatMap(({ node }) => withFolded(node))
 
+/** Every Log Stream a tree shows that says it lacks some of its Source Type's capabilities. */
+const narrowingStreams = async (source: LogSource) =>
+  (await shownNodes(source)).filter((node): node is LogStreamNode => node.kind === 'logStream' && node.capabilities !== undefined)
+
 /** Some of a tree's groups, which have no logs: the first few, and the counter's own if it's a group, not a Log Stream. */
 const someGroups = async (source: LogSource, counter: SourcePath) => {
   const groups = (await walk(source)).map(({ node }) => node).filter((node) => node.kind === 'group')
@@ -44,7 +48,8 @@ const counterLines = (from: number, to: number) => Array.from({ length: to - fro
 
 /**
  * The behaviour every Log Source must show, and what it offers beyond that as far as its Source Type's `capabilities`
- * say, which it must declare. A Source Type's tests call this with a function returning a Log Source whose backend
+ * say, which it must declare, and as far as each Log Stream doesn't say it lacks them. A Source Type's tests call this
+ * with a function returning a Log Source whose backend
  * holds a `counter` Log Stream, as described in LogContractSubject.
  */
 export function describeLogSourceContract(name: string, capabilities: LogCapabilities, subject: () => Promise<LogContractSubject>) {
@@ -132,11 +137,26 @@ export function describeLogSourceContract(name: string, capabilities: LogCapabil
         })
       }
 
+      it('has Log Streams lacking only capabilities their Source Type has, never claiming one', async () => {
+        const { logSource } = await subject()
+        for (const node of await narrowingStreams(logSource)) {
+          const lacks = Object.entries(node.capabilities!)
+          expect(lacks.length, node.path).toBeGreaterThan(0)
+          for (const [capability, has] of lacks) {
+            expect(['previousLog', 'restarts'], node.path).toContain(capability)
+            expect(has, `${node.path}: ${capability}`).toBe(false)
+            expect(capabilities[capability as keyof LogCapabilities], `${node.path}: ${capability}`).toBe(true)
+          }
+        }
+      })
+
       if (capabilities.restarts) {
-        it('tells the restarts only of the Log Streams that have restarted', async () => {
+        it('tells the restarts only of the Log Streams that restart and have restarted', async () => {
           const { logSource } = await subject()
           for (const node of await shownNodes(logSource)) {
-            if (node.kind === 'logStream' && 'restarts' in node) expect(node.restarts, node.path).toBeGreaterThan(0)
+            if (node.kind !== 'logStream' || !('restarts' in node)) continue
+            expect(streamHas('restarts', capabilities, node), node.path).toBe(true)
+            expect(node.restarts, node.path).toBeGreaterThan(0)
           }
         })
       } else {
@@ -201,7 +221,9 @@ export function describeLogSourceContract(name: string, capabilities: LogCapabil
 
       it('tells a log’s name', async () => {
         const { logSource, counter } = await subject()
-        expect(await logSource.logStreamAt(counter)).toMatchObject({ name: lastSegment(counter) })
+        const info = await logSource.logStreamAt(counter)
+        expect(info).toMatchObject({ name: lastSegment(counter) })
+        expect(info).not.toHaveProperty('capabilities')
         for (const path of await someGroups(logSource, counter)) {
           await expect(logSource.logStreamAt(path), path).rejects.toMatchObject({ code: 'NOT_A_LOG_STREAM' })
         }
@@ -227,6 +249,15 @@ export function describeLogSourceContract(name: string, capabilities: LogCapabil
           expect((await logSource.readLog(ticker, { tailLines: 10 })).split('\n')).toHaveLength(11)
         })
       }
+
+      it('tells which capabilities a Log Stream lacks as its node does', async () => {
+        const { logSource } = await subject()
+        for (const node of await narrowingStreams(logSource)) {
+          const info = await logSource.logStreamAt(node.path)
+          expect(info.capabilities, node.path).toEqual(node.capabilities)
+          if (node.capabilities!.previousLog === false) expect(info, node.path).not.toHaveProperty('hasPreviousLog')
+        }
+      })
 
       if (capabilities.previousLog) {
         it('has no Previous Log to give for a Log Stream that has not restarted', async () => {
