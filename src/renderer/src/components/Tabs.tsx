@@ -135,13 +135,13 @@ export function Tabs(props: Props) {
               onKeyDown={(e) => onTabKeyDown(e, tab)}
             >
               <span className="tab__icon">{isLog(tab.file) ? <LogIcon /> : <FileIcon />}</span>
-              <span className="tab__label">{tabName(tab.file)}</span>
+              <span className="tab__label">{tabName(tab)}</span>
               {/* Delete closes the tab from the keyboard, so the button isn't a stop for Tab of its own. */}
               <button
                 type="button"
                 tabIndex={-1}
                 className="tab__close"
-                aria-label={t('tabs.close', { name: tabName(tab.file) })}
+                aria-label={t('tabs.close', { name: tabName(tab) })}
                 onClick={(e) => {
                   e.stopPropagation()
                   onClose(tab.key)
@@ -178,7 +178,7 @@ export function Tabs(props: Props) {
       )}
       {menu && (
         <ContextMenu
-          label={t('tabs.menuLabel', { name: tabName(menu.tab.file) })}
+          label={t('tabs.menuLabel', { name: tabName(menu.tab) })}
           x={menu.x}
           y={menu.y}
           onClose={closeMenu}

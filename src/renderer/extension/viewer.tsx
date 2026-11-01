@@ -67,7 +67,7 @@ function ViewerTab() {
   }, [])
 
   // Named as the desktop app names its tab, marked while the log view shows the Previous Log.
-  const title = tabs.activeTab && tabName(tabs.activeTab.file)
+  const title = tabs.activeTab && tabName(tabs.activeTab)
   useEffect(() => {
     if (title) void bridge.retitle(title)
   }, [title])

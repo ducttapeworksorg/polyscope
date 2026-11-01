@@ -1,7 +1,16 @@
 import { request as httpRequest, type IncomingMessage, type RequestOptions } from 'node:http'
 import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
-import { ApiException, type KubeConfig, type V1Job, type V1ObjectMeta, type V1Pod } from '@kubernetes/client-node'
-import type { ContainerRole, LogGroupNode, LogNode, LogStreamNode, SourcePath, WorkloadKind } from '@shared/core-api'
+import { ApiException, type CoreV1Event, type KubeConfig, type V1Job, type V1ObjectMeta, type V1Pod } from '@kubernetes/client-node'
+import {
+  kubernetesEventsPath,
+  type ContainerRole,
+  type LogGroupNode,
+  type LogNode,
+  type LogStreamCapabilities,
+  type LogStreamNode,
+  type SourcePath,
+  type WorkloadKind
+} from '@shared/core-api'
 import { CoreError } from './core-error'
 import {
   apisFor,
@@ -62,18 +71,59 @@ async function bodyOf(response: IncomingMessage): Promise<string> {
 
 const join = (parent: SourcePath, name: string) => (parent ? `${parent}/${name}` : name)
 
+/** The capabilities of Kubernetes Logs' the namespace's Events lack: they don't restart, so have no Previous Log (ADR 0010). */
+const eventsCapabilities: LogStreamCapabilities = { previousLog: false, restarts: false }
+
+/** The namespace's Events, listed first at the root. */
+const eventsNode: LogStreamNode = { kind: 'logStream', name: kubernetesEventsPath, path: kubernetesEventsPath, capabilities: eventsCapabilities, kubernetes: { kind: 'events' } }
+
+/** When an Event was last seen, in milliseconds since the epoch: going by the best of the times it carries; NaN if it has none. */
+function lastSeen(event: CoreV1Event): number {
+  const time = event.series?.lastObservedTime ?? event.lastTimestamp ?? event.eventTime ?? event.firstTimestamp ?? event.metadata.creationTimestamp
+  return time ? new Date(time).getTime() : NaN
+}
+
+/** How many times an Event has happened, as its series or its count says; 1 if neither does. */
+const countOf = (event: CoreV1Event) => event.series?.count ?? event.count ?? 1
+
+/** An Event as a line: `[Warning] BackOff pod/api-7d9f-x2k: Back-off restarting failed container (×14)`, on one line whatever its message. */
+function eventLine(event: CoreV1Event): string {
+  const { kind = '', name = '' } = event.involvedObject
+  const message = (event.message ?? '').trim().replace(/\s*\n\s*/g, ' ')
+  const count = countOf(event)
+  return `[${event.type ?? 'Normal'}] ${event.reason ?? ''} ${kind.toLowerCase()}/${name}: ${message}${count > 1 ? ` (×${count})` : ''}`
+}
+
+/**
+ * Events as a log, one line per Event, by when each was last seen, oldest first (one with no time at all first of
+ * all), as LogReadOptions ask: those last seen since `sinceTime`, the last `tailLines` of those, each starting with
+ * when it was last seen when asked, at about `limitBytes`.
+ */
+function eventsLog(events: CoreV1Event[], { tailLines, limitBytes, timestamps, sinceTime }: LogReadOptions): string {
+  const since = sinceTime === undefined ? -Infinity : Date.parse(sinceTime)
+  const seen = events
+    .map((event) => ({ event, at: lastSeen(event) }))
+    .toSorted((a, b) => (Number.isNaN(a.at) ? -Infinity : a.at) - (Number.isNaN(b.at) ? -Infinity : b.at))
+    .filter(({ at }) => (sinceTime === undefined ? true : at >= since))
+  const kept = tailLines === undefined ? seen : seen.slice(Math.max(0, seen.length - tailLines))
+  const text = kept.map(({ event, at }) => `${timestamps ? `${new Date(Number.isNaN(at) ? 0 : at).toISOString()} ` : ''}${eventLine(event)}\n`).join('')
+  return limitBytes === undefined ? text : text.slice(0, limitBytes)
+}
+
 /**
  * The Workloads, pods and containers of one namespace, as a Log Source whose Log Streams are containers. Paths start
  * with a group (`deployments`, `cronjobs`…), then name each object on the way down, e.g. `cronjobs/nightly/<job>/<pod>/<container>`.
  * A CronJob with one Job, a Workload with one pod and a pod with one container carry it folded in, paths keeping every level.
+ * The namespace's Events are a Log Stream of their own, `events`, listed first at the root.
  * It has every capability: containers restart and keep a Previous Log, pods have a Pod Status, and logs can be read
- * from a time on (Since).
+ * from a time on (Since). Events have no Previous Log and don't restart.
  */
 export function createKubernetesLogSource(config: KubeConfig, namespace: string): LogSource & { checkNamespace(): Promise<void> } {
   const apis = apisFor(config)
   const { core, apps, batch } = apis
 
   const listPods = async () => (await call(() => core.listNamespacedPod({ namespace }))).items
+  const listEvents = async () => (await call(() => core.listNamespacedEvent({ namespace }))).items
   const cronJobs = async () => (await call(() => batch.listNamespacedCronJob({ namespace }))).items
   const listJobs = async () => (await call(() => batch.listNamespacedJob({ namespace }))).items
   /** Jobs outside any CronJob. */
@@ -220,10 +270,15 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     const [group, first, second, third] = segments
     if (segments.length === 0) {
       const listed = await Promise.all(Object.values(groups).map(async (g) => [g, names(await members(g)).length > 0] as const))
-      return listed
-        .filter(([, any]) => any)
-        .map(([g]) => ({ kind: 'group', name: g, path: g, unfoldable: true, kubernetes: { kind: 'workloads', workloadKind: kindOfGroup[g] } }))
+      // Events are listed whether or not there are any, or the user may list them: opening them says.
+      return [
+        eventsNode,
+        ...listed
+          .filter(([, any]) => any)
+          .map(([g]): LogNode => ({ kind: 'group', name: g, path: g, unfoldable: true, kubernetes: { kind: 'workloads', workloadKind: kindOfGroup[g] } }))
+      ]
     }
+    if (path === kubernetesEventsPath) throw new CoreError('NOT_A_FOLDER', `A log has no children: ${path}`)
     if (!isGroup(group) || segments.some((segment) => !segment)) throw notFound(path)
     if (first === undefined) {
       return group === 'pods' ? podNodes(path, (await members(group)) as V1Pod[]) : await workloadNodes(group)
@@ -267,7 +322,8 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     return (await childrenOf(parent)).find((node) => node.path === path)
   }
 
-  const logStreamAt = async (path: SourcePath): Promise<LogStreamInfo & Required<Pick<LogStreamInfo, 'kubernetes'>>> => {
+  /** A container's Log Stream: its pod, name and restarts. */
+  const containerAt = async (path: SourcePath): Promise<LogStreamInfo & Required<Pick<LogStreamInfo, 'kubernetes'>>> => {
     if (!path || isGroup(path)) throw notALog(path)
     const node = await nodeAt(path)
     if (!node) throw notFound(path)
@@ -275,6 +331,10 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     const restarts = node.restarts ?? 0
     return { name: node.name, hasPreviousLog: restarts > 0, kubernetes: { pod: path.split('/').at(-2)!, container: node.name, restarts } }
   }
+
+  /** A Log Stream: the namespace's Events, which can't be followed yet, or a container. */
+  const logStreamAt = async (path: SourcePath): Promise<LogStreamInfo> =>
+    path === kubernetesEventsPath ? { name: kubernetesEventsPath, capabilities: eventsCapabilities, followable: false } : await containerAt(path)
 
   /**
    * Asks the API server for a container's log, with the query given; resolves with the response once it answers with
@@ -332,7 +392,8 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     logStreamAt,
 
     async readLog(path, { tailLines, limitBytes, timestamps, previous = false, sinceTime }: LogReadOptions = {}) {
-      const { pod, container } = (await logStreamAt(path)).kubernetes
+      if (path === kubernetesEventsPath) return eventsLog(await listEvents(), { tailLines, limitBytes, timestamps, sinceTime })
+      const { pod, container } = (await containerAt(path)).kubernetes
       // The kubelet takes the last lines, then those of them since the time: the last lines of those since it, either way.
       const { response } = await logResponse(pod, container, { tailLines, limitBytes, timestamps, previous, sinceTime })
       let text: string
@@ -347,7 +408,8 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     },
 
     async followLog(path, options, onText) {
-      const { pod, container } = (await logStreamAt(path)).kubernetes
+      if (path === kubernetesEventsPath) throw new CoreError('NOT_FOLLOWABLE', 'Events can’t be followed yet')
+      const { pod, container } = (await containerAt(path)).kubernetes
       return openLogConnection(pod, container, options, onText)
     },
 

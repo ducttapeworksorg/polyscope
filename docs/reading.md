@@ -38,9 +38,9 @@ To keep a file on your computer, say to attach it to a bug report or keep it bef
 A container's log, a CloudWatch log, or a systemd unit's journal opens with a toolbar:
 
 - **Last N lines**: how much of the log to fetch and keep: 1K, 10K (the default, set in **Settings**), 50K, 100K, **All**, or a number you type. Choosing **All** for a log over the Large File threshold asks first.
-- **Since**, for Docker and Kubernetes containers, CloudWatch logs and systemd units: show only the lines logged since a time: **Any time** (the default), **15 min**, **1 h**, **6 h** or **24 h** ago, or a date and time you type, like `2026-10-18 09:00`, or a time alone, like `09:00`, for today. It's read in local time or, with **UTC** on, in UTC. **Last N lines** still caps how many lines show, and **All** shows every line since then, asking first only if those are over the Large File threshold. **Follow** goes on from the last line shown, and a Kubernetes container's **Previous Log** shows only its lines since then too. Each new tab starts at **Any time**.
+- **Since**, for Docker and Kubernetes containers, Kubernetes Events, CloudWatch logs and systemd units: show only the lines logged since a time: **Any time** (the default), **15 min**, **1 h**, **6 h** or **24 h** ago, or a date and time you type, like `2026-10-18 09:00`, or a time alone, like `09:00`, for today. It's read in local time or, with **UTC** on, in UTC. **Last N lines** still caps how many lines show, and **All** shows every line since then, asking first only if those are over the Large File threshold. **Follow** goes on from the last line shown, and a Kubernetes container's **Previous Log** shows only its lines since then too. Each new tab starts at **Any time**.
 - **Load earlier**, for CloudWatch logs: add the lines before the first one shown, as many as **Last N lines** says. With a **Since**, it goes back only as far as the Since, and once it gets there it's no longer offered: there's nothing earlier to show.
-- **Follow**: show new lines as they're logged. **Pause** holds new lines back while you read, and **Resume** shows them.
+- **Follow**: show new lines as they're logged. **Pause** holds new lines back while you read, and **Resume** shows them. Kubernetes Events can't be followed yet.
 - **Previous**: show the container's **Previous Log**, the log of its run before it last restarted, in the same tab, marked "(previous)". It has ended, so there's nothing to Follow; turn **Previous** off to go back to the current log, Following it again. It's available once the container has restarted, which a Follow notices as it happens; Kubernetes keeps only the run just before the current one, and not always that.
 - **Timestamps**: start each line with when it was logged, in local time or, with **UTC**, in UTC.
 - **Wrap**: wrap long lines.
@@ -61,6 +61,22 @@ The **Error**, **Warning**, **Info** and **Debug** buttons show or hide the line
 - It stays as it is when you switch to the **Previous Log** and back. With all four off, only the lines with no level show, and the log says so.
 
 While following, the log marks what happened in line: a container restarting, the connection dropping and recovering, or the container, pod, CloudWatch log or Source going away.
+
+### Kubernetes Events
+
+**Events**, at the top of a Kubernetes Logs Source's tree, opens every Event in its namespace as a log, one line per Event:
+
+```
+[Warning] BackOff pod/api-7d9f-x2k: Back-off restarting failed container (×14)
+```
+
+- Each line gives the Event's type (**Normal** or **Warning**), its reason, the object it's about as `kind/name`, and its message, then how many times it has happened when that's more than once.
+- Lines go by when each Event was last seen, oldest first. **Timestamps** shows that time.
+- Warning Events are coloured and filtered as warnings, Normal ones as info.
+- **Since** keeps the Events last seen since then, even ones first seen before, and **Last N lines** counts one line per Event.
+- Events have no **Previous** log, and can't be followed yet: open Events again, or change **Last N lines** or **Since**, to read them afresh.
+- Kubernetes keeps Events for about an hour by default (the API server's `--event-ttl`), so older problems may have none left. An empty Events log says so.
+- Reading Events needs permission to list them in the namespace (the `list` verb on `events`). Without it, **Events** is still listed, and opening it says so: `Missing permission: list events in namespace shop`.
 
 ### Save a copy of a log
 

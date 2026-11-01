@@ -1129,16 +1129,18 @@ export function createCore(options: CoreOptions = {}): Core {
 
   /**
    * A Log Source node's children, showing only what its Source Type offers: Log Streams alone in the Source's order
-   * (a pod's containers), Kubernetes' groups of Workloads in the order of their kind, the rest by name.
+   * (a pod's containers), Kubernetes' namespace Events first, then its groups of Workloads in the order of their kind,
+   * the rest by name.
    */
   const listLogNodes = async (logSource: LogSource, path: SourcePath, cursor?: string): Promise<TreeNode[]> => {
     const page = logSource.listPage ? await logSource.listPage(path, cursor) : { nodes: await logSource.listChildren(path) }
     const more: TreeNode[] = page.cursor === undefined ? [] : [{ kind: 'more', path, cursor: page.cursor }]
     const nodes = page.nodes.map((node) => offered(node, logSource.capabilities))
     if (nodes.every((node) => node.kind === 'logStream')) return [...nodes, ...more]
-    // Kubernetes' groups of Workloads in their kinds' order; Docker's Standalone group after the Compose projects.
+    // Kubernetes' Events, then its groups of Workloads in their kinds' order; Docker's Standalone group after the Compose projects.
     const rank = (node: LogNode) =>
-      node.kubernetes?.kind === 'workloads' ? workloadKinds.indexOf(node.kubernetes.workloadKind)
+      node.kubernetes?.kind === 'events' ? -1
+      : node.kubernetes?.kind === 'workloads' ? workloadKinds.indexOf(node.kubernetes.workloadKind)
       : node.docker?.kind === 'standalone' ? 1
       : 0
     return [...nodes.toSorted((a, b) => rank(a) - rank(b) || byName.compare(a.name, b.name)), ...more]
@@ -1723,6 +1725,7 @@ export function createCore(options: CoreOptions = {}): Core {
         if (options.previous) throw new CoreError('NOT_FOLLOWABLE', `A Previous Log has ended: ${path}`)
         // The snapshot has to be of the run the Follow starts from: one read while the Log Stream restarted is read again.
         const stream = await logSource.logStreamAt(path)
+        if (stream.followable === false) throw new CoreError('NOT_FOLLOWABLE', `It can’t be followed yet: ${path}`)
         // A Log Stream that doesn't restart has no run to look at.
         const currentRun = currentRunOf(logSource, stream)
         const restartsNow = async () => (currentRun ? (await currentRun(path)).restarts : 0)

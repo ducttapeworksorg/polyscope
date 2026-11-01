@@ -13,6 +13,7 @@ import {
   cycleTab,
   emptyWorkspace,
   endFollow,
+  followsOnOpen,
   hiddenLevelsOf,
   markLogStreamGone,
   markPodGone,
@@ -25,6 +26,7 @@ import {
   reopenTab,
   setLanguage,
   setLogView,
+  showsNoEvents,
   sinceOffered,
   tabName,
   toggleLevel,
@@ -353,7 +355,7 @@ describe('switching a container’s log view to its Previous Log', () => {
 
     expect(tab.follow).toBeUndefined()
     expect(tab.file).toEqual(failed)
-    expect(tabName(tab.file)).toBe('c (previous)')
+    expect(tabName(tab)).toBe('c (previous)')
     // To switch back to the current log, failing or not.
     expect(canShowPrevious(tab)).toBe(true)
     expect(canShowPrevious(onlyTab(reopenLogTab(followed(true), 'c', { ...failed, previous: false })))).toBe(true)
@@ -461,5 +463,39 @@ describe('a log view’s Level Filter', () => {
     expect(hiddenLevelsOf(onlyTab(previous))).toEqual(['debug'])
     expect(hiddenLevelsOf(onlyTab(reopenLogTab(previous, 'c', log)))).toEqual(['debug'])
     expect(hiddenLevelsOf(onlyTab(reopenLogTab(ws, 'c', failed)))).toEqual(['debug'])
+  })
+})
+
+describe('a Kubernetes Logs Source’s Events', () => {
+  const cluster: SourceInfo = { id: 'k', type: 'kubernetesLogs', name: 'Cluster', context: 'dev', namespace: 'shop' }
+  const events = (content: string): TabContent => ({
+    view: 'log',
+    of: 'logStream',
+    path: 'events',
+    name: 'events',
+    offersPreviousLog: false,
+    offersSince: true,
+    previous: false,
+    restarted: false,
+    lastNLines: 'all',
+    timestamps: false,
+    content
+  })
+
+  it('are titled Events', () => {
+    expect(tabName({ source: cluster, file: events('') })).toBe('Events')
+    expect(tabName({ source, file: events('') })).toBe('events')
+  })
+
+  it('open as a snapshot, as they can’t be followed yet, unlike a container’s log', () => {
+    expect(followsOnOpen(cluster, 'events')).toBe(false)
+    expect(followsOnOpen(cluster, 'pods/counter/counter')).toBe(true)
+    expect(followsOnOpen(source, 'events')).toBe(true)
+  })
+
+  it('say there are none only when none were read', () => {
+    expect(showsNoEvents({ source: cluster, file: events('') })).toBe(true)
+    expect(showsNoEvents({ source: cluster, file: events('[Normal] Scheduled pod/x: assigned') })).toBe(false)
+    expect(showsNoEvents({ source, file: events('') })).toBe(false)
   })
 })

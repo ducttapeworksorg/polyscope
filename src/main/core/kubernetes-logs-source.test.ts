@@ -290,7 +290,7 @@ describe('a cluster behind a proxy', () => {
     const source = await core.addSource(shop)
     const updates = followUpdates(core)
     try {
-      expect(await core.connect(source.id)).toEqual([workloadsGroup('Pod', 'pods')])
+      expect(await core.connect(source.id)).toEqual([eventsNode, workloadsGroup('Pod', 'pods')])
       expect(await core.openLog(source.id, 'pods/counter/counter')).toMatchObject({ restarted: false, content: 'line 1\nline 2\nline 3' })
       const followed = await core.followLog(source.id, 'pods/counter/counter', { lastNLines: 1 })
       expect(followed.content).toBe('line 3')
@@ -410,6 +410,114 @@ describe('a crash-looping container, the run before its last removed by Kubernet
 
   it('cannot follow a Previous Log', async () => {
     await expect(core.followLog(sourceId, 'pods/crasher/containerd', { previous: true })).rejects.toMatchObject({ code: 'NOT_FOLLOWABLE' })
+  })
+})
+
+describe('a namespace’s Events', () => {
+  let apiServer: Awaited<ReturnType<typeof startTestApiServer>>
+  let core: Core
+  let sourceIds: string[]
+
+  beforeEach(async () => {
+    apiServer = await startTestApiServer()
+    ignoreAmbientProxy()
+    await kubeconfigFiles(standInCluster(apiServer.url, apiServer.caPath))
+    core = createCore()
+    sourceIds = []
+  })
+
+  afterEach(async () => {
+    await Promise.all(sourceIds.map((id) => core.disconnect(id)))
+    await apiServer.close()
+  })
+
+  const connected = async (namespace: string) => {
+    const sourceId = (await core.addSource(offline({ context: 'fake', namespace }))).id
+    sourceIds.push(sourceId)
+    await core.connect(sourceId)
+    return sourceId
+  }
+
+  const lines = [
+    '[Normal] Scheduled pod/api-7d9f-x2k: Successfully assigned events/api-7d9f-x2k to node-1',
+    '[Normal] Pulled pod/api-7d9f-x2k: Container image "busybox" already present on machine',
+    '[Normal] ScalingReplicaSet deployment/api: Scaled up replica set api-7d9f to 1 (×2)',
+    '[Warning] FailedCreate replicaset/api-7d9f: Error creating: pods "api-7d9f-y" is forbidden: exceeded quota',
+    '[Warning] BackOff pod/api-7d9f-x2k: Back-off restarting failed container (×14)'
+  ]
+
+  it('are listed first at the root, though the namespace has no Workloads', async () => {
+    const sourceId = await connected('events')
+
+    expect(await core.expand(sourceId, '')).toEqual([eventsNode])
+    expect(await core.expand(await connected('batch'), '')).toEqual([eventsNode, workloadsGroup('CronJob', 'cronjobs'), workloadsGroup('Job', 'jobs')])
+  })
+
+  it('show one line per Event, by when each was last seen, oldest first', async () => {
+    const sourceId = await connected('events')
+
+    expect(await core.openLog(sourceId, 'events', { lastNLines: 'all' })).toEqual({
+      view: 'log',
+      of: 'logStream',
+      path: 'events',
+      name: 'events',
+      offersPreviousLog: false,
+      offersSince: true,
+      previous: false,
+      restarted: false,
+      lastNLines: 'all',
+      timestamps: false,
+      content: lines.join('\n')
+    })
+  })
+
+  it('start each line with when its Event was last seen, when asked', async () => {
+    const sourceId = await connected('events')
+
+    const log = await core.openLog(sourceId, 'events', { lastNLines: 'all', timestamps: true })
+
+    expect(log.content.split('\n').map((line) => line.slice(0, line.indexOf(' ')))).toEqual(
+      ['10:00:00', '10:05:00', '10:10:00', '10:20:00', '10:30:00'].map((time) => `2026-10-29T${time}.000Z`)
+    )
+  })
+
+  it('keep with Since the Events last seen after it, though first seen before', async () => {
+    const sourceId = await connected('events')
+
+    expect((await core.openLog(sourceId, 'events', { lastNLines: 'all', since: '2026-10-29T10:15:00Z' })).content).toBe(lines.slice(-2).join('\n'))
+  })
+
+  it('count one line per Event for Last N lines', async () => {
+    const sourceId = await connected('events')
+
+    expect((await core.openLog(sourceId, 'events', { lastNLines: 3 })).content).toBe(lines.slice(-3).join('\n'))
+  })
+
+  it('are none in a namespace without any', async () => {
+    expect(await core.openLog(await connected('shop'), 'events')).toMatchObject({ path: 'events', content: '' })
+  })
+
+  it('have no Previous Log', async () => {
+    const sourceId = await connected('events')
+
+    await expect(core.openLog(sourceId, 'events', { previous: true })).rejects.toMatchObject({ code: 'LOG_UNAVAILABLE' })
+  })
+
+  it('cannot be followed yet', async () => {
+    await expect(core.followLog(await connected('events'), 'events')).rejects.toMatchObject({ code: 'NOT_FOLLOWABLE' })
+  })
+
+  it('fail to open with the permission the user is missing, the node still listed', async () => {
+    const sourceId = await connected('noevents')
+
+    expect(await core.expand(sourceId, '')).toEqual([eventsNode])
+    await expect(core.openLog(sourceId, 'events')).rejects.toMatchObject({ code: 'MISSING_PERMISSION', message: 'list events in namespace noevents' })
+  })
+
+  it('have no children', async () => {
+    const sourceId = await connected('events')
+
+    expect(await core.expand(sourceId, 'events')).toEqual([expect.objectContaining({ kind: 'error', path: 'events', code: 'NOT_A_FOLDER' })])
   })
 })
 
@@ -600,7 +708,7 @@ describe('a Workload with one pod, or a CronJob with one Job', () => {
   it('never folds a group, even of one Workload', async () => {
     const sourceId = await connected('batch')
 
-    expect(await core.expand(sourceId, '')).toEqual([workloadsGroup('CronJob', 'cronjobs'), workloadsGroup('Job', 'jobs')])
+    expect(await core.expand(sourceId, '')).toEqual([eventsNode, workloadsGroup('CronJob', 'cronjobs'), workloadsGroup('Job', 'jobs')])
   })
 })
 
@@ -609,7 +717,7 @@ function described(nodes: TreeNode[]) {
   return nodes.map((node) => {
     if (node.kind === 'error' || node.kind === 'more') return node.kind
     if (node.kind !== 'group' && node.kind !== 'logStream') return node.name
-    if (node.kind === 'logStream' && node.kubernetes?.role) return `container ${node.name} (${node.kubernetes.role})`
+    if (node.kind === 'logStream' && node.kubernetes?.kind === 'container' && node.kubernetes.role) return `container ${node.name} (${node.kubernetes.role})`
     return `${node.kubernetes?.kind ?? node.kind} ${node.name}`
   })
 }
@@ -623,6 +731,9 @@ function containerNode(name: string, path: string, { role, restarts }: { role?: 
 function workloadsGroup(workloadKind: string, name: string) {
   return { kind: 'group', name, path: name, unfoldable: true, kubernetes: { kind: 'workloads', workloadKind } }
 }
+
+/** The namespace's Events, as listed at the root. */
+const eventsNode = { kind: 'logStream', name: 'events', path: 'events', capabilities: { previousLog: false, restarts: false }, kubernetes: { kind: 'events' } }
 
 /** What a pod's node is, to match against. */
 const podOf = { kind: 'group', kubernetes: expect.objectContaining({ kind: 'pod' }) }
@@ -652,6 +763,7 @@ describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () 
       const root = await core.connect(sourceId)
 
       expect(root).toEqual([
+        eventsNode,
         workloadsGroup('Deployment', 'deployments'),
         workloadsGroup('StatefulSet', 'statefulsets'),
         workloadsGroup('DaemonSet', 'daemonsets'),
@@ -900,6 +1012,16 @@ describe.skipIf(!hasTestCluster)('Kubernetes Logs against the test cluster', () 
       expect(await core.openLog(sourceId, `${web.path}/app`)).toMatchObject({ path: `${web.path}/app`, name: 'app' })
     })
 
+    it('reads the namespace’s Events, one line each, the crash-looping pod’s back-off among them', async () => {
+      await core.connect(sourceId)
+      const crasher = await crashedPod(core, sourceId)
+
+      const events = (await core.openLog(sourceId, 'events', { lastNLines: 'all' })).content.split('\n')
+
+      for (const line of events) expect(line).toMatch(/^\[(?:Normal|Warning)\] \w+ [a-z]+\/\S+: .*?(?: \(×\d+\))?$/)
+      expect(events).toContainEqual(expect.stringMatching(new RegExp(String.raw`^\[Warning\] BackOff pod/${crasher.name}: `)))
+    }, 120_000)
+
     it('opens only containers', async () => {
       await core.connect(sourceId)
 
@@ -1130,6 +1252,13 @@ describe.skipIf(!hasRestrictedContext)('permission errors against the test clust
 
     await expect(core.openLog(sourceId, 'pods/counter/counter')).rejects.toMatchObject(denied)
     await expect(core.followLog(sourceId, 'pods/counter/counter')).rejects.toMatchObject(denied)
+  })
+
+  it('refuses to open Events with the permission it is missing, still listing them', async () => {
+    const root = await core.connect(sourceId)
+
+    expect(root[0]).toEqual(eventsNode)
+    await expect(core.openLog(sourceId, 'events')).rejects.toMatchObject(missing('list events in namespace polyscope-test'))
   })
 
   it('refuses a Follow’s connection with the permission it is missing', async () => {

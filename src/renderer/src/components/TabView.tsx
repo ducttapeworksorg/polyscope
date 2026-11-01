@@ -5,7 +5,7 @@ import { describeFailure } from '../core-client'
 import { t } from '../i18n'
 import type { LevelCounts } from '../log-entries'
 import { logLevels } from '../log-level'
-import { hiddenLevelsOf, isLog, offersLevelFilter, tabName, type OpenTab } from '../workspace'
+import { hiddenLevelsOf, isLog, offersLevelFilter, showsNoEvents, tabName, type OpenTab } from '../workspace'
 import { FileToolbar } from './FileToolbar'
 import { LogToolbar } from './LogToolbar'
 import type { TabsModel } from './use-tabs'
@@ -71,6 +71,11 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
           <span className="workbench__banner-text">{t('viewer.followSlowed')}</span>
         </div>
       )}
+      {activeTab && showsNoEvents(activeTab) && (
+        <div className="workbench__banner" role="status">
+          <span className="workbench__banner-text">{t('viewer.noEvents')}</span>
+        </div>
+      )}
       {activeTab?.podGone && (
         <div className="workbench__banner" role="status">
           <span className="workbench__banner-text">{t('viewer.podGone', { pod: activeTab.podGone })}</span>
@@ -117,7 +122,7 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
         id={panelId}
         className="viewer"
         role={activeTab ? 'tabpanel' : undefined}
-        aria-label={activeTab ? tabName(activeTab.file) : undefined}
+        aria-label={activeTab ? tabName(activeTab) : undefined}
       >
         <Viewer
           tabs={tabs}

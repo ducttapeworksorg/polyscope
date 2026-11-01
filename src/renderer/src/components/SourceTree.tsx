@@ -493,7 +493,7 @@ export function SourceTree(props: Props) {
   const foldedLines = (level: LogNode): string[] => {
     const status = level.status ? statusLines(level.status) : []
     const line =
-      level.kind === 'logStream' ? (level.kubernetes ? containerLine(level.name, level.kubernetes.role) : level.name)
+      level.kind === 'logStream' ? (level.kubernetes?.kind === 'container' ? containerLine(level.name, level.kubernetes.role) : level.name)
       : level.kubernetes?.kind === 'workload' ? t('workload.job', { name: level.name })
       : level.kubernetes?.kind === 'pod' ? t('workload.pod', { name: level.name })
       : level.name
@@ -516,7 +516,7 @@ export function SourceTree(props: Props) {
     chain.flatMap((level, i) => {
       const kind = level.kubernetes?.kind
       return (
-        kind === 'workloads' ? []
+        kind === 'workloads' || kind === 'events' ? []
         : kind === 'pod' ? [copyItem(t('tree.copyPodName'), level.name)]
         : kind === 'container' ? [copyItem(t('tree.copyContainerName'), level.name)]
         : [copyItem(kind === 'workload' && i > 0 ? t('tree.copyJobName') : t('tree.copyName'), level.name)]
@@ -528,6 +528,7 @@ export function SourceTree(props: Props) {
     const { kubernetes } = node
     if (kubernetes?.kind === 'container') return <KubernetesIcon container role={kubernetes.role} />
     if (kubernetes?.kind === 'pod') return <KubernetesIcon workloadKind="Pod" />
+    if (kubernetes?.kind === 'events') return <MaterialIcon icon="log" theme={theme} />
     if (kubernetes) return <KubernetesIcon workloadKind={kubernetes.workloadKind} />
     if (node.docker?.kind === 'container') return <ContainerIcon />
     if (node.kind === 'logStream') return <MaterialIcon icon="log" theme={theme} />
@@ -547,15 +548,16 @@ export function SourceTree(props: Props) {
    */
   const logRow = (node: LogNode, depth: number) => {
     if (opensLog(node)) {
-      const role = roleBadge(node.kubernetes?.role)
+      const role = roleBadge(node.kubernetes?.kind === 'container' ? node.kubernetes.role : undefined)
+      const events = node.kubernetes?.kind === 'events'
       // A pod with one container carries its restarts itself; with several, each container carries its own. A Log Stream
       // with a status of its own (a Docker container's) always does.
       const restarts = node.restarts && (node.status || amongSeveral(node.path)) ? node.restarts : 0
       return row({
         path: node.path,
         depth,
-        extra: { title: tooltip(node) },
-        label: node.name,
+        extra: { title: events ? `${tooltip(node)}\n${t('tree.events.tooltip')}` : tooltip(node) },
+        label: events ? t('logView.events') : node.name,
         folder: false,
         icon: logIcon(node),
         ...openLogItems(node),
@@ -648,6 +650,8 @@ export function SourceTree(props: Props) {
       return [note(path, depth, content, 'tree-note--error')]
     }
     if (listing.nodes.length === 0 && !listing.more) return [note(path, depth, t(emptyNote(path)))]
+    // A namespace's Events are listed whether or not it has any Workloads: with none, it still says so after them.
+    const onlyEvents = source.type === 'kubernetesLogs' && !path && listing.nodes.every((node) => isLogNode(node) && node.kubernetes?.kind === 'events')
     const rows = listing.nodes.flatMap((node) => {
       if (isLogNode(node)) {
         const self = logRow(node, depth)
@@ -700,7 +704,8 @@ export function SourceTree(props: Props) {
       })
       return isFolder && expanded.has(node.path) ? [self, ...renderChildren(node.path, depth + 1)] : [self]
     })
-    return listing.more ? [...rows, moreNote(path, depth, listing.more)] : rows
+    const shown = onlyEvents ? [...rows, note(path, depth, t('tree.emptyNamespace'))] : rows
+    return listing.more ? [...shown, moreNote(path, depth, listing.more)] : shown
   }
 
   /** Where a long folder's listing stops: a way to list the next page, or how that's going. */

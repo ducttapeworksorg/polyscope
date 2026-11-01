@@ -13,7 +13,7 @@ import type {
   SourceInfo,
   SourcePath
 } from '@shared/core-api'
-import { followableSourceTypes } from '@shared/core-api'
+import { followableSourceTypes, kubernetesEventsPath } from '@shared/core-api'
 import { t } from './i18n'
 import type { LogLevel } from './log-level'
 import type { SinceChoice } from './since'
@@ -83,9 +83,21 @@ export const followsFiles = (source: SourceInfo) => followableSourceTypes.includ
 export const canFollowFile = ({ source, file, follow }: Pick<OpenTab, 'source' | 'file' | 'follow'>) =>
   followsFiles(source) && !follow && (isLog(file) ? file.of === 'file' : file.view === 'editor' || file.view === 'large')
 
-/** What a tab is called: its file's or container's name, marked for a Previous Log. */
-export const tabName = (content: { name: string; previous?: boolean }) =>
-  content.previous ? t('logView.previous', { name: content.name }) : content.name
+/** Whether a Log Stream is a Kubernetes Logs Source's namespace Events. */
+const isNamespaceEvents = (source: Pick<SourceInfo, 'type'>, path: SourcePath) => source.type === 'kubernetesLogs' && path === kubernetesEventsPath
+
+/** Whether opening a Log Stream Follows it, as it's live: all but a namespace's Events, which can't be followed yet. */
+export const followsOnOpen = (source: Pick<SourceInfo, 'type'>, path: SourcePath) => !isNamespaceEvents(source, path)
+
+/** Whether a log tab shows a namespace's Events, and none were read: Kubernetes keeps them only a while. */
+export const showsNoEvents = ({ source, file }: Pick<OpenTab, 'source' | 'file'>) =>
+  file.view === 'log' && file.of === 'logStream' && isNamespaceEvents(source, file.path) && file.content === ''
+
+/** What a tab is called: its file's or container's name, or Events, marked for a Previous Log. */
+export const tabName = ({ source, file }: { source: Pick<SourceInfo, 'type'>; file: { path: SourcePath; name: string; previous?: boolean } }) => {
+  const name = isNamespaceEvents(source, file.path) ? t('logView.events') : file.name
+  return file.previous ? t('logView.previous', { name }) : name
+}
 
 /** A file or Log Stream open in the viewer. Tabs live only in the renderer and are never persisted. */
 export interface OpenTab {
