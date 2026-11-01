@@ -188,7 +188,7 @@ A level with only one thing in it folds into the row above:
 
 The groups (**Deployments**, **CronJobs**…) always expand, however few Workloads they hold. When things change, say a rollout or scaling replaces or adds pods, or a sidecar is added, choose **Refresh** on the row to bring the tree up to date: a Workload that now has several pods expands to list them, and one that's back to one pod folds it in again. Logs already open stay with the pod and container they were opened from. A Workload scaled down to no pods, or a CronJob that hasn't run yet, doesn't expand at all; choose **Refresh** on it once it has.
 
-Right-click a Workload, pod or container for **Copy name**, to paste it into `kubectl`, say. A row standing in for a Job, pod or container also offers to copy that one's name, like **Copy pod name**.
+Right-click a Workload, pod or container for **Copy name**, to paste it into `kubectl`, say. A row standing in for a Job, pod or container also offers to copy that one's name, like **Copy pod name**. Right-click a Workload or pod for **Show Events**, to see its Events (a Workload's with those of its ReplicaSets or Jobs and pods) in a tab of their own: see [Kubernetes Events](reading.md#kubernetes-events).
 
 Click a container to read its log, or turn on **Follow** to watch it live. Once a container has restarted, turn on **Previous** in its log's toolbar to read its **Previous Log**, the log of its run before the last restart, and off again to go back. See [Reading files and logs](reading.md#logs).
 

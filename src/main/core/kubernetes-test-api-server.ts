@@ -4,9 +4,10 @@
 // `locked`, which holds a Deployment `web` and a CronJob `nightly`, listing pods is denied the way RBAC denies it;
 // `crashing` holds a pod `crasher` whose restarted containers' previous runs Kubernetes has removed; `files` holds
 // the Deployments of `filesDeployments`, for a Kubernetes Files Source's tree (it can't exec into their pods); `batch`
-// holds the CronJobs and Jobs of `batchJobs`; `events` holds no Workloads, only the Events of `namespaceEvents`, and
-// `noevents` nothing, listing its Events denied the way RBAC denies it. Events in `events` can be watched, the test
-// changing them, closing the watch or answering it "410 Gone" through the stand-in's `events`.
+// holds the CronJobs and Jobs of `batchJobs`, and the Events of `batchEvents`; `events` holds the Deployments `api`, with
+// a pod, and `worker`, with none, and the Events of `namespaceEvents`, and `noevents` nothing but a pod `counter`,
+// listing its Events denied the way RBAC denies it. Events in `events` can be watched, the test changing them, closing
+// the watch or answering it "410 Gone", or adding pods to `api`, through the stand-in's `events`.
 // Given a token, it turns away requests that don't bear it.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
@@ -129,6 +130,23 @@ const batchJobList = Object.entries(batchJobs).flatMap(([cronJob, jobs]) =>
 
 const batchPods = Object.values(batchJobs).flatMap((jobs) => Object.values(jobs).flat())
 
+/** A pod in `events`, of a ReplicaSet of `api` unless said, running one container `app`. */
+const eventsPod = (name: string, replicaSet = 'api-7d9f') => ({
+  metadata: { name, uid: name, ownerReferences: [{ kind: 'ReplicaSet', name: replicaSet, uid: replicaSet, controller: true }] },
+  spec: { containers: [{ name: 'app' }] },
+  status: { phase: 'Running', containerStatuses: [{ name: 'app', image: 'busybox', imageID: '', ready: true, restartCount: 0, state: { running: {} } }] }
+})
+
+/** The Deployments in `events`, by name: `api`'s ReplicaSet has a pod, `worker`'s can't create one. */
+const eventsDeployments = [{ metadata: { name: 'api', uid: 'api' } }, { metadata: { name: 'worker', uid: 'worker' } }]
+
+const eventsReplicaSets = [
+  ['api-7d9f', 'api'],
+  ['worker-5c4b', 'worker']
+].map(([name, deployment]) => ({
+  metadata: { name, uid: name, ownerReferences: [{ kind: 'Deployment', name: deployment, uid: deployment, controller: true }] }
+}))
+
 /** An Event about an object, of a type, with what it says and when, as the API server gives it. */
 const event = (type: string, reason: string, kind: string, name: string, message: string, times: Record<string, unknown>) => ({
   metadata: { name: `${name}.${reason.toLowerCase()}`, namespace: 'events', ...('creationTimestamp' in times && { creationTimestamp: times['creationTimestamp'] }) },
@@ -145,6 +163,11 @@ const event = (type: string, reason: string, kind: string, name: string, message
  * the pod's container backing off 14 times, first seen at the start and last seen at 10:30.
  */
 export const namespaceEvents = [
+  event('Warning', 'FailedCreate', 'ReplicaSet', 'worker-5c4b', 'Error creating: pods "worker-5c4b-z" is forbidden: exceeded quota', {
+    count: 3,
+    firstTimestamp: '2026-10-29T09:40:00Z',
+    lastTimestamp: '2026-10-29T09:50:00Z'
+  }),
   event('Warning', 'BackOff', 'Pod', 'api-7d9f-x2k', 'Back-off restarting failed container', {
     count: 14,
     firstTimestamp: '2026-10-29T10:00:00Z',
@@ -165,6 +188,29 @@ export const namespaceEvents = [
   })
 ]
 
+/** An Event in `batch`, Normal unless said, last seen at a time on 29 October. */
+const batchEvent = (reason: string, kind: string, name: string, message: string, time: string, type = 'Normal') =>
+  event(type, reason, kind, name, message, { count: 1, firstTimestamp: `2026-10-29T${time}Z`, lastTimestamp: `2026-10-29T${time}Z` })
+
+/**
+ * The Events in `batch`: `hourly`'s two runs, the first completed and the second failing, with their Jobs' and pods',
+ * and those of a run before them since deleted, Job and pod; `nightly`'s one run; and those of `migrate` and of
+ * `hourly-report`, since deleted, Jobs of no CronJob.
+ */
+export const batchEvents = [
+  batchEvent('SuccessfulCreate', 'CronJob', 'nightly', 'Created job nightly-1', '02:00:00'),
+  batchEvent('Scheduled', 'Pod', 'nightly-1-abcde', 'Successfully assigned batch/nightly-1-abcde to node-1', '02:00:01'),
+  batchEvent('Completed', 'Job', 'migrate', 'Job completed', '09:00:00'),
+  batchEvent('Completed', 'Job', 'hourly-0', 'Job completed', '09:01:00'),
+  batchEvent('Pulled', 'Pod', 'hourly-0-vwxyz', 'Container image "busybox" already present on machine', '09:00:30'),
+  batchEvent('Completed', 'Job', 'hourly-report', 'Job completed', '09:02:00'),
+  batchEvent('Pulled', 'Pod', 'hourly-1-fghij', 'Container image "busybox" already present on machine', '10:00:00'),
+  batchEvent('Completed', 'Job', 'hourly-1', 'Job completed', '10:01:00'),
+  batchEvent('SawCompletedJob', 'CronJob', 'hourly', 'Saw completed job: hourly-1, condition: Complete', '10:01:01'),
+  batchEvent('BackOff', 'Pod', 'hourly-2-klmno', 'Back-off restarting failed container', '11:01:00', 'Warning'),
+  batchEvent('BackoffLimitExceeded', 'Job', 'hourly-2', 'Job has reached the specified backoff limit', '11:02:00', 'Warning')
+]
+
 /** An Event, with whichever of its counts and times it carries. */
 type Event = Omit<ReturnType<typeof event>, 'metadata'> & { metadata: ReturnType<typeof event>['metadata'] & Record<string, unknown> } & Record<string, unknown>
 
@@ -181,6 +227,7 @@ function eventsStore() {
   let version = 1
   let expiredBelow = 0
   const items = new Map<string, Event>(namespaceEvents.map((e) => [e.metadata.name, e]))
+  const pods = [eventsPod('api-7d9f-x2k')]
   /** Every change, as a watch sends it, with its resourceVersion. */
   const changes: { version: number; line: string }[] = []
   const watches = new Set<ServerResponse>()
@@ -232,14 +279,20 @@ function eventsStore() {
       const line = record(e)
       for (const response of watches) response.write(line)
     },
+    /** The pods in `events`. */
+    pods: () => pods,
+    /** Adds a pod to `api`'s ReplicaSet, or another's. */
+    addPod: (name: string, replicaSet?: string) => void pods.push(eventsPod(name, replicaSet)),
     /** Ends every watch, as the API server does now and then. */
     close() {
       for (const response of watches) response.end()
+      watches.clear()
     },
     /** Keeps no changes up to now: every watch open, and any from before now, answers "410 Gone". */
     expire() {
       expiredBelow = version
       for (const response of watches) gone(response)
+      watches.clear()
     }
   }
 }
@@ -292,12 +345,22 @@ function respond(request: IncomingMessage, response: ServerResponse, token: stri
   if (namespace === 'events' && rest === '/events') {
     return url.searchParams.get('watch') === 'true' || url.searchParams.get('watch') === '1' ? events.watch(url, response) : json(response, 200, events.list())
   }
+  if (namespace === 'events') {
+    const lists = { pods: events.pods(), deployments: eventsDeployments, replicasets: eventsReplicaSets }
+    const [, resource, name] = /^\/(pods|deployments|replicasets)(?:\/([^/]+))?$/.exec(rest) ?? []
+    if (resource && name === undefined) return json(response, 200, { kind: 'List', apiVersion: 'v1', metadata: {}, items: lists[resource as keyof typeof lists] })
+    if (resource) {
+      const item = lists[resource as keyof typeof lists].find((i) => i.metadata.name === name)
+      return item ? json(response, 200, item) : json(response, 404, { kind: 'Status', code: 404, reason: 'NotFound', message: 'not found' })
+    }
+  }
   if (namespace === 'locked' && rest === '/deployments') {
     return json(response, 200, { kind: 'DeploymentList', apiVersion: 'apps/v1', metadata: {}, items: [{ metadata: { name: 'web', uid: 'web' } }] })
   }
   if (namespace === 'locked' && rest === '/cronjobs') {
     return json(response, 200, { kind: 'CronJobList', apiVersion: 'batch/v1', metadata: {}, items: [{ metadata: { name: 'nightly', uid: 'nightly' } }] })
   }
+  if (namespace === 'noevents' && rest === '/pods') return json(response, 200, { kind: 'PodList', apiVersion: 'v1', metadata: {}, items: [counter] })
   if (namespace === 'shop' && rest === '/pods') return json(response, 200, { kind: 'PodList', apiVersion: 'v1', metadata: {}, items: [counter] })
   if (namespace === 'shop' && rest === '/pods/counter') return json(response, 200, { kind: 'Pod', apiVersion: 'v1', ...counter })
   if (namespace === 'shop' && rest === '/pods/counter/log') {
@@ -331,6 +394,7 @@ function respond(request: IncomingMessage, response: ServerResponse, token: stri
     if (rest === '/pods') return json(response, 200, { kind: 'PodList', apiVersion: 'v1', metadata: {}, items: batchPods })
     if (rest === '/jobs') return json(response, 200, { kind: 'JobList', apiVersion: 'batch/v1', metadata: {}, items: batchJobList })
     if (rest === '/cronjobs') return json(response, 200, { kind: 'CronJobList', apiVersion: 'batch/v1', metadata: {}, items: batchCronJobs })
+    if (rest === '/events') return json(response, 200, { kind: 'EventList', apiVersion: 'v1', metadata: {}, items: batchEvents })
     if (batchPods.some((pod) => rest === `/pods/${pod.metadata.name}/log`)) {
       return response.writeHead(200, { 'content-type': 'text/plain' }).end('done\n')
     }

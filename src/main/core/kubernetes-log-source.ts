@@ -2,11 +2,12 @@ import { request as httpRequest, type IncomingMessage, type RequestOptions } fro
 import { Agent as HttpsAgent, request as httpsRequest } from 'node:https'
 import { ApiException, type CoreV1Event, type KubeConfig, type V1Job, type V1ObjectMeta, type V1Pod } from '@kubernetes/client-node'
 import {
+  kubernetesEventsCapabilities,
   kubernetesEventsPath,
+  kubernetesEventsRowOf,
   type ContainerRole,
   type LogGroupNode,
   type LogNode,
-  type LogStreamCapabilities,
   type LogStreamNode,
   type SourcePath,
   type WorkloadKind
@@ -21,6 +22,7 @@ import {
   listReplicaSets,
   podsOfWorkload,
   podsOwnedBy,
+  readWorkload,
   serverMessage,
   type PodOwnerKind
 } from './kubernetes-api'
@@ -71,11 +73,9 @@ async function bodyOf(response: IncomingMessage): Promise<string> {
 
 const join = (parent: SourcePath, name: string) => (parent ? `${parent}/${name}` : name)
 
-/** The capabilities of Kubernetes Logs' the namespace's Events lack: they don't restart, so have no Previous Log (ADR 0010). */
-const eventsCapabilities: LogStreamCapabilities = { previousLog: false, restarts: false }
 
 /** The namespace's Events, listed first at the root. */
-const eventsNode: LogStreamNode = { kind: 'logStream', name: kubernetesEventsPath, path: kubernetesEventsPath, capabilities: eventsCapabilities, kubernetes: { kind: 'events' } }
+const eventsNode: LogStreamNode = { kind: 'logStream', name: kubernetesEventsPath, path: kubernetesEventsPath, capabilities: kubernetesEventsCapabilities, kubernetes: { kind: 'events' } }
 
 /** When an Event was last seen, in milliseconds since the epoch: going by the best of the times it carries; NaN if it has none. */
 function lastSeen(event: CoreV1Event): number {
@@ -123,6 +123,47 @@ function eventsLog(events: CoreV1Event[], { tailLines, limitBytes, timestamps, s
   return limitBytes === undefined ? text : text.slice(0, limitBytes)
 }
 
+/** Whether a path is that of Events: the namespace's, or a pod's or a Workload's. */
+const isEventsPath = (path: SourcePath) => path === kubernetesEventsPath || kubernetesEventsRowOf(path) !== undefined
+
+/** What an Event is about, as `Kind/name`. */
+const objectOf = (event: CoreV1Event) => `${event.involvedObject.kind ?? ''}/${event.involvedObject.name ?? ''}`
+
+/** The kinds of object a Workload owns its pods through, and the pods. */
+type OwnedKind = 'ReplicaSet' | 'Job' | 'Pod'
+
+/**
+ * The names Kubernetes gives the objects a Workload `name` owns, by kind: how those since deleted, which nothing says
+ * the Workload owned any more, are told. A Deployment's ReplicaSets end in their pod template's hash, a CronJob's Jobs
+ * in when they were scheduled, a StatefulSet's pods in their ordinal, other pods in five random characters.
+ */
+function deletedNames(kind: Exclude<WorkloadKind, 'Pod'>, name: string): Partial<Record<OwnedKind, RegExp>> {
+  const random = '[a-z0-9]{5}'
+  const shaped = (...parts: string[]) => new RegExp(`^${[name.replaceAll('.', '\\.'), ...parts].join('-')}$`)
+  switch (kind) {
+    case 'Deployment':
+      return { ReplicaSet: shaped('[a-z0-9]{6,10}'), Pod: shaped('[a-z0-9]{6,10}', random) }
+    case 'CronJob':
+      return { Job: shaped('\\d+'), Pod: shaped('\\d+', random) }
+    case 'StatefulSet':
+      return { Pod: shaped('\\d+') }
+    case 'DaemonSet':
+    case 'Job':
+      return { Pod: shaped(random) }
+  }
+}
+
+/**
+ * Which Events a Log Stream of them shows: the namespace's, or a pod's, or a Workload's and those of everything it owns.
+ * `has` goes by the objects known when it was found; `learns`, for a Workload, also finds out whether an object that
+ * wasn't (a pod created since, say) is now the Workload's.
+ */
+interface EventsScope {
+  name: string
+  has(event: CoreV1Event): boolean
+  learns?(event: CoreV1Event): Promise<boolean>
+}
+
 /** What a watch on Events sends, one JSON object a line: a change to an Event, a bookmark, or an error, as a Status. */
 interface WatchEvent {
   type: 'ADDED' | 'MODIFIED' | 'DELETED' | 'BOOKMARK' | 'ERROR'
@@ -133,7 +174,8 @@ interface WatchEvent {
  * The Workloads, pods and containers of one namespace, as a Log Source whose Log Streams are containers. Paths start
  * with a group (`deployments`, `cronjobs`…), then name each object on the way down, e.g. `cronjobs/nightly/<job>/<pod>/<container>`.
  * A CronJob with one Job, a Workload with one pod and a pod with one container carry it folded in, paths keeping every level.
- * The namespace's Events are a Log Stream of their own, `events`, listed first at the root.
+ * The namespace's Events are a Log Stream of their own, `events`, listed first at the root; a pod's or a Workload's,
+ * those at `events/` then its path, aren't listed, reached from its row.
  * It has every capability: containers restart and keep a Previous Log, pods have a Pod Status, and logs can be read
  * from a time on (Since). Events have no Previous Log and don't restart.
  */
@@ -297,7 +339,7 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
           .map(([g]): LogNode => ({ kind: 'group', name: g, path: g, unfoldable: true, kubernetes: { kind: 'workloads', workloadKind: kindOfGroup[g] } }))
       ]
     }
-    if (path === kubernetesEventsPath) throw new CoreError('NOT_A_FOLDER', `A log has no children: ${path}`)
+    if (isEventsPath(path)) throw new CoreError('NOT_A_FOLDER', `A log has no children: ${path}`)
     if (!isGroup(group) || segments.some((segment) => !segment)) throw notFound(path)
     if (first === undefined) {
       return group === 'pods' ? podNodes(path, (await members(group)) as V1Pod[]) : await workloadNodes(group)
@@ -341,6 +383,78 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     return (await childrenOf(parent)).find((node) => node.path === path)
   }
 
+  /** An object of the namespace, read; undefined if it's gone or the user may not read it. */
+  const readObject = (kind: OwnedKind, name: string): Promise<{ metadata?: V1ObjectMeta } | undefined> => {
+    const read: () => Promise<{ metadata?: V1ObjectMeta }> =
+      kind === 'Pod' ? () => core.readNamespacedPod({ name, namespace })
+      : kind === 'ReplicaSet' ? () => apps.readNamespacedReplicaSet({ name, namespace })
+      : () => batch.readNamespacedJob({ name, namespace })
+    return call(read).catch(() => undefined)
+  }
+
+  /**
+   * The Events of the Workload `name`: its own, its ReplicaSets' (a Deployment's) or Jobs' (a CronJob's), and its pods',
+   * as far as the user may list them, and those of the ones since deleted, going by the names Kubernetes gave them.
+   * `learns` reads an object it doesn't know yet to see whether it's one of those.
+   */
+  const workloadEvents = async (kind: Exclude<WorkloadKind, 'Pod'>, name: string): Promise<EventsScope> => {
+    const workload = await (kind === 'CronJob' ? call(() => batch.readNamespacedCronJob({ name, namespace })) : readWorkload(apis, namespace, kind, name))
+    const uid = workload.metadata?.uid
+    // What a Deployment or a CronJob owns its pods through.
+    const through = kind === 'Deployment' ? 'ReplicaSet' : kind === 'CronJob' ? 'Job' : undefined
+    const [throughListed, podsListed] = await Promise.all([
+      through === 'ReplicaSet' ? unlessDenied(listReplicaSets(apis, namespace))
+      : through === 'Job' ? unlessDenied(listJobs())
+      : [],
+      unlessDenied(listPods())
+    ])
+    const owned = (throughListed ?? []).filter((item) => uid && controllerOf(item.metadata)?.uid === uid)
+    // Whose pods are the Workload's: its own, or its ReplicaSets' or Jobs'.
+    const podOwners = new Set(through ? owned.map((item) => item.metadata?.uid) : [uid])
+    // Whether each object is the Workload's or one it owns, by `Kind/name`: those listed, whoever's they are.
+    const known = new Map<string, boolean>([
+      [`${kind}/${name}`, true],
+      ...(throughListed ?? []).map((item): [string, boolean] => [`${through}/${item.metadata?.name}`, owned.includes(item)]),
+      ...(podsListed ?? []).map((pod): [string, boolean] => [`Pod/${pod.metadata?.name}`, podOwners.has(controllerOf(pod.metadata)?.uid)])
+    ])
+    const deleted = deletedNames(kind, name)
+    /** Whether an object of a kind the Workload may own is its, as read now; if it's gone, going by its name. */
+    const ownedNow = async (objectKind: OwnedKind, objectName: string): Promise<boolean> => {
+      const object = await readObject(objectKind, objectName)
+      if (!object) return deleted[objectKind]?.test(objectName) ?? false
+      const owner = controllerOf(object.metadata)
+      if (!owner) return false
+      if (objectKind === 'Pod') return podOwners.has(owner.uid) || (owner.kind === through && (await learn(through, owner.name)))
+      if (owner.uid !== uid) return false
+      podOwners.add(object.metadata?.uid)
+      return true
+    }
+    const learn = async (objectKind: string, objectName: string) => {
+      const key = `${objectKind}/${objectName}`
+      if (!known.has(key)) known.set(key, (objectKind === 'Pod' || objectKind === through) && (await ownedNow(objectKind as OwnedKind, objectName)))
+      return known.get(key)!
+    }
+    return {
+      name,
+      // One not listed is gone, unless it was created since, or the user may not list its kind.
+      has: (event) => known.get(objectOf(event)) ?? deleted[event.involvedObject.kind as OwnedKind]?.test(event.involvedObject.name ?? '') ?? false,
+      learns: (event) => learn(event.involvedObject.kind ?? '', event.involvedObject.name ?? '')
+    }
+  }
+
+  /** Which Events those at `path` are: the namespace's, or those of the pod or Workload whose row is at the rest of it. */
+  const eventsScope = async (path: SourcePath): Promise<EventsScope> => {
+    const row = kubernetesEventsRowOf(path)
+    if (row === undefined) return { name: kubernetesEventsPath, has: () => true }
+    if (!row || isGroup(row)) throw notALog(path)
+    const node = await nodeAt(row)
+    if (!node) throw notFound(path)
+    const kubernetes = node.kind === 'group' ? node.kubernetes : undefined
+    if (kubernetes?.kind === 'pod') return { name: node.name, has: (event) => objectOf(event) === `Pod/${node.name}` }
+    if (kubernetes?.kind === 'workload') return await workloadEvents(kubernetes.workloadKind, node.name)
+    throw notALog(path)
+  }
+
   /** A container's Log Stream: its pod, name and restarts. */
   const containerAt = async (path: SourcePath): Promise<LogStreamInfo & Required<Pick<LogStreamInfo, 'kubernetes'>>> => {
     if (!path || isGroup(path)) throw notALog(path)
@@ -351,9 +465,9 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     return { name: node.name, hasPreviousLog: restarts > 0, kubernetes: { pod: path.split('/').at(-2)!, container: node.name, restarts } }
   }
 
-  /** A Log Stream: the namespace's Events, or a container. */
+  /** A Log Stream: the Events of the namespace, a pod or a Workload, or a container. */
   const logStreamAt = async (path: SourcePath): Promise<LogStreamInfo> =>
-    path === kubernetesEventsPath ? { name: kubernetesEventsPath, capabilities: eventsCapabilities } : await containerAt(path)
+    isEventsPath(path) ? { name: (await eventsScope(path)).name, capabilities: kubernetesEventsCapabilities } : await containerAt(path)
 
   /**
    * Asks the API server for what's at a path in the namespace, with the query given, as a stream; resolves with the
@@ -458,9 +572,14 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
    * of its own as a watch from that list sends it (a change leaving its count and last-seen time as they were shows
    * nothing), every line starting with when its Event was last seen. A watch the API server ends is watched again,
    * a second later, from the last change it sent, quietly; one it can't carry on ("410 Gone") starts over, telling
-   * `onStartedOver`, from listing the Events last seen since the last line sent.
+   * `onStartedOver`, from listing the Events last seen since the last line sent. Only those of `scope` are sent, in
+   * the order they came, a Workload's taking in the objects it comes to own as their Events come.
    */
-  const followEvents = async ({ sinceTime, onStartedOver }: LogFollowOptions, onText: (text: string) => void): Promise<LogConnection> => {
+  const followEvents = async (
+    scope: EventsScope,
+    { sinceTime, onStartedOver }: LogFollowOptions,
+    onText: (text: string) => void
+  ): Promise<LogConnection> => {
     // The last line sent's time: starting over goes on from it.
     let since = sinceTime === undefined ? -Infinity : Date.parse(sinceTime)
     // What each Event's line last said, by the Event's name: one changed in no way shown isn't sent again.
@@ -477,9 +596,19 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     const list = () => call(() => core.listNamespacedEvent({ namespace }))
     let stopped = false
     let wake: (() => void) | undefined
+    // Sends the Events of the scope, one batch after the other, though finding out whether one is can take a while.
+    let sending = Promise.resolve()
+    // What the Workload has come to own since is found out by reading it.
+    const sendOf = (events: CoreV1Event[]) => {
+      sending = sending.then(async () => {
+        const kept = await Promise.all(events.map(async (event) => (scope.learns ? await scope.learns(event) : scope.has(event))))
+        if (!stopped) send(events.filter((_, i) => kept[i]))
+      })
+    }
     const listed = await list()
-    send(listed.items)
-    let watch = await watchEvents(listed.metadata?.resourceVersion, (event) => send([event]))
+    send(listed.items.filter(scope.has))
+    const watched = (event: CoreV1Event) => sendOf([event])
+    let watch = await watchEvents(listed.metadata?.resourceVersion, watched)
     const ended = (async () => {
       for (;;) {
         let from = await watch.end
@@ -488,7 +617,7 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
           onStartedOver?.()
           const relisted = await list()
           if (stopped) return
-          send(relisted.items)
+          sendOf(relisted.items)
           from = relisted.metadata?.resourceVersion
         } else {
           // Not straight away, in case the API server, or a proxy on the way, keeps ending watches as soon as they start.
@@ -498,7 +627,7 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
           })
           if (stopped) return
         }
-        watch = await watchEvents(from, (event) => send([event]))
+        watch = await watchEvents(from, watched)
         if (stopped) return watch.stop()
       }
     })()
@@ -535,7 +664,12 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     logStreamAt,
 
     async readLog(path, { tailLines, limitBytes, timestamps, previous = false, sinceTime }: LogReadOptions = {}) {
-      if (path === kubernetesEventsPath) return eventsLog(await listEvents(), { tailLines, limitBytes, timestamps, sinceTime })
+      if (isEventsPath(path)) {
+        // Listed first: the user who may not list Events is told so.
+        const events = await listEvents()
+        const scope = await eventsScope(path)
+        return eventsLog(events.filter(scope.has), { tailLines, limitBytes, timestamps, sinceTime })
+      }
       const { pod, container } = (await containerAt(path)).kubernetes
       // The kubelet takes the last lines, then those of them since the time: the last lines of those since it, either way.
       const { response } = await logResponse(pod, container, { tailLines, limitBytes, timestamps, previous, sinceTime })
@@ -551,7 +685,7 @@ export function createKubernetesLogSource(config: KubeConfig, namespace: string)
     },
 
     async followLog(path, options, onText) {
-      if (path === kubernetesEventsPath) return followEvents(options, onText)
+      if (isEventsPath(path)) return followEvents(await eventsScope(path), options, onText)
       const { pod, container } = (await containerAt(path)).kubernetes
       return openLogConnection(pod, container, options, onText)
     },

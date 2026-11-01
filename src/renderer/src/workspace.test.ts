@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { SourceInfo, TextFile } from '@shared/core-api'
+import type { LogNode, SourceInfo, TextFile, WorkloadKind } from '@shared/core-api'
 import {
   addEarlierLines,
   dropEarlier,
@@ -25,7 +25,8 @@ import {
   reopenTab,
   setLanguage,
   setLogView,
-  showsNoEvents,
+  noEventsNote,
+  eventsOfRow,
   sinceOffered,
   tabName,
   toggleLevel,
@@ -467,11 +468,11 @@ describe('a log view’s Level Filter', () => {
 
 describe('a Kubernetes Logs Source’s Events', () => {
   const cluster: SourceInfo = { id: 'k', type: 'kubernetesLogs', name: 'Cluster', context: 'dev', namespace: 'shop' }
-  const events = (content: string): TabContent => ({
+  const events = (content: string, path = 'events', name = 'events'): TabContent => ({
     view: 'log',
     of: 'logStream',
-    path: 'events',
-    name: 'events',
+    path,
+    name,
     offersPreviousLog: false,
     offersSince: true,
     previous: false,
@@ -480,15 +481,82 @@ describe('a Kubernetes Logs Source’s Events', () => {
     timestamps: false,
     content
   })
+  const ofPod = (content: string) => events(content, 'events/deployments/api/api-7d9f-x2k', 'api-7d9f-x2k')
 
-  it('are titled Events', () => {
+  it('are titled Events, or by the pod’s or Workload’s name and Events', () => {
     expect(tabName({ source: cluster, file: events('') })).toBe('Events')
+    expect(tabName({ source: cluster, file: ofPod('') })).toBe('api-7d9f-x2k · Events')
     expect(tabName({ source, file: events('') })).toBe('events')
+    expect(tabName({ source, file: ofPod('') })).toBe('api-7d9f-x2k')
   })
 
-  it('say there are none only when none were read', () => {
-    expect(showsNoEvents({ source: cluster, file: events('') })).toBe(true)
-    expect(showsNoEvents({ source: cluster, file: events('[Normal] Scheduled pod/x: assigned') })).toBe(false)
-    expect(showsNoEvents({ source, file: events('') })).toBe(false)
+  it('say there are none only when none were read, and of what', () => {
+    expect(noEventsNote({ source: cluster, file: events('') })).toMatch(/^No Events in this namespace\. Kubernetes keeps Events for about an hour/)
+    expect(noEventsNote({ source: cluster, file: ofPod('') })).toMatch(/^No Events for api-7d9f-x2k\. Kubernetes keeps Events for about an hour/)
+    expect(noEventsNote({ source: cluster, file: events('[Normal] Scheduled pod/x: assigned') })).toBeUndefined()
+    expect(noEventsNote({ source: cluster, file: ofPod('[Normal] Scheduled pod/x: assigned') })).toBeUndefined()
+    expect(noEventsNote({ source, file: events('') })).toBeUndefined()
+  })
+
+  it('offer no Previous Log', () => {
+    const ws = openTab(emptyWorkspace, { key: 'k:events/pods/x', source: cluster, file: ofPod('') })
+
+    expect(offersPrevious(ws.tabs[0]!)).toBe(false)
+  })
+
+  describe('shown from a row', () => {
+    const pod = (path: string, folded?: LogNode): LogNode => ({
+      kind: 'group',
+      name: path.split('/').at(-1)!,
+      path,
+      ...(folded && { folded }),
+      kubernetes: { kind: 'pod', containerCount: 1 }
+    })
+    const workload = (path: string, workloadKind: WorkloadKind = 'Deployment', folded?: LogNode): LogNode => ({
+      kind: 'group',
+      name: path.split('/').at(-1)!,
+      path,
+      ...(folded && { folded }),
+      kubernetes: { kind: 'workload', workloadKind: workloadKind as Exclude<WorkloadKind, 'Pod'> }
+    })
+    const container = (path: string): LogNode => ({ kind: 'logStream', name: path.split('/').at(-1)!, path, kubernetes: { kind: 'container' } })
+    const shown = (node: LogNode) => eventsOfRow(node) && { path: eventsOfRow(node)!.path, name: eventsOfRow(node)!.name }
+
+    it('are a pod’s, its only container folded in or not, under any Workload', () => {
+      expect(shown(pod('pods/counter'))).toEqual({ path: 'events/pods/counter', name: 'counter' })
+      expect(shown(pod('pods/counter', container('pods/counter/counter')))).toEqual({ path: 'events/pods/counter', name: 'counter' })
+      expect(shown(pod('cronjobs/nightly/nightly-1/nightly-1-abcde'))).toEqual({
+        path: 'events/cronjobs/nightly/nightly-1/nightly-1-abcde',
+        name: 'nightly-1-abcde'
+      })
+    })
+
+    it('are a Workload’s, whatever is folded into its row', () => {
+      expect(shown(workload('deployments/api'))).toEqual({ path: 'events/deployments/api', name: 'api' })
+      expect(shown(workload('deployments/api', 'Deployment', pod('deployments/api/api-7d9f-x2k')))).toEqual({ path: 'events/deployments/api', name: 'api' })
+      expect(shown(workload('cronjobs/nightly', 'CronJob', workload('cronjobs/nightly/nightly-1', 'Job')))).toEqual({
+        path: 'events/cronjobs/nightly',
+        name: 'nightly'
+      })
+      expect(shown(workload('cronjobs/nightly/nightly-1', 'Job'))).toEqual({ path: 'events/cronjobs/nightly/nightly-1', name: 'nightly-1' })
+    })
+
+    it('are no other row’s', () => {
+      const workloads: LogNode = { kind: 'group', name: 'deployments', path: 'deployments', kubernetes: { kind: 'workloads', workloadKind: 'Deployment' } }
+      const namespaceEvents: LogNode = { kind: 'logStream', name: 'events', path: 'events', kubernetes: { kind: 'events' } }
+      const dockerService: LogNode = { kind: 'group', name: 'web', path: 'shop/web', docker: { kind: 'service' } }
+
+      for (const node of [workloads, namespaceEvents, container('pods/counter/counter'), dockerService]) expect(eventsOfRow(node)).toBeUndefined()
+    })
+
+    it('are a Log Stream with no Previous Log, not listed in the tree', () => {
+      expect(eventsOfRow(pod('pods/counter'))).toEqual({
+        kind: 'logStream',
+        name: 'counter',
+        path: 'events/pods/counter',
+        capabilities: { previousLog: false, restarts: false },
+        kubernetes: { kind: 'events' }
+      })
+    })
   })
 })

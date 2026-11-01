@@ -5,7 +5,7 @@ import { describeFailure } from '../core-client'
 import { t } from '../i18n'
 import type { LevelCounts } from '../log-entries'
 import { logLevels } from '../log-level'
-import { hiddenLevelsOf, isLog, offersLevelFilter, showsNoEvents, tabName, type OpenTab } from '../workspace'
+import { hiddenLevelsOf, isLog, noEventsNote, offersLevelFilter, tabName, type OpenTab } from '../workspace'
 import { FileToolbar } from './FileToolbar'
 import { LogToolbar } from './LogToolbar'
 import type { TabsModel } from './use-tabs'
@@ -43,6 +43,7 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
   const [levelCounts, setLevelCounts] = useState<ReadonlyMap<string, LevelCounts>>(new Map())
   const noteLevelCounts = useCallback((key: string, counts: LevelCounts) => setLevelCounts((prev) => new Map(prev).set(key, counts)), [])
   const activeCounts = activeTab && levelCounts.get(activeTab.key)
+  const noEvents = activeTab && noEventsNote(activeTab)
   return (
     <>
       {openError && (
@@ -71,9 +72,9 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
           <span className="workbench__banner-text">{t('viewer.followSlowed')}</span>
         </div>
       )}
-      {activeTab && showsNoEvents(activeTab) && (
+      {noEvents && (
         <div className="workbench__banner" role="status">
-          <span className="workbench__banner-text">{t('viewer.noEvents')}</span>
+          <span className="workbench__banner-text">{noEvents}</span>
         </div>
       )}
       {activeTab?.podGone && (
