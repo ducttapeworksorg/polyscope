@@ -35,6 +35,8 @@ interface Props {
   onOpenAnyway(): void
   /** Saves a copy of the file, asking where; without it, the toolbar offers no "Save a copy…". */
   onSaveCopy?(): void
+  /** Whether its Pane is the active one, whose Large File Viewer the shortcuts act on; by default it is. */
+  paneActive?: boolean
 }
 
 /** Matches the editor's line height, so switching views keeps the text where the eye expects it. */
@@ -60,7 +62,7 @@ const sameQuery = (a: LargeFileSearchQuery, b: LargeFileSearchQuery) => a.patter
  * in view, and can be searched. Scrolling is scaled when the file is too tall to lay out, with the wheel and
  * keys still moving line by line. Log levels, timestamps and search matches are picked out in the lines.
  */
-export function LargeFileViewer({ file, place, onPlace, openAnywayLimit, onOpenAnyway, onSaveCopy }: Props) {
+export function LargeFileViewer({ file, place, onPlace, openAnywayLimit, onOpenAnyway, onSaveCopy, paneActive = true }: Props) {
   const { largeFileId, lastLines } = file
   const scrollerRef = useRef<HTMLDivElement>(null)
   const goToRef = useRef<HTMLInputElement>(null)
@@ -310,10 +312,14 @@ export function LargeFileViewer({ file, place, onPlace, openAnywayLimit, onOpenA
 
   const stepRef = useRef(step)
   stepRef.current = step
+  const paneActiveRef = useRef(paneActive)
+  paneActiveRef.current = paneActive
 
   // Ctrl+G goes to a line and Ctrl+F searches, as in the editor; F3 and Shift+F3 step through the matches.
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      // Every Pane's Large File Viewer listens; only the active Pane's takes them.
+      if (!paneActiveRef.current) return
       const plain = !event.altKey && !event.shiftKey
       const control = (event.ctrlKey || event.metaKey) && plain
       const key = event.key.toLowerCase()

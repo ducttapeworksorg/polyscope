@@ -66,6 +66,50 @@ test('add a Local Filesystem Source, browse it, read a file, and find it again a
   await expect(relaunched.getByRole('tab')).toHaveCount(0)
 })
 
+test('open a file to the side, in a second Pane the status bar follows, which closes with its last tab', async () => {
+  const window = await app.firstWindow()
+  const logs = join(dir, 'root', 'logs')
+  await writeFile(join(logs, 'other.log'), 'INFO other\n')
+  await writeFile(join(logs, 'settings.json'), '{ "level": "info" }\n')
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  await window.getByRole('treeitem', { name: /^app\.log/ }).click()
+  const statusBar = window.getByRole('contentinfo')
+  const first = window.getByRole('region', { name: 'Pane 1' })
+  const second = window.getByRole('region', { name: 'Pane 2' })
+
+  // Open to the Side puts the file in a second Pane beside the first, which becomes the active one.
+  await window.getByRole('treeitem', { name: /^other\.log/ }).click({ button: 'right' })
+  await window.getByRole('menu', { name: 'Actions for other.log' }).getByRole('menuitem', { name: 'Open to the Side' }).click()
+  await expect(first.getByRole('tab', { name: 'app.log' })).toHaveAttribute('aria-selected', 'true')
+  await expect(second.getByRole('tab', { name: 'other.log' })).toHaveAttribute('aria-selected', 'true')
+  await expect(second.getByRole('tabpanel', { name: 'other.log' })).toContainText('INFO other')
+  await expect(first.getByRole('tabpanel', { name: 'app.log' })).toContainText('INFO hello from polyscope')
+  await expect(second).toHaveAttribute('aria-current', 'true')
+  await expect(statusBar).toContainText('11 B')
+
+  // The status bar follows the Pane last focused, and the tree opens files into it.
+  await first.getByTestId('editor').click()
+  await expect(first).toHaveAttribute('aria-current', 'true')
+  await expect(statusBar).toContainText('26 B')
+  await window.getByRole('treeitem', { name: /^settings\.json/ }).click()
+  await expect(first.getByRole('tab', { name: 'settings.json' })).toHaveAttribute('aria-selected', 'true')
+  await expect(second.getByRole('tab')).toHaveCount(1)
+
+  // A file open already is brought up where it is, rather than opened again.
+  await window.getByRole('treeitem', { name: /^other\.log/ }).click()
+  await expect(second).toHaveAttribute('aria-current', 'true')
+  await expect(window.getByRole('tab', { name: 'other.log' })).toHaveCount(1)
+
+  // Closing the second Pane's last tab leaves one Pane, the first, active again.
+  await second.getByRole('button', { name: 'Close other.log' }).click()
+  await expect(second).toHaveCount(0)
+  await expect(first).toHaveCount(0)
+  await expect(window.getByRole('tab')).toHaveCount(1)
+  await expect(statusBar).toContainText('20 B')
+})
+
 test('filter a log by Log Level, hiding an error with its stack trace and keeping line numbers', async () => {
   const window = await app.firstWindow()
   const log = ['INFO starting', 'ERROR request failed', '    at Handler.handle(Handler.java:42)', 'WARN retrying', 'DEBUG attempt 2']

@@ -35,6 +35,8 @@ interface Props {
   shownLinesRef?: RefObject<ShownLines | null>
   /** Told, by tab, how many Log Entries of each Log Level a log's lines have, as they change. */
   onLevelCounts?(key: string, counts: LevelCounts): void
+  /** Whether its Pane is the active one, whose Large File Viewer takes the keyboard shortcuts; by default it is. */
+  paneActive?: boolean
 }
 
 /** The lines a tab's editor holds, as they're shown, by tab; null for a tab it holds none of. */
@@ -120,7 +122,7 @@ function appendLines(model: monaco.editor.ITextModel, entries: LogEntries, lines
  * One read-only Monaco editor; each tab keeps its own model and scroll/cursor state. Binary files, logs
  * too large to show whole, and logs that couldn't be read get a placeholder.
  */
-export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileThreshold, openAnywayLimit, onOpenAnyway, onSaveCopy, followFeed, onLineCount, onDroppedLines, minimap, shownLinesRef, onLevelCounts }: Props) {
+export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileThreshold, openAnywayLimit, onOpenAnyway, onSaveCopy, followFeed, onLineCount, onDroppedLines, minimap, shownLinesRef, onLevelCounts, paneActive = true }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const modelsRef = useRef(new Map<string, TabModel>())
@@ -335,6 +337,7 @@ export function Viewer({ tabs, activeTab, onShowHex, onShowWholeLog, largeFileTh
           place={largeFilePlaces.current.get(large.largeFileId)}
           onPlace={(place) => keepPlace(large.largeFileId, place)}
           openAnywayLimit={openAnywayLimit}
+          paneActive={paneActive}
           onOpenAnyway={() => activeTab && onOpenAnyway(activeTab.key)}
           {...(onSaveCopy && { onSaveCopy })}
         />

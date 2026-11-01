@@ -11,6 +11,17 @@ Everything opens read-only in the viewer on the right, in the same editor that p
 
 Each tab carries its Source's Environment colour. The status bar shows the active tab's Environment, Source and path, and for files its size, modified time, encoding and language.
 
+### Panes
+
+To read two things side by side, say prod's and staging's logs of one service, right-click a file or log in the sidebar and choose **Open to the Side**. It opens in a second **Pane** to the right of the first, each half the viewer's width. With two Panes open already, **Open to the Side** opens it in the other one.
+
+- Each Pane has its own tab bar, preview tab, **Minimap** and **Reload** buttons, and tab menu. **Close Others** and **Close All** act on that Pane only.
+- The Pane you last clicked or moved into is the active one. Its tab bar has a glint along the top, and the other Pane's active tab is dimmed.
+- Clicking a file or log in the sidebar, or <kbd>Space</kbd>/<kbd>Enter</kbd> on it, opens it in the active Pane. The status bar describes the active Pane's tab, and the tab shortcuts below act within it.
+- A file or log is open in only one tab at a time. Opening one that's open already, from the sidebar or with **Open to the Side**, brings up its tab in whichever Pane holds it.
+- A Pane closes as soon as it has no tabs left, and the other one becomes active. Disconnecting a Source leaves its tabs, and so their Panes, open.
+- Every launch starts with one Pane.
+
 ## Files
 
 Polyscope highlights a file by its name: YAML, JSON, XML, source code, and logs, whose timestamps and numbers are coloured, and each line's level: the one its level field says (`level=warn`, `"level":30`), or the first level word near its start, as popular loggers write them (`INFO`, `[12:00:00 WRN]`, `|Error|`, `fail:`, klog's `E1029 …`), not one later in its message. It also handles:
@@ -128,12 +139,12 @@ Polyscope can be used without a mouse. On macOS, use <kbd>⌘</kbd> for the shor
 | Keys | Does |
 | --- | --- |
 | <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>0</kbd> | Move to the sidebar |
-| <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>1</kbd> | Move to the viewer |
+| <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>1</kbd> | Move to the viewer (its active Pane) |
 | <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>,</kbd> | Open Settings |
 | <kbd>↑</kbd> <kbd>↓</kbd> <kbd>Home</kbd> <kbd>End</kbd> | Move through the sidebar's rows |
 | <kbd>→</kbd> / <kbd>←</kbd> | Expand / collapse a Source, folder, Workload or pod |
 | Typing a name | Jump to the next row starting with it |
 | <kbd>Space</kbd> | Preview the file or log |
 | <kbd>Enter</kbd> | Open it in a tab of its own |
-| <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> | Next / previous tab (also <kbd>Ctrl</kbd>+<kbd>PageDown</kbd> / <kbd>PageUp</kbd>) |
-| <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>W</kbd> or <kbd>Ctrl</kbd>+<kbd>F4</kbd> | Close the tab |
+| <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> | Next / previous tab in the active Pane (also <kbd>Ctrl</kbd>+<kbd>PageDown</kbd> / <kbd>PageUp</kbd>) |
+| <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>W</kbd> or <kbd>Ctrl</kbd>+<kbd>F4</kbd> | Close the active Pane's tab |

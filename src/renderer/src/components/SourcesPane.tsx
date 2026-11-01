@@ -16,6 +16,8 @@ interface Props {
   onOpenFile(source: SourceInfo, node: EntryNode, options?: { pinned: boolean }): void
   /** Opens a Log Stream in the preview tab, or in a tab of its own when pinned. */
   onOpenLog(source: SourceInfo, node: LogStreamNode, options?: { pinned: boolean }): void
+  /** Opens a file or Log Stream to the side, in another Pane; without it, the tree offers no "Open to the Side". */
+  onOpenToSide?(source: SourceInfo, node: EntryNode | LogStreamNode): void
   /** Follows a file of a Local, Kubernetes Files or SSH Files Source in a log view; without it, files offer no Follow. */
   onFollowFile?(source: SourceInfo, node: EntryNode): void
   /** Saves a copy of a file, asking where; without it, files offer no "Save a copy…". */
@@ -25,7 +27,7 @@ interface Props {
 }
 
 /** The Sources sidebar, with the Settings and Environments dialogs it opens. */
-export function SourcesPane({ ref, model, update, onOpenFile, onOpenLog, onFollowFile, onSaveFile, onOpenExtensionSettings }: Props) {
+export function SourcesPane({ ref, model, update, onOpenFile, onOpenLog, onOpenToSide, onFollowFile, onSaveFile, onOpenExtensionSettings }: Props) {
   const { settings, sources, environments } = model
   return (
     <>
@@ -40,6 +42,7 @@ export function SourcesPane({ ref, model, update, onOpenFile, onOpenLog, onFollo
         onSourcesChanged={() => void model.reloadSources()}
         onOpenFile={onOpenFile}
         onOpenLog={onOpenLog}
+        onOpenToSide={onOpenToSide}
         onFollowFile={onFollowFile}
         onSaveFile={onSaveFile}
         onOpenSettings={() => model.setSettingsOpen(true)}

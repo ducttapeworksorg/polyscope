@@ -15,6 +15,14 @@ interface Props {
   viewerRef?: Ref<HTMLDivElement>
   /** From useTabs. */
   model: TabsModel
+  /** The tabs of the Pane it shows, and its active tab. */
+  tabs: OpenTab[]
+  activeTab: OpenTab | null
+  /**
+   * Whether its Pane is the active one, by default it is: only the active Pane shows an error opening a file or Log
+   * Stream, as that's where it was opened, and only its Large File Viewer takes the keyboard shortcuts.
+   */
+  paneActive?: boolean
   settings: Settings
   /** The active tab's Source's connection state. */
   connection: ConnectionState
@@ -33,11 +41,11 @@ interface Props {
 }
 
 /**
- * What the active tab shows: any error opening it, banners for a Disconnected Source, a pod or Log Stream that's gone or
+ * What a Pane's active tab shows: any error opening it, banners for a Disconnected Source, a pod or Log Stream that's gone or
  * a slowed Follow, its toolbar, and the viewer.
  */
-export function TabView({ viewerRef, model, settings, connection, onReconnect, panelId, onOpenAnyway, onSaveCopy, onSaveLogCopy, children }: Props) {
-  const { tabs, activeTab, openError } = model
+export function TabView({ viewerRef, model, tabs, activeTab, paneActive = true, settings, connection, onReconnect, panelId, onOpenAnyway, onSaveCopy, onSaveLogCopy, children }: Props) {
+  const openError = paneActive && model.openError
   const shownLines = useRef<ShownLines | null>(null)
   // How many Log Entries of each Log Level each tab's log has, as its viewer last said.
   const [levelCounts, setLevelCounts] = useState<ReadonlyMap<string, LevelCounts>>(new Map())
@@ -141,6 +149,7 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
           minimap={settings.showMinimap}
           shownLinesRef={shownLines}
           onLevelCounts={noteLevelCounts}
+          paneActive={paneActive}
         />
         {!activeTab && children}
       </div>

@@ -27,6 +27,8 @@ interface Props {
   onToggleMinimap(): void
   /** The id of the panel showing the active tab. */
   panelId: string
+  /** Whether its Pane is the active one, whose tabs the keyboard shortcuts act on; by default it is. */
+  paneActive?: boolean
 }
 
 /** Ctrl+Tab and Ctrl+PageDown go to the next tab, with Shift or PageUp to the previous; Ctrl+W and Ctrl+F4 close it. */
@@ -42,7 +44,7 @@ function tabShortcut(event: globalThis.KeyboardEvent): 'next' | 'previous' | 'cl
 
 export function Tabs(props: Props) {
   const { tabs, activeKey, environments, onActivate, onCycle, onPin, onReload, onFollow, onClose, onCloseOthers, onCloseAll, minimap, onToggleMinimap } = props
-  const { panelId } = props
+  const { panelId, paneActive = true } = props
   const { menu, open: openMenu, close: closeMenu } = useContextMenu<{ tab: OpenTab }>()
   const listRef = useRef<HTMLDivElement>(null)
   // Set when the keyboard changes the active tab from within the tabs, so it goes on to whichever is active next.
@@ -56,15 +58,16 @@ export function Tabs(props: Props) {
   }, [activeKey, tabs])
 
   // The latest of each, for the shortcuts, which are listened for once.
-  const latest = useRef({ activeKey, onClose, onCycle })
-  latest.current = { activeKey, onClose, onCycle }
+  const latest = useRef({ activeKey, onClose, onCycle, paneActive })
+  latest.current = { activeKey, onClose, onCycle, paneActive }
 
   // Taken ahead of the editor, which would otherwise have Ctrl+Tab and the like for itself; not from a dialog.
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       const shortcut = tabShortcut(event)
-      if (!shortcut || document.querySelector('dialog:modal')) return
-      const { activeKey, onClose, onCycle } = latest.current
+      const { activeKey, onClose, onCycle, paneActive } = latest.current
+      // Only the active Pane's tabs take them; every Pane's tabs listen.
+      if (!shortcut || !paneActive || document.querySelector('dialog:modal')) return
       // Even with no tab to close, Ctrl+W isn't left to close the window.
       event.preventDefault()
       event.stopPropagation()

@@ -210,6 +210,8 @@ export interface FollowState {
 
 /** One of the areas the viewer is split into: its open tabs, in order, and which one is shown. */
 export interface Pane {
+  /** Tells it from the other Panes, whichever place it moves to as Panes before it close. */
+  id: number
   tabs: OpenTab[]
   activeKey: string | null
 }
@@ -230,18 +232,21 @@ export interface Workspace {
   layout: Layout
 }
 
-const emptyPane: Pane = { tabs: [], activeKey: null }
+const emptyPane: Pane = { id: 0, tabs: [], activeKey: null }
+
+/** The most Panes a layout holds. */
+const maxPanes = 2
 
 export const emptyWorkspace: Workspace = { panes: [emptyPane], activePane: 0, layout: { kind: 'single' } }
 
 /** The Pane last focused, where what's opened goes. */
 export const activePaneOf = (ws: Workspace): Pane => ws.panes[ws.activePane] ?? emptyPane
 
+/** The tab a Pane shows. */
+export const activeTabIn = ({ tabs, activeKey }: Pane): OpenTab | null => tabs.find((tab) => tab.key === activeKey) ?? null
+
 /** The active Pane's active tab, which the status bar describes. */
-export const activeTabOf = (ws: Workspace): OpenTab | null => {
-  const pane = activePaneOf(ws)
-  return pane.tabs.find((tab) => tab.key === pane.activeKey) ?? null
-}
+export const activeTabOf = (ws: Workspace): OpenTab | null => activeTabIn(activePaneOf(ws))
 
 /** Every open tab, in whichever Pane. */
 export const allTabsOf = (ws: Workspace): OpenTab[] => ws.panes.flatMap((pane) => pane.tabs)
@@ -272,9 +277,9 @@ function withoutEmptyPanes(ws: Workspace): Workspace {
 
 /** Changes every tab, in whichever Pane: dropping one when `change` gives none, its Pane's first left taking over if it was active. */
 export function reviseTabs(ws: Workspace, change: (tab: OpenTab) => OpenTab | undefined): Workspace {
-  const panes = ws.panes.map(({ tabs, activeKey }) => {
+  const panes = ws.panes.map(({ id, tabs, activeKey }) => {
     const revised = tabs.flatMap((tab) => change(tab) ?? [])
-    return { tabs: revised, activeKey: revised.some((tab) => tab.key === activeKey) ? activeKey : (revised[0]?.key ?? null) }
+    return { id, tabs: revised, activeKey: revised.some((tab) => tab.key === activeKey) ? activeKey : (revised[0]?.key ?? null) }
   })
   return withoutEmptyPanes({ ...ws, panes })
 }
@@ -289,24 +294,54 @@ const followOf = (file: TabContent): FollowState | undefined => ('followId' in f
 const restartedOf = (file: TabContent): Pick<OpenTab, 'restarted' | 'offersPreviousLog' | 'offersSince'> =>
   file.view === 'log' && file.of === 'logStream' ? { restarted: file.restarted, offersPreviousLog: file.offersPreviousLog, offersSince: file.offersSince } : {}
 
+/** The tab as it's added for a freshly read file. */
+const addedTab = (tab: Pick<OpenTab, 'key' | 'source' | 'file'>, pinned: boolean): OpenTab => ({ ...tab, follow: followOf(tab.file), ...restartedOf(tab.file), pinned })
+
+/**
+ * Puts a file not open yet in the Pane at `index`, which becomes active: in place of its preview tab or, with none,
+ * right after its active tab.
+ */
+function openInPane(ws: Workspace, index: number, tab: Pick<OpenTab, 'key' | 'source' | 'file'>, pinned: boolean): Workspace {
+  const { key } = tab
+  const added = addedTab(tab, pinned)
+  const pane = ws.panes[index]!
+  const { tabs, activeKey } = pane
+  const preview = pinned ? -1 : tabs.findIndex((open) => !open.pinned)
+  const active = tabs.findIndex((open) => open.key === activeKey)
+  const opened = preview >= 0 ? tabs.with(preview, added) : tabs.toSpliced(active >= 0 ? active + 1 : tabs.length, 0, added)
+  return { ...withPane(ws, index, { ...pane, tabs: opened, activeKey: key }), activePane: index }
+}
+
 /**
  * Shows a file: activating its tab, and that tab's Pane, if it's open already in any Pane; otherwise putting it, in
  * the active Pane, in place of its preview tab or, with none, right after its active tab. Opening as pinned pins it
  * for good.
  */
 export function openTab(ws: Workspace, tab: Pick<OpenTab, 'key' | 'source' | 'file'>, { pinned = false } = {}): Workspace {
-  const { key } = tab
-  if (findTab(ws, key)) {
-    const shown = activateTab(ws, key)
-    return pinned ? pinTab(shown, key) : shown
-  }
-  const added = { ...tab, follow: followOf(tab.file), ...restartedOf(tab.file), pinned }
-  const { tabs, activeKey } = activePaneOf(ws)
-  const preview = pinned ? -1 : tabs.findIndex((open) => !open.pinned)
-  if (preview >= 0) return withPane(ws, ws.activePane, { tabs: tabs.with(preview, added), activeKey: key })
-  const active = tabs.findIndex((open) => open.key === activeKey)
-  const at = active >= 0 ? active + 1 : tabs.length
-  return withPane(ws, ws.activePane, { tabs: tabs.toSpliced(at, 0, added), activeKey: key })
+  if (findTab(ws, tab.key)) return showOpen(ws, tab.key, pinned)
+  return openInPane(ws, ws.activePane, tab, pinned)
+}
+
+/** Activates an open tab, and its Pane, pinning it if asked. */
+function showOpen(ws: Workspace, key: string, pinned: boolean) {
+  const shown = activateTab(ws, key)
+  return pinned ? pinTab(shown, key) : shown
+}
+
+/**
+ * Opens a file to the side: in a new Pane after the active one, while the layout has room for one, side by side if
+ * it was alone; or else in the next Pane. The Pane it's opened in becomes active. Open already, it's shown as
+ * `openTab` shows it; with no tab open at all, it's opened as `openTab` opens it, leaving no empty Pane beside it.
+ */
+export function openToSide(ws: Workspace, tab: Pick<OpenTab, 'key' | 'source' | 'file'>, { pinned = false } = {}): Workspace {
+  if (findTab(ws, tab.key)) return showOpen(ws, tab.key, pinned)
+  if (!activePaneOf(ws).tabs.length) return openInPane(ws, ws.activePane, tab, pinned)
+  const next = ws.activePane + 1
+  if (ws.panes.length >= maxPanes) return openInPane(ws, next % ws.panes.length, tab, pinned)
+  const id = Math.max(...ws.panes.map((pane) => pane.id)) + 1
+  const layout: Layout = ws.layout.kind === 'single' ? { kind: 'sideBySide', ratio: 0.5 } : ws.layout
+  const added: Workspace = { panes: ws.panes.toSpliced(next, 0, { ...emptyPane, id }), activePane: next, layout }
+  return openInPane(added, next, tab, pinned)
 }
 
 /** Activates a tab, and the Pane holding it. */
@@ -341,18 +376,26 @@ export function closeTab(ws: Workspace, key: string): Workspace {
   const at = pane.tabs.findIndex((open) => open.key === key)
   const tabs = pane.tabs.toSpliced(at, 1)
   const activeKey = key !== pane.activeKey ? pane.activeKey : (tabs[Math.min(at, tabs.length - 1)]?.key ?? null)
-  return withoutEmptyPanes(withPane(ws, index, { tabs, activeKey }))
+  return withoutEmptyPanes(withPane(ws, index, { ...pane, tabs, activeKey }))
 }
 
 /** Closes every tab but one in its Pane, which it's left active in, the Pane becoming active too. */
 export function closeOtherTabs(ws: Workspace, key: string): Workspace {
   const index = paneIndexOf(ws, key)
   if (index < 0) return ws
-  return { ...withPane(ws, index, { tabs: ws.panes[index]!.tabs.filter((open) => open.key === key), activeKey: key }), activePane: index }
+  const pane = ws.panes[index]!
+  return { ...withPane(ws, index, { ...pane, tabs: pane.tabs.filter((open) => open.key === key), activeKey: key }), activePane: index }
 }
 
-/** Closes every tab in the active Pane, which then closes too unless it's the only one. */
-export const closeAllTabs = (ws: Workspace): Workspace => withoutEmptyPanes(withPane(ws, ws.activePane, emptyPane))
+/** Closes every tab in the Pane at `index`, by default the active one, which then closes too unless it's the only one. */
+export function closeAllTabs(ws: Workspace, index = ws.activePane): Workspace {
+  const pane = ws.panes[index]
+  return pane ? withoutEmptyPanes(withPane(ws, index, { ...pane, tabs: [], activeKey: null })) : ws
+}
+
+/** Makes the Pane at `index` active, as when it's focused; the same Workspace if it is already. */
+export const activatePane = (ws: Workspace, index: number): Workspace =>
+  index === ws.activePane || !ws.panes[index] ? ws : { ...ws, activePane: index }
 
 /** Changes one tab, in whichever Pane holds it; a tab closed meanwhile (say, while its file was being read) stays closed. */
 function updateTab(ws: Workspace, key: string, change: Partial<OpenTab> | ((tab: OpenTab) => OpenTab)): Workspace {

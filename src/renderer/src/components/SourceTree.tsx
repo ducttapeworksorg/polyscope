@@ -58,6 +58,8 @@ interface Props {
   onOpenFile(source: SourceInfo, node: EntryNode, options?: { pinned: boolean }): void
   /** Opens a Log Stream in the preview tab, or in a tab of its own when pinned. */
   onOpenLog(source: SourceInfo, node: LogStreamNode, options?: { pinned: boolean }): void
+  /** Opens a file or Log Stream to the side, in another Pane; without it, the tree offers no "Open to the Side". */
+  onOpenToSide?(source: SourceInfo, node: EntryNode | LogStreamNode): void
   /** Follows a file of a Local, Kubernetes Files or SSH Files Source in a log view; without it, files offer no Follow. */
   onFollowFile?(source: SourceInfo, node: EntryNode): void
   /** Saves a copy of a file, asking where; without it, files offer no "Save a copy…". */
@@ -171,7 +173,7 @@ function useNow(ticking: boolean) {
 }
 
 export function SourceTree(props: Props) {
-  const { source, connection, onConnect, sourceActions, onContextMenu, selectedKey, onSelect, onOpenFile, onOpenLog, onFollowFile, onSaveFile } = props
+  const { source, connection, onConnect, sourceActions, onContextMenu, selectedKey, onSelect, onOpenFile, onOpenLog, onOpenToSide, onFollowFile, onSaveFile } = props
   const { sourceRowProps, treeProps, showDetails, theme, environment, onTrustHostKey } = props
   const now = useNow(showDetails)
   const id = useId()
@@ -535,6 +537,10 @@ export function SourceTree(props: Props) {
     return <MaterialIcon icon="folder" theme={theme} open={expanded.has(node.path)} />
   }
 
+  /** "Open to the Side" for a file or Log Stream, if offered. */
+  const toSideItems = (node: EntryNode | LogStreamNode): MenuItem[] =>
+    onOpenToSide ? [{ label: t('tree.openToSide'), onSelect: () => onOpenToSide(source, node) }] : []
+
   /** Opens a Log Stream's log, from its row or a row standing in for it. */
   const openLogItems = (logStream: LogStreamNode) => ({
     onActivate: () => onOpenLog(source, logStream),
@@ -561,7 +567,7 @@ export function SourceTree(props: Props) {
         folder: false,
         icon: logIcon(node),
         ...openLogItems(node),
-        menuItems: copyItems([node]),
+        menuItems: [...toSideItems(node), ...copyItems([node])],
         badge: role,
         details: showDetails ? lastEventDetails(node) : undefined,
         status:
@@ -595,7 +601,7 @@ export function SourceTree(props: Props) {
         : node.docker?.kind === 'standalone' ? t('dockerGroup.standalone')
         : node.name,
       icon: logIcon(node),
-      menuItems: [refresh, ...openLog, ...showEvents, ...copyItems(chain)],
+      menuItems: [refresh, ...openLog, ...(shown.kind === 'logStream' ? toSideItems(shown) : []), ...showEvents, ...copyItems(chain)],
       status:
         ready || withStatus?.status ?
           indicators(
@@ -699,6 +705,7 @@ export function SourceTree(props: Props) {
         menuItems:
           isFolder ? [{ label: t('sourceActions.refresh'), onSelect: () => refreshNode(node.path) }]
           : [
+              ...toSideItems(node),
               ...(followsFiles(source) && onFollowFile ? [{ label: t('tree.follow'), onSelect: () => onFollowFile(source, node) }] : []),
               ...(onSaveFile ? [{ label: t('saveCopy.action'), onSelect: () => onSaveFile(source, node) }] : [])
             ],

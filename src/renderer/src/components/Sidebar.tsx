@@ -30,6 +30,8 @@ interface Props {
   onOpenFile(source: SourceInfo, node: EntryNode, options?: { pinned: boolean }): void
   /** Opens a Log Stream in the preview tab, or in a tab of its own when pinned. */
   onOpenLog(source: SourceInfo, node: LogStreamNode, options?: { pinned: boolean }): void
+  /** Opens a file or Log Stream to the side, in another Pane; without it, the tree offers no "Open to the Side". */
+  onOpenToSide?(source: SourceInfo, node: EntryNode | LogStreamNode): void
   /** Follows a file of a Local, Kubernetes Files or SSH Files Source in a log view; without it, files offer no Follow. */
   onFollowFile?(source: SourceInfo, node: EntryNode): void
   /** Saves a copy of a file, asking where; without it, files offer no "Save a copy…". */
@@ -97,7 +99,7 @@ const disconnected: ConnectionState = { state: 'disconnected' }
 const settingsShortcut = navigator.userAgent.includes('Mac') ? '⌘,' : 'Ctrl+,'
 
 export function Sidebar(props: Props) {
-  const { sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile, onOpenLog, onFollowFile, onSaveFile, onOpenSettings } = props
+  const { sources, connections, onConnect, onDisconnect, onSourcesChanged, onOpenFile, onOpenLog, onOpenToSide, onFollowFile, onSaveFile, onOpenSettings } = props
   const { showDetails, onToggleDetails, theme, onToggleTheme, environments, onManageEnvironments, ref } = props
   const { collapsedGroups, onToggleGroup } = props
   const [dialog, setDialog] = useState<Dialog | null>(null)
@@ -325,6 +327,7 @@ export function Sidebar(props: Props) {
                     onSelect={setSelectedKey}
                     onOpenFile={onOpenFile}
                     onOpenLog={onOpenLog}
+                    onOpenToSide={onOpenToSide}
                     onFollowFile={onFollowFile}
                     onSaveFile={onSaveFile}
                     sourceRowProps={sourceRowProps(source)}
