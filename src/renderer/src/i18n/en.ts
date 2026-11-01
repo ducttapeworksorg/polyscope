@@ -427,6 +427,8 @@ export const en = {
   'logView.previousLog': 'Previous',
   'logView.previousLog.tooltip': 'Show the log of the container’s run before it last restarted',
   'logView.previousLog.unavailable': 'The container hasn’t restarted, so has no previous run’s log to show',
+  'logView.podEvents': 'Events',
+  'logView.podEvents.tooltip': 'Show the Events of the container’s pod, such as why its image can’t be pulled',
   'logView.timestamps': 'Timestamps',
   'logView.timestamps.tooltip': 'Start each line with when it was logged',
   'logView.utc': 'UTC',

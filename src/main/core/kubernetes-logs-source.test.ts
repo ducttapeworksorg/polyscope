@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ContainerRole, FollowEvent, LogGroupNode, LogNode, NewKubernetesLogsSource, NodeStatus, TreeNode } from '@shared/core-api'
+import { kubernetesPodEventsOf } from '@shared/core-api'
 import { createCore, type Core } from './core'
 import { kubeConfigFor } from './kubeconfig'
 import { createKubernetesLogSource } from './kubernetes-log-source'
@@ -653,6 +654,22 @@ describe('a namespace’s Events', () => {
         content: [lines[1], lines[2], lines[5]].join('\n')
       })
       await expect(core.openLog(sourceId, 'events/deployments/api/api-7d9f-x2k', { previous: true })).rejects.toMatchObject({ code: 'LOG_UNAVAILABLE' })
+    })
+
+    it('of a container’s pod are the same whichever of its containers its log view switches from, read with Since and Last N lines', async () => {
+      const sourceId = await connected('events')
+      const containers = (await core.expand(sourceId, 'deployments/api/api-7d9f-x2k')).map((node) => node.path)
+
+      expect(containers).toEqual(['deployments/api/api-7d9f-x2k/app', 'deployments/api/api-7d9f-x2k/proxy'])
+      for (const container of containers) {
+        expect(await core.openLog(sourceId, kubernetesPodEventsOf(container), { lastNLines: 'all' })).toMatchObject({
+          name: 'api-7d9f-x2k',
+          content: [lines[1], lines[2], lines[5]].join('\n')
+        })
+        expect(await core.openLog(sourceId, kubernetesPodEventsOf(container), { since: '2026-10-29T10:01:00Z', lastNLines: 1, timestamps: true })).toMatchObject({
+          content: `2026-10-29T10:30:00.000Z ${lines[5]}`
+        })
+      }
     })
 
     it('of a Deployment are its own, its ReplicaSets’ and its pods’', async () => {

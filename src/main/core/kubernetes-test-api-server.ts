@@ -130,11 +130,14 @@ const batchJobList = Object.entries(batchJobs).flatMap(([cronJob, jobs]) =>
 
 const batchPods = Object.values(batchJobs).flatMap((jobs) => Object.values(jobs).flat())
 
-/** A pod in `events`, of a ReplicaSet of `api` unless said, running one container `app`. */
+/** A pod in `events`, of a ReplicaSet of `api` unless said, running two containers, `app` and `proxy`. */
 const eventsPod = (name: string, replicaSet = 'api-7d9f') => ({
   metadata: { name, uid: name, ownerReferences: [{ kind: 'ReplicaSet', name: replicaSet, uid: replicaSet, controller: true }] },
-  spec: { containers: [{ name: 'app' }] },
-  status: { phase: 'Running', containerStatuses: [{ name: 'app', image: 'busybox', imageID: '', ready: true, restartCount: 0, state: { running: {} } }] }
+  spec: { containers: [{ name: 'app' }, { name: 'proxy' }] },
+  status: {
+    phase: 'Running',
+    containerStatuses: ['app', 'proxy'].map((container) => ({ name: container, image: 'busybox', imageID: '', ready: true, restartCount: 0, state: { running: {} } }))
+  }
 })
 
 /** The Deployments in `events`, by name: `api`'s ReplicaSet has a pod, `worker`'s can't create one. */

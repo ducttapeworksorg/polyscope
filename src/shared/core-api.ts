@@ -681,6 +681,12 @@ export const kubernetesEventsPath = 'events'
  */
 export const kubernetesEventsOf = (path: SourcePath) => `${kubernetesEventsPath}/${path}`
 
+/**
+ * The path of a Kubernetes Logs Source's Log Stream of the Events of the pod the container at `containerPath` is in: the same
+ * for each of its containers. A container's log view switches to it.
+ */
+export const kubernetesPodEventsOf = (containerPath: SourcePath) => kubernetesEventsOf(containerPath.slice(0, containerPath.lastIndexOf('/')))
+
 /** The path of the pod or Workload whose Events are at `path`, as kubernetesEventsOf gives it; undefined for any other path. */
 export const kubernetesEventsRowOf = (path: SourcePath) =>
   path.startsWith(`${kubernetesEventsPath}/`) ? path.slice(kubernetesEventsPath.length + 1) : undefined
