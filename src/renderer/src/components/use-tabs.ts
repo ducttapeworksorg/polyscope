@@ -15,10 +15,13 @@ import {
   followIdsOf,
   isLog,
   largeFileIdsOf,
+  logShownBy,
+  logToShow,
   markLogStreamGone,
   markPodGone,
   noteRestart,
   noteSlowed,
+  offersPodEvents,
   openTab,
   pinTab,
   reopenLogTab,
@@ -26,6 +29,7 @@ import {
   setLogView,
   toggleLevel as toggleTabLevel,
   type LogFailed,
+  type LogShown,
   type LogTooLarge,
   type TabContent,
   type Workspace
@@ -227,19 +231,21 @@ export function useTabs({ onSourcesChanged }: Options) {
 
   /**
    * Fetches a log tab's lines again: as many as `options` asks for, or else as many as it shows, with or
-   * without timestamps likewise, of the container's current log or its Previous Log likewise, and since the time
+   * without timestamps likewise, of the container's current log, its Previous Log or its pod's Events as `show`
+   * asks or else as it shows, and since the time
    * `options` asks for (any time, if it says `since: undefined`) or else the tab's Since. Following
    * goes on (from the new lines) if it was, unless `following` says otherwise. A file open in the editor moves
    * to a log view, with its Source's "Last N lines". Pins the tab.
    */
-  const reopenLog = async (key: string, options: OpenLogOptions = {}, following?: boolean) => {
+  const reopenLog = async (key: string, options: Omit<OpenLogOptions, 'previous'> = {}, following?: boolean, show?: LogShown) => {
     const tab = tabs.find((open) => open.key === key)
     if (!tab) return
     const { file } = tab
-    const previous = options.previous ?? (isLog(file) && file.previous)
-    const log = isLog(file)
-      ? { of: file.of, path: file.path, name: file.name, previous }
-      : { of: 'file' as const, path: file.path, name: file.name, previous: false }
+    const wasShowing = logShownBy(tab)
+    const showing = show ?? wasShowing
+    const { podEventsOf, ...target } = logToShow(tab, showing)
+    const { previous } = target
+    const log = { of: isLog(file) ? file.of : ('file' as const), ...target }
     const shown = file.view === 'log' || file.view === 'logFailed' ? file.lastNLines : file.view === 'logTooLarge' ? 'all' : undefined
     const timestamps = (file.view === 'log' || file.view === 'logFailed') && file.timestamps
     const since = 'since' in options ? options.since : tab.since && sinceTimeOf(tab.since)
@@ -256,20 +262,22 @@ export function useTabs({ onSourcesChanged }: Options) {
       const { since: _, ...rest } = options
       const asked = { ...lines, timestamps, ...rest, previous, ...(since !== undefined && { since }) }
       const read = await readLog(tab.source.id, log, asked, following ?? (Boolean(tab.follow) || retrying))
-      if (isLatest()) setWorkspace((ws) => reopenLogTab(ws, key, read))
+      if (isLatest()) setWorkspace((ws) => reopenLogTab(ws, key, read, podEventsOf))
       // Overtaken by a later fetch: its Follow is shown nowhere.
       else if ('followId' in read) void core.stopFollow(read.followId).catch(() => undefined)
     } catch (error) {
       if (!isLatest()) return
-      // Removed, say a container: the tab keeps what it last read, saying it's gone.
-      if (error instanceof CoreCallError && error.code === 'NOT_FOUND' && log.of === 'logStream' && isLog(file) && file.view === 'log') {
+      // Removed, say a container: the tab keeps what it last read, saying it's gone; unless it was switching to another
+      // of its views, which then says why it can't.
+      if (error instanceof CoreCallError && error.code === 'NOT_FOUND' && log.of === 'logStream' && isLog(file) && file.view === 'log' && showing === wasShowing) {
         return setWorkspace((ws) => markLogStreamGone(ws, key))
       }
-      // Switching to or from the Previous Log, or trying again after failing to: the tab says why, and can switch back.
-      const failsInTab = log.of === 'logStream' && (previous !== (isLog(file) && file.previous) || file.view === 'logFailed')
+      // Switching to or from the Previous Log or the pod's Events, or trying again after failing to: the tab says why,
+      // and can switch back.
+      const failsInTab = log.of === 'logStream' && (showing !== wasShowing || file.view === 'logFailed')
       if (!failsInTab) return setOpenError(describeError(error))
       const failed: LogFailed = { view: 'logFailed', of: 'logStream', path: log.path, name: log.name, previous, lastNLines: shown ?? 'all', timestamps, message: describeError(error) }
-      setWorkspace((ws) => reopenLogTab(ws, key, failed))
+      setWorkspace((ws) => reopenLogTab(ws, key, failed, podEventsOf))
     }
   }
 
@@ -308,9 +316,20 @@ export function useTabs({ onSourcesChanged }: Options) {
    * log, Following it as when first opened.
    */
   const togglePrevious = (key: string) => {
-    const file = tabs.find((open) => open.key === key)?.file
-    if (!file || !isLog(file) || file.of !== 'logStream') return
-    void reopenLog(key, { previous: !file.previous }, file.previous)
+    const tab = tabs.find((open) => open.key === key)
+    if (!tab || !isLog(tab.file) || tab.file.of !== 'logStream') return
+    const back = logShownBy(tab) === 'previous'
+    void reopenLog(key, {}, back, back ? 'log' : 'previous')
+  }
+
+  /**
+   * Switches a container's log tab, showing its log or its Previous Log, to its pod's Events, Following them, or back
+   * to its current log, Following it as when first opened.
+   */
+  const togglePodEvents = (key: string) => {
+    const tab = tabs.find((open) => open.key === key)
+    if (!tab || !offersPodEvents(tab)) return
+    void reopenLog(key, {}, true, logShownBy(tab) === 'podEvents' ? 'log' : 'podEvents')
   }
 
   /** Pauses a log tab's Follow, holding its new lines back, or resumes it, showing them. */
@@ -386,6 +405,7 @@ export function useTabs({ onSourcesChanged }: Options) {
     changeSince,
     toggleFollow,
     togglePrevious,
+    togglePodEvents,
     togglePause,
     toggleTimestamps,
     toggleUtc,

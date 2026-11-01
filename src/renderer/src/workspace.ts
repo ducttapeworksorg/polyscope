@@ -15,7 +15,7 @@ import type {
   SourceInfo,
   SourcePath
 } from '@shared/core-api'
-import { followableSourceTypes, kubernetesEventsCapabilities, kubernetesEventsOf, kubernetesEventsPath, kubernetesEventsRowOf } from '@shared/core-api'
+import { followableSourceTypes, kubernetesEventsCapabilities, kubernetesEventsOf, kubernetesEventsPath, kubernetesEventsRowOf, kubernetesPodEventsOf } from '@shared/core-api'
 import { t } from './i18n'
 import type { LogLevel } from './log-level'
 import type { SinceChoice } from './since'
@@ -115,6 +115,34 @@ export const tabName = ({ source, file }: { source: Pick<SourceInfo, 'type'>; fi
 }
 
 /**
+ * Whether a log tab offers to switch to its container's pod's Events and back: a Kubernetes Logs Source's container's
+ * log view does, showing its log, its Previous Log or the Events already; Events' own log views don't.
+ */
+export const offersPodEvents = ({ source, file, podEventsOf }: Pick<OpenTab, 'source' | 'file' | 'podEventsOf'>) =>
+  source.type === 'kubernetesLogs' && isLog(file) && file.of === 'logStream' && (podEventsOf !== undefined || eventsKind(source, file.path) === undefined)
+
+/** Which of its Log Stream's log, its Previous Log or (a container's) its pod's Events a log view shows. */
+export type LogShown = 'log' | 'previous' | 'podEvents'
+
+/** What a log tab shows of its Log Stream. */
+export const logShownBy = ({ file, podEventsOf }: Pick<OpenTab, 'file' | 'podEventsOf'>): LogShown =>
+  podEventsOf ? 'podEvents' : isLog(file) && file.previous ? 'previous' : 'log'
+
+/**
+ * What a log tab reads to show `shown`: its Log Stream's log or Previous Log, a container's even while the tab shows
+ * its pod's Events; or those Events, named for the pod, with the container to switch back to.
+ */
+export function logToShow(
+  { file, podEventsOf }: Pick<OpenTab, 'file' | 'podEventsOf'>,
+  shown: LogShown
+): { path: SourcePath; name: string; previous: boolean; podEventsOf?: ContainerLog } {
+  const container = podEventsOf ?? { path: file.path, name: file.name }
+  if (shown !== 'podEvents') return { ...container, previous: shown === 'previous' }
+  const path = kubernetesPodEventsOf(container.path)
+  return { path, name: path.split('/').at(-1)!, previous: false, podEventsOf: container }
+}
+
+/**
  * What a Kubernetes Logs Source's row offers Show Events for: the Events of its pod or Workload (its own and those of
  * everything it owns), whatever is folded into the row; nothing for any other row. They aren't listed in the tree.
  */
@@ -147,6 +175,11 @@ export interface OpenTab {
   podGone?: string
   /** Set when a log tab's Log Stream (a container, say) turned out to be gone: it shows what was last read from it. */
   logStreamGone?: true
+  /**
+   * Set while a container's log tab shows its pod's Events instead of its log: the container, to switch back to. The
+   * tab keeps the container's Previous Log meanwhile.
+   */
+  podEventsOf?: ContainerLog
   /** Whether a log tab's container has restarted, as last read or since seen by its Follow, so has a Previous Log. */
   restarted?: boolean
   /** Whether a log tab's Log Stream's Source Type has Previous Logs, as last read; left out until a read has said. */
@@ -159,6 +192,12 @@ export interface OpenTab {
   loadedEarlier?: EarlierLog
   /** Set once a log tab's Follow dropped its first lines: lines read further back would leave a gap, so none are. */
   earlierDropped?: true
+}
+
+/** A container's Log Stream, which a log tab showing its pod's Events switches back to. */
+export interface ContainerLog {
+  path: SourcePath
+  name: string
 }
 
 /** A Follow under way in a log tab: new lines are added as they come, unless it's paused. */
@@ -284,13 +323,18 @@ export function addEarlierLines(ws: Workspace, key: string, earlier: string, rea
 /** Notes that a log tab's Follow dropped its first lines, so it no longer reads further back. */
 export const dropEarlier = (ws: Workspace, key: string): Workspace => updateTab(ws, key, { earlierDropped: true })
 
-/** Puts a freshly read log in its tab, with the Follow that goes on from it, if any. Pins the tab. */
-export function reopenLogTab(ws: Workspace, key: string, file: TabContent): Workspace {
+/**
+ * Puts a freshly read log in its tab, with the Follow that goes on from it, if any. Pins the tab. Read as the Events of
+ * the pod of the container `podEventsOf`, it shows them in the container's stead, keeping whether the container has a
+ * Previous Log and Since; read without, it shows its Log Stream again.
+ */
+export function reopenLogTab(ws: Workspace, key: string, file: TabContent, podEventsOf?: ContainerLog): Workspace {
   const tab = ws.tabs.find((open) => open.key === key)
   if (!tab) return ws
   // Read afresh, so from a Log Stream that's there, and with only the lines just read.
-  const { logStreamGone: _, loadedEarlier: __, earlierDropped: ___, ...reopened } = tab
-  const fresh = { ...reopened, file, follow: followOf(file), ...restartedOf(file), pinned: true }
+  const { logStreamGone: _, loadedEarlier: __, earlierDropped: ___, podEventsOf: ____, ...reopened } = tab
+  // Showing the pod's Events, the tab keeps what its container said of its Previous Log and Since.
+  const fresh = { ...reopened, file, follow: followOf(file), ...(podEventsOf ? { podEventsOf } : restartedOf(file)), pinned: true }
   return { ...ws, tabs: ws.tabs.map((open) => (open === tab ? fresh : open)) }
 }
 

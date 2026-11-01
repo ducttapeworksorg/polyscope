@@ -27,6 +27,9 @@ import {
   setLogView,
   noEventsNote,
   eventsOfRow,
+  offersPodEvents,
+  logToShow,
+  logShownBy,
   sinceOffered,
   tabName,
   toggleLevel,
@@ -359,6 +362,101 @@ describe('switching a container’s log view to its Previous Log', () => {
     // To switch back to the current log, failing or not.
     expect(canShowPrevious(tab)).toBe(true)
     expect(canShowPrevious(onlyTab(reopenLogTab(followed(true), 'c', { ...failed, previous: false })))).toBe(true)
+  })
+})
+
+describe('switching a container’s log view to its pod’s Events', () => {
+  const cluster: SourceInfo = { id: 'k', type: 'kubernetesLogs', name: 'Cluster', context: 'dev', namespace: 'shop' }
+  const log = (path: string, offersPreviousLog = true) =>
+    ({ view: 'log', of: 'logStream', path, name: path.split('/').at(-1)!, offersPreviousLog, offersSince: true, previous: false, restarted: false, lastNLines: 10, timestamps: false, content: '' }) as const
+  const container = log('deployments/api/api-7d9f-x2k/web')
+  const opened = (file: TabContent, from: SourceInfo = cluster) => openTab(emptyWorkspace, { key: 'c', source: from, file }).tabs[0]!
+
+  it('is offered by every container’s log view in a Kubernetes Logs Source, with a Previous Log or not', () => {
+    expect(offersPodEvents(opened(container))).toBe(true)
+    expect(offersPodEvents(opened({ ...container, restarted: true }))).toBe(true)
+    expect(offersPodEvents(opened({ ...container, previous: true }))).toBe(true)
+    expect(offersPodEvents(opened({ view: 'logFailed', of: 'logStream', path: container.path, name: 'web', previous: true, lastNLines: 10, timestamps: false, message: 'gone' }))).toBe(true)
+  })
+
+  it('isn’t offered by Events’ log views, nor by other Source Types’', () => {
+    expect(offersPodEvents(opened(log('events', false)))).toBe(false)
+    expect(offersPodEvents(opened(log('events/deployments/api/api-7d9f-x2k', false)))).toBe(false)
+    expect(offersPodEvents(opened(log('shop/web/web-1'), source))).toBe(false)
+    expect(offersPodEvents(opened({ view: 'log', of: 'file', path: 'a', name: 'a', previous: false, lastNLines: 10, timestamps: false, content: '' }, source))).toBe(false)
+  })
+
+  it('reads the container’s pod’s Events, the same pod’s whichever container it is, from its log or Previous Log', () => {
+    const podEvents = { path: 'events/deployments/api/api-7d9f-x2k', name: 'api-7d9f-x2k', previous: false }
+
+    expect(logToShow(opened(container), 'podEvents')).toEqual({ ...podEvents, podEventsOf: { path: container.path, name: 'web' } })
+    expect(logToShow(opened({ ...container, previous: true }), 'podEvents')).toEqual({ ...podEvents, podEventsOf: { path: container.path, name: 'web' } })
+    const sidecar = log('deployments/api/api-7d9f-x2k/istio-proxy')
+    expect(logToShow(opened(sidecar), 'podEvents')).toEqual({ ...podEvents, podEventsOf: { path: sidecar.path, name: 'istio-proxy' } })
+    expect(logToShow(opened(log('pods/counter/counter')), 'podEvents')).toMatchObject({ path: 'events/pods/counter', name: 'counter' })
+    expect(logToShow(opened(log('cronjobs/nightly/nightly-1/nightly-1-abcde/main')), 'podEvents')).toMatchObject({
+      path: 'events/cronjobs/nightly/nightly-1/nightly-1-abcde',
+      name: 'nightly-1-abcde'
+    })
+  })
+
+  describe('once switched', () => {
+    const podEvents = { ...log('events/deployments/api/api-7d9f-x2k', false), name: 'api-7d9f-x2k', content: '[Warning] Failed pod/api-7d9f-x2k: Failed to pull image', followId: 'e' }
+    const switched = (restarted = false) => {
+      const ws = openTab(emptyWorkspace, { key: 'c', source: cluster, file: { ...container, restarted, followId: 'f' } })
+      return reopenLogTab(ws, 'c', podEvents, { path: container.path, name: 'web' })
+    }
+
+    it('shows the pod’s Events in the same tab, Followed, titled for them', () => {
+      const tab = switched().tabs[0]!
+
+      expect(switched().tabs.map((open) => open.key)).toEqual(['c'])
+      expect(logShownBy(tab)).toBe('podEvents')
+      expect(tab.file).toEqual(podEvents)
+      expect(tab.follow).toEqual({ followId: 'e', paused: false })
+      expect(tabName(tab)).toBe('api-7d9f-x2k · Events')
+      expect(offersPodEvents(tab)).toBe(true)
+    })
+
+    it('still offers the container’s Previous Log, once it has restarted', () => {
+      expect(offersPrevious(switched().tabs[0]!)).toBe(true)
+      expect(canShowPrevious(switched().tabs[0]!)).toBe(false)
+      expect(canShowPrevious(switched(true).tabs[0]!)).toBe(true)
+    })
+
+    it('keeps showing them as they’re read again, with Since or Last N lines', () => {
+      const tab = reopenLogTab(switched(), 'c', { ...podEvents, lastNLines: 100 }, { path: container.path, name: 'web' }).tabs[0]!
+
+      expect(logShownBy(tab)).toBe('podEvents')
+      expect(tab.file).toMatchObject({ lastNLines: 100 })
+    })
+
+    it('switches back to the container’s log or Previous Log', () => {
+      const tab = switched().tabs[0]!
+
+      expect(logToShow(tab, 'log')).toEqual({ path: container.path, name: 'web', previous: false })
+      expect(logToShow(tab, 'previous')).toEqual({ path: container.path, name: 'web', previous: true })
+      const back = reopenLogTab(switched(), 'c', { ...container, followId: 'g' }).tabs[0]!
+      expect(logShownBy(back)).toBe('log')
+      expect(tabName(back)).toBe('web')
+      expect(back).not.toHaveProperty('podEventsOf')
+    })
+
+    it('says why when they can’t be read, and can switch back', () => {
+      const failed = { view: 'logFailed', of: 'logStream', path: podEvents.path, name: podEvents.name, previous: false, lastNLines: 10, timestamps: false, message: 'missing permission' } as const
+      const tab = reopenLogTab(switched(true), 'c', failed, { path: container.path, name: 'web' }).tabs[0]!
+
+      expect(logShownBy(tab)).toBe('podEvents')
+      expect(tab.follow).toBeUndefined()
+      expect(tabName(tab)).toBe('api-7d9f-x2k · Events')
+      expect(logToShow(tab, 'log')).toEqual({ path: container.path, name: 'web', previous: false })
+      expect(canShowPrevious(tab)).toBe(true)
+    })
+  })
+
+  it('reads a container’s log or Previous Log as its log view switches between them', () => {
+    expect(logToShow(opened(container), 'previous')).toEqual({ path: container.path, name: 'web', previous: true })
+    expect(logToShow(opened({ ...container, previous: true }), 'log')).toEqual({ path: container.path, name: 'web', previous: false })
   })
 })
 

@@ -4,4 +4,4 @@ ADR 0007 made Previous Log, restarts, per-node status and Since capabilities of 
 
 ## Consequences
 
-The log view and Follow look at the Log Stream, not only its Source Type, before offering a Previous Log or waiting for a restart, and the contract suite checks a Log Stream that narrows them doesn't then offer them.
+The log view and Follow look at the Log Stream, not only its Source Type, before offering a Previous Log or waiting for a restart, and the contract suite checks a Log Stream that narrows them doesn't then offer them. A Kubernetes container's log view switched to its pod's Events still offers the container's Previous Log: it's the container's, not the Events'.

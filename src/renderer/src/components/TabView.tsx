@@ -95,6 +95,7 @@ export function TabView({ viewerRef, model, settings, connection, onReconnect, p
           onToggleFollow={() => model.toggleFollow(activeTab.key)}
           onTogglePause={() => model.togglePause(activeTab.key)}
           onTogglePrevious={() => model.togglePrevious(activeTab.key)}
+          onTogglePodEvents={() => model.togglePodEvents(activeTab.key)}
           onToggleTimestamps={() => model.toggleTimestamps(activeTab.key)}
           onToggleUtc={() => model.toggleUtc(activeTab.key)}
           onToggleWrap={() => model.toggleWrap(activeTab.key)}
