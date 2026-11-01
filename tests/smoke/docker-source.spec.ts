@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test'
 import { writeDockerConfig } from '../../src/main/core/docker-test-config'
 import { startTestDockerEngine, type TestDockerEngine } from '../../src/main/core/docker-test-engine'
+import { unfoldLogToolbar } from './log-toolbar'
 
 let dir: string
 let app: ElectronApplication
@@ -113,6 +114,7 @@ test('a Docker container’s log shows only the lines since a time, leaving the 
   await window.getByRole('treeitem', { name: 'api' }).click()
   const editor = window.getByTestId('editor')
   await expect(editor).toContainText('booting')
+  await unfoldLogToolbar(window)
   const since = window.locator('.log-toolbar__lines', { hasText: 'Since' })
 
   await since.locator('label.segmented__option', { hasText: '15 min' }).click()

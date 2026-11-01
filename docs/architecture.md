@@ -353,6 +353,7 @@ flowchart TB
     UT["use-tabs<br/>open tabs, opening, Follows, Large Files"]
     USet["use-settings"]
     UU["use-update-status"]
+    UF["use-toolbar-fold<br/>which log toolbar controls fold into its … menu"]
   end
 
   subgraph Pure["Pure view-model logic (unit tested)"]
@@ -361,11 +362,14 @@ flowchart TB
     TN["tree-navigation.ts"]
     LH["log-level.ts, log-entries.ts, line-highlights.ts, log-lines.ts"]
     SR["search-results.ts"]
+    TF["toolbar-fold.ts<br/>what fits a toolbar's room"]
   end
 
   SP --> US
   Tabs --> UT
   TV --> UT
+  TV --> UF
+  UF --> TF
   UT --> WS
   UT --> FF
   US --> CC["core-client.ts → window.polyscope"]

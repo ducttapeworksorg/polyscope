@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test'
+import { unfoldLogToolbar } from './log-toolbar'
 
 let dir: string
 let app: ElectronApplication
@@ -531,6 +532,7 @@ test('pick how many of a followed file’s last lines are shown, remembered for 
   const statusbar = window.locator('.statusbar')
   const typed = window.getByLabel('Number of lines')
   await expect(editor).toContainText('INFO line 50')
+  await unfoldLogToolbar(window)
   await expect(window.getByRole('radio', { name: '10K' })).toBeChecked()
 
   await typed.fill('5')
@@ -546,6 +548,7 @@ test('pick how many of a followed file’s last lines are shown, remembered for 
   await expect(editor).not.toContainText('INFO line 46')
   await expect(statusbar).toContainText('5 lines')
 
+  await unfoldLogToolbar(window)
   const wrap = window.getByRole('button', { name: 'Wrap', exact: true })
   await wrap.click()
   await expect(wrap).toHaveAttribute('aria-pressed', 'true')
@@ -557,7 +560,71 @@ test('pick how many of a followed file’s last lines are shown, remembered for 
   await window.getByRole('menuitem', { name: 'Follow' }).click()
   await expect(editor).toContainText('INFO line 51')
   await expect(editor).not.toContainText('INFO line 46')
+  await unfoldLogToolbar(window)
   await expect(typed).toHaveValue('5')
+})
+
+test('fold a narrow log view’s less used toolbar controls into its “…” menu, and use them from there by keyboard', async () => {
+  const window = await app.firstWindow()
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  await window.getByRole('treeitem', { name: 'app.log' }).click({ button: 'right' })
+  await window.getByRole('menuitem', { name: 'Follow' }).click()
+  await expect(window.getByTestId('editor')).toContainText('INFO hello from polyscope')
+
+  const toolbar = window.locator('.log-toolbar')
+  const more = window.getByRole('button', { name: 'More controls' })
+  const wrap = window.getByRole('button', { name: 'Wrap', exact: true })
+  const oneLine = (await toolbar.boundingBox())!.height
+  // With room to spare, it's as it always was.
+  await expect(wrap).toBeVisible()
+  await expect(more).toHaveCount(0)
+
+  // The narrowest it's meant for: just room for the Level Filter, Follow, Pause and "…".
+  const narrowest = 480
+  const around = await toolbar.evaluate((bar) => bar.ownerDocument.defaultView!.innerWidth - bar.getBoundingClientRect().width)
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.unmaximize())
+  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isMaximized())).toBe(false)
+  // Sized again until it takes, as a window manager may still be restoring its size from before it was maximized.
+  await expect
+    .poll(async () => {
+      await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0]!.setContentSize(width, 700), Math.round(around + narrowest))
+      return Math.round((await toolbar.boundingBox())!.width)
+    })
+    .toBe(narrowest)
+
+  await expect(more).toBeVisible()
+  // On one line, not wrapped onto two.
+  expect((await toolbar.boundingBox())!.height).toBeLessThan(oneLine * 1.5)
+  expect(await toolbar.evaluate((bar) => bar.scrollWidth <= bar.clientWidth)).toBe(true)
+  for (const kept of [window.getByRole('group', { name: 'Log Levels shown' }), window.getByRole('button', { name: 'Follow', exact: true }), window.getByRole('button', { name: 'Pause' })])
+    await expect(kept).toBeVisible()
+  await expect(wrap).toBeHidden()
+  await expect(window.getByRole('radiogroup', { name: 'Last N lines' })).toBeHidden()
+
+  await more.focus()
+  await window.keyboard.press('Enter')
+  const menu = window.getByRole('group', { name: 'More controls' })
+  await expect(more).toHaveAttribute('aria-expanded', 'true')
+  await expect(menu.getByRole('radio', { name: '10K' })).toBeChecked()
+  await expect(menu.getByRole('button', { name: 'Save a copy…' })).toBeVisible()
+  await window.keyboard.press('Tab')
+  await expect(menu.getByRole('radio', { name: '10K' })).toBeFocused()
+  await window.keyboard.press('Tab')
+  await window.keyboard.press('Tab')
+  await expect(menu.getByRole('button', { name: 'Wrap', exact: true })).toBeFocused()
+  await window.keyboard.press('Space')
+  await expect(menu.getByRole('button', { name: 'Wrap', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await window.keyboard.press('Escape')
+  await expect(menu).toBeHidden()
+  await expect(more).toBeFocused()
+
+  // With room again, it unfolds, keeping what was chosen from the menu.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.maximize())
+  await expect(wrap).toBeVisible()
+  await expect(wrap).toHaveAttribute('aria-pressed', 'true')
+  await expect(more).toHaveCount(0)
 })
 
 /** Lowers the Large File threshold and "open anyway" limit, in MB, so a test needn't write a huge file. */
@@ -614,6 +681,7 @@ test('ask for a followed file’s whole log over the Large File threshold, warne
 
   const editor = window.getByTestId('editor')
   await expect(editor).toContainText('0000015728 INFO')
+  await unfoldLogToolbar(window)
   await window.getByText('All', { exact: true }).click()
   const warning = window.getByRole('alert').filter({ hasText: 'The whole log is larger than the Large File threshold (1 MB)' })
   await expect(warning).toBeVisible()
@@ -622,6 +690,7 @@ test('ask for a followed file’s whole log over the Large File threshold, warne
   await warning.getByRole('button', { name: 'Show all anyway' }).click()
   await expect(warning).toBeHidden()
   await expect(editor).toBeVisible()
+  await unfoldLogToolbar(window)
   await expect(window.getByRole('radio', { name: 'All' })).toBeChecked()
   await expect(window.locator('.statusbar')).toContainText('15,729 lines')
 })
@@ -838,6 +907,7 @@ test('save a copy of a followed file’s lines, with those a Follow added and no
   await appendFile(logFile, 'INFO held back while paused\n')
   await window.waitForTimeout(3000)
 
+  await unfoldLogToolbar(window)
   await window.getByRole('button', { name: 'Save a copy…' }).click()
   await expect(window.getByRole('region', { name: 'Saved copies' }).getByRole('status')).toContainText(`Saved a copy of app.log to ${join(saves, 'app copy.log')}`)
   expect(await readFile(join(saves, 'app copy.log'), 'utf8')).toBe('INFO hello from polyscope\nINFO added by the Follow\n')

@@ -435,6 +435,8 @@ export const en = {
   'logView.utc.tooltip': 'Show timestamps in UTC rather than local time',
   'logView.wrap': 'Wrap',
   'logView.wrap.tooltip': 'Wrap long lines',
+  'logView.more': 'More controls',
+  'logView.more.tooltip': 'The controls there’s no room for here',
   'levelFilter.label': 'Log Levels shown',
   'levelFilter.error': 'Error',
   'levelFilter.error.tooltip': 'Show or hide the error lines, with the lines that go on from them',
