@@ -20,6 +20,11 @@ describe('LogEntries', () => {
     expect(new LogEntries(lines, ['error', 'warning', 'info', 'debug']).shown).toEqual(['Picked up JAVA_TOOL_OPTIONS', '── Container restarted ──', 'banner line'])
   })
 
+  it('treats an Event of type Normal as info', () => {
+    const events = ['[Normal] Scheduled pod/x: assigned', '[Warning] BackOff pod/x: restarting']
+    expect(new LogEntries(events, ['info']).shown).toEqual(['[Warning] BackOff pod/x: restarting'])
+  })
+
   it('counts each Log Level\'s Log Entries, not their lines, hidden or not', () => {
     expect(new LogEntries([...log, 'ERROR again'], ['error']).counts).toEqual({ error: 2, warning: 1, info: 1, debug: 1 })
   })
