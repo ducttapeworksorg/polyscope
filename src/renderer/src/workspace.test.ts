@@ -862,6 +862,14 @@ describe('Panes', () => {
     expect(panesShape(activatePane(panesOf(1, ['a', 'b'], ['c', 'd']), 0))).toEqual(['> a [b]', '  c [d]'])
   })
 
+  it('leaves the Workspace as it is when asked to activate a Pane it doesn’t have', () => {
+    const ws = panesOf(0, ['a', 'b'], ['c', 'd'])
+
+    expect(activatePane(ws, 2)).toBe(ws)
+    expect(activatePane(ws, -1)).toBe(ws)
+    expect(activatePane(open('a'), 1)).toEqual(open('a'))
+  })
+
   it('cycles through the active Pane’s tabs only', () => {
     expect(panesShape(cycleTab(panesOf(1, ['a', 'b'], ['c', 'd']), 1))).toEqual(['  a [b]', '> [c] d'])
   })
