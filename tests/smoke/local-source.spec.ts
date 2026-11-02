@@ -786,7 +786,7 @@ test('fold a narrow log view’s less used toolbar controls into its “…” m
   await expect(more).toBeFocused()
 
   // With room again, it unfolds, keeping what was chosen from the menu.
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.maximize())
+  await sizeWindow(1600)
   await expect(wrap).toBeVisible()
   await expect(wrap).toHaveAttribute('aria-pressed', 'true')
   await expect(more).toHaveCount(0)
