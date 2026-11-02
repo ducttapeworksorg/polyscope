@@ -16,7 +16,7 @@ Each tab carries its Source's Environment colour. The status bar shows the activ
 To read two things side by side, say prod's and staging's logs of one service, right-click a file or log in the sidebar and choose **Open to the Side**. It opens in a second **Pane** to the right of the first, each half the viewer's width. With two Panes open already, **Open to the Side** opens it in the other one.
 
 - Each Pane has its own tab bar, preview tab, **Minimap** and **Reload** buttons, and tab menu. **Close Others** and **Close All** act on that Pane only.
-- The Pane you last clicked or moved into is the active one. Its tab bar has a glint along the top, and the other Pane's active tab is dimmed.
+- The Pane you last clicked or moved into is the active one. Its tab bar has a glint along the top, and the other Pane's active tab is dimmed. <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>1</kbd> moves into the first Pane and <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>2</kbd> into the second; with one Pane, <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>2</kbd> does nothing.
 - Clicking a file or log in the sidebar, or <kbd>Space</kbd>/<kbd>Enter</kbd> on it, opens it in the active Pane. The status bar describes the active Pane's tab, and the tab shortcuts below act within it.
 - A file or log is open in only one tab at a time. Opening one that's open already, from the sidebar or with **Open to the Side**, brings up its tab in whichever Pane holds it.
 - To move a tab you already have open to the other Pane, choose **Move to Other Pane** in its menu, or drag it onto the other Pane's tab bar, where it lands where you drop it. With one Pane, **Move to Other Pane** opens a second Pane for it. <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>\</kbd> moves the active tab into a new Pane. A moved tab keeps what it shows, its Follow and its view settings. A preview tab stays one, and the other Pane's own preview tab is kept, as a tab of its own.
@@ -141,7 +141,7 @@ Polyscope can be used without a mouse. On macOS, use <kbd>⌘</kbd> for the shor
 | Keys | Does |
 | --- | --- |
 | <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>0</kbd> | Move to the sidebar |
-| <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>1</kbd> | Move to the viewer (its active Pane) |
+| <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>1</kbd> / <kbd>2</kbd> | Move to the viewer's first / second Pane, making it the active one |
 | <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>,</kbd> | Open Settings |
 | <kbd>↑</kbd> <kbd>↓</kbd> <kbd>Home</kbd> <kbd>End</kbd> | Move through the sidebar's rows |
 | <kbd>→</kbd> / <kbd>←</kbd> | Expand / collapse a Source, folder, Workload or pod |

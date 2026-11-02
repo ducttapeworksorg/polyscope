@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type ReactNode, type Ref } from 'react'
+import { useCallback, useRef, useState, type ReactNode } from 'react'
 import type { ConnectionState } from '@shared/core-api'
 import type { Settings } from '@shared/settings'
 import { describeFailure } from '../core-client'
@@ -12,7 +12,6 @@ import type { TabsModel } from './use-tabs'
 import { Viewer, type ShownLines } from './Viewer'
 
 interface Props {
-  viewerRef?: Ref<HTMLDivElement>
   /** From useTabs. */
   model: TabsModel
   /** The tabs of the Pane it shows, and its active tab. */
@@ -44,7 +43,7 @@ interface Props {
  * What a Pane's active tab shows: any error opening it, banners for a Disconnected Source, a pod or Log Stream that's gone or
  * a slowed Follow, its toolbar, and the viewer.
  */
-export function TabView({ viewerRef, model, tabs, activeTab, paneActive = true, settings, connection, onReconnect, panelId, onOpenAnyway, onSaveCopy, onSaveLogCopy, children }: Props) {
+export function TabView({ model, tabs, activeTab, paneActive = true, settings, connection, onReconnect, panelId, onOpenAnyway, onSaveCopy, onSaveLogCopy, children }: Props) {
   const openError = paneActive && model.openError
   const shownLines = useRef<ShownLines | null>(null)
   // How many Log Entries of each Log Level each tab's log has, as its viewer last said.
@@ -128,7 +127,6 @@ export function TabView({ viewerRef, model, tabs, activeTab, paneActive = true, 
         />
       )}
       <div
-        ref={viewerRef}
         id={panelId}
         className="viewer"
         role={activeTab ? 'tabpanel' : undefined}

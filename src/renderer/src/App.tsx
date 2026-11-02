@@ -44,13 +44,15 @@ export function App() {
   const version = useAppVersion()
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth()
   const sidebarRef = useRef<HTMLElement>(null)
-  const viewerRef = useRef<HTMLDivElement>(null)
+  const panesRef = useRef<HTMLDivElement>(null)
 
-  // Ctrl+, opens the Settings; Ctrl+0 takes the keyboard to the sidebar, and Ctrl+1 to what the active Pane's tab shows.
+  // Ctrl+, opens the Settings; Ctrl+0 takes the keyboard to the sidebar, and Ctrl+N to what the Nth Pane's tab shows.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return
-      const shortcut = { ',': () => setSettingsOpen(true), '0': focusSidebar, '1': focusViewer }[event.key]
+      // Ctrl+N with no Nth Pane isn't taken, left to whatever else might want it.
+      const pane = /^[1-9]$/.test(event.key) ? Number(event.key) - 1 : -1
+      const shortcut = paneAt(pane) ? () => focusPane(pane) : { ',': () => setSettingsOpen(true), '0': focusSidebar }[event.key]
       // A dialog keeps the keyboard until it closes.
       if (!shortcut || document.querySelector('dialog:modal')) return
       event.preventDefault()
@@ -75,10 +77,17 @@ export function App() {
     target?.focus(shownFocus)
   }
 
-  /** Focuses what the active Pane's active tab shows: the editor, a Large File's lines, or the button offered in their place. */
-  const focusViewer = () => {
+  /** The Pane at `index`, as shown; undefined if there's none. */
+  const paneAt = (index: number) => panesRef.current?.querySelectorAll<HTMLElement>(':scope > .pane')[index]
+
+  /**
+   * Makes the Pane at `index` the active one and focuses what its active tab shows: the editor, a Large File's lines, or the button offered
+   * in their place. Focusing it would make it active anyway, but a Pane may show nothing to focus.
+   */
+  const focusPane = (index: number) => {
+    setWorkspace((ws) => activatePane(ws, index))
     const shown = '.viewer__editor:not([hidden]) textarea, .large-file__scroller, .viewer__binary button'
-    viewerRef.current?.querySelector<HTMLElement>(shown)?.focus(shownFocus)
+    paneAt(index)?.querySelector('.viewer')?.querySelector<HTMLElement>(shown)?.focus(shownFocus)
   }
 
   if (!settings) return null
@@ -130,7 +139,6 @@ export function App() {
           onDropTab={(key, at) => setWorkspace((ws) => moveTab(ws, key, indexOfPane(ws, pane.id), at))}
         />
         <TabView
-          {...(active && { viewerRef })}
           model={tabsModel}
           tabs={pane.tabs}
           activeTab={paneTab}
@@ -168,7 +176,7 @@ export function App() {
       <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />
 
       <main className="workbench">
-        <div className={`workbench__panes workbench__panes--${workspace.layout.kind}`}>{workspace.panes.map(renderPane)}</div>
+        <div ref={panesRef} className={`workbench__panes workbench__panes--${workspace.layout.kind}`}>{workspace.panes.map(renderPane)}</div>
         <SaveCopies saves={saveCopies.saves} onCancel={saveCopies.cancel} onDismiss={saveCopies.dismiss} />
       </main>
 

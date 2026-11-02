@@ -89,6 +89,16 @@ test('open a file to the side, in a second Pane the status bar follows, which cl
   await expect(second).toHaveAttribute('aria-current', 'true')
   await expect(statusBar).toContainText('11 B')
 
+  // Ctrl+1 and Ctrl+2 go to the first and second Panes, making each the active one, and the status bar follows.
+  await window.keyboard.press('Control+1')
+  await expect(first.getByTestId('editor').locator('textarea')).toBeFocused()
+  await expect(first).toHaveAttribute('aria-current', 'true')
+  await expect(statusBar).toContainText('26 B')
+  await window.keyboard.press('Control+2')
+  await expect(second.getByTestId('editor').locator('textarea')).toBeFocused()
+  await expect(second).toHaveAttribute('aria-current', 'true')
+  await expect(statusBar).toContainText('11 B')
+
   // The status bar follows the Pane last focused, and the tree opens files into it.
   await first.getByTestId('editor').click()
   await expect(first).toHaveAttribute('aria-current', 'true')
