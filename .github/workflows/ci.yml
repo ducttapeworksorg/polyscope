@@ -48,7 +48,7 @@ jobs:
       - name: Smoke test (Linux)
         if: runner.os == 'Linux'
         run: |
-          xvfb-run --auto-servernum sh -c '
+          xvfb-run --auto-servernum --server-args='-screen 0 1920x1080x24' sh -c '
             fluxbox > /dev/null 2>&1 &
             for _ in $(seq 1 30); do xprop -root _NET_SUPPORTING_WM_CHECK 2> /dev/null | grep -q "window id" && break; sleep 1; done
             npm run test:smoke'

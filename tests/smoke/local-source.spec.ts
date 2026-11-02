@@ -23,6 +23,23 @@ async function addSource(window: Page, name: string, rootPath: string, environme
   await expect(dialog).toBeHidden()
 }
 
+/**
+ * Sizes the window's content to `width` by `height`, out of being maximized, as a test's screen may be narrower than the
+ * test needs. Sized again until it takes, as a window manager may still be restoring its size from before it was
+ * maximized.
+ */
+async function sizeWindow(width: number, height = 700) {
+  const body = (await app.firstWindow()).locator('body')
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.unmaximize())
+  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isMaximized())).toBe(false)
+  await expect
+    .poll(async () => {
+      await app.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0]!.setContentSize(w!, h!), [width, height])
+      return body.evaluate((element) => element.ownerDocument.defaultView!.innerWidth)
+    })
+    .toBe(width)
+}
+
 /** Clicks one of a Source's action buttons, which show once its row is pointed at. */
 async function sourceAction(window: Page, name: string, action: string) {
   const row = window.getByRole('treeitem', { name, exact: true })
@@ -167,6 +184,8 @@ test('resize Panes by their divider, reset it, and flip them one above the other
   const second = window.getByRole('region', { name: 'Pane 2' })
   const divider = window.getByRole('separator', { name: 'Resize Panes' })
   const box = async (pane: typeof first) => (await pane.boundingBox())!
+  // Room for both Panes well past their minimums, whatever the screen.
+  await sizeWindow(1600)
 
   // A new split is side by side, half each.
   expect((await box(second)).x).toBeGreaterThan((await box(first)).x)
@@ -209,14 +228,7 @@ test('resize Panes by their divider, reset it, and flip them one above the other
   expect((await box(second)).x).toBeGreaterThan((await box(first)).x)
 
   // A narrower window keeps both Panes at their minimum, the sidebar giving up its room first.
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.unmaximize())
-  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isMaximized())).toBe(false)
-  await expect
-    .poll(async () => {
-      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(1220, 700))
-      return first.evaluate((pane) => pane.ownerDocument.defaultView!.innerWidth)
-    })
-    .toBe(1220)
+  await sizeWindow(1220)
   expect(Math.round((await box(first)).width)).toBeGreaterThanOrEqual(480)
   expect(Math.round((await box(second)).width)).toBeGreaterThanOrEqual(480)
 })
@@ -731,17 +743,15 @@ test('fold a narrow log view’s less used toolbar controls into its “…” m
   const toolbar = window.locator('.log-toolbar')
   const more = window.getByRole('button', { name: 'More controls' })
   const wrap = window.getByRole('button', { name: 'Wrap', exact: true })
+  // With room to spare, whatever the screen, it's as it always was.
+  await sizeWindow(1600)
   const oneLine = (await toolbar.boundingBox())!.height
-  // With room to spare, it's as it always was.
   await expect(wrap).toBeVisible()
   await expect(more).toHaveCount(0)
 
   // The narrowest it's meant for: just room for the Level Filter, Follow, Pause and "…".
   const narrowest = 480
   const around = await toolbar.evaluate((bar) => bar.ownerDocument.defaultView!.innerWidth - bar.getBoundingClientRect().width)
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.unmaximize())
-  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isMaximized())).toBe(false)
-  // Sized again until it takes, as a window manager may still be restoring its size from before it was maximized.
   await expect
     .poll(async () => {
       await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0]!.setContentSize(width, 700), Math.round(around + narrowest))
