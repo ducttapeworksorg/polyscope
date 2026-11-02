@@ -47,7 +47,8 @@ function save(fileSource: FileSource) {
 
 describe('saving a copy', () => {
   it('reads the file a range at a time, no range larger than one read, reporting progress as it goes', async () => {
-    vi.spyOn(Date, 'now').mockImplementation(() => performance.now() * 1000) // every read far enough apart to report it
+    let clock = 0
+    vi.spyOn(Date, 'now').mockImplementation(() => (clock += largeFileReading.progressInterval)) // every read far enough apart to report it
     const size = 3 * chunk + 10
     const { fileSource, reads } = fakeSource(size)
     const { saving, statuses } = save(fileSource)
