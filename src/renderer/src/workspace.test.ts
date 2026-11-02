@@ -7,6 +7,8 @@ import {
   activateTab,
   activatePane,
   canFollowFile,
+  canMoveToNewPane,
+  canMoveToOtherPane,
   canShowPrevious,
   closeAllTabs,
   closeOtherTabs,
@@ -20,6 +22,8 @@ import {
   hiddenLevelsOf,
   markLogStreamGone,
   markPodGone,
+  moveTab,
+  moveToOtherPane,
   noteRestart,
   noteSlowed,
   offersPrevious,
@@ -740,6 +744,75 @@ describe('Panes', () => {
       const reopened = openToSide(closeTab(openToSide(open('a'), tab('b')), 'a'), tab('c'))
 
       expect(new Set(reopened.panes.map((pane) => pane.id)).size).toBe(2)
+    })
+  })
+
+  describe('moving a tab', () => {
+    it('moves a tab into a new Pane after its own, side by side, where it’s active, as is that Pane', () => {
+      const ws = moveTab(open('a', 'b', 'c'), 'b', 'newPane')
+
+      expect(panesShape(ws)).toEqual(['  a [c]', '> [b]'])
+      expect(ws.layout).toEqual(sideBySide)
+    })
+
+    it('refuses to move a Pane’s only tab into a new Pane, which would leave an empty one behind', () => {
+      const ws = open('a')
+
+      expect(moveTab(ws, 'a', 'newPane')).toBe(ws)
+      expect(canMoveToNewPane(ws, 'a')).toBe(false)
+      expect(canMoveToNewPane(open('a', 'b'), 'a')).toBe(true)
+    })
+
+    it('refuses to move a tab into a new Pane when the layout holds as many Panes as it can', () => {
+      const ws = panesOf(0, ['a', 'b'], ['c'])
+
+      expect(moveTab(ws, 'a', 'newPane')).toBe(ws)
+      expect(canMoveToNewPane(ws, 'a')).toBe(false)
+    })
+
+    it('moves a tab into the other Pane where it’s dropped, or by default right after that Pane’s active tab', () => {
+      const ws = activateTab(panesOf(0, ['a', 'b'], ['c', 'd', 'e']), 'd')
+
+      expect(panesShape(moveTab(ws, 'a', 1, 0))).toEqual(['  [b]', '> [a] c d e'])
+      expect(panesShape(moveTab(ws, 'a', 1, 3))).toEqual(['  [b]', '> c d e [a]'])
+      expect(panesShape(moveTab(ws, 'a', 1))).toEqual(['  [b]', '> c d [a] e'])
+      expect(panesShape(moveTab(ws, 'e', 0))).toEqual(['> a b [e]', '  c [d]'])
+    })
+
+    it('closes the Pane a tab leaves with no tabs, the layout shrinking to one Pane', () => {
+      const ws = moveTab(panesOf(1, ['a'], ['b', 'c']), 'a', 1, 1)
+
+      expect(panesShape(ws)).toEqual(['> b [a] c'])
+      expect(ws.layout).toEqual({ kind: 'single' })
+    })
+
+    it('moves a tab as it is: its content, Follow and view settings', () => {
+      const followed = { key: 'f', source, file: { view: 'log', of: 'file', path: 'f', name: 'f', previous: false, lastNLines: 10, timestamps: false, content: 'hi', followId: 'x' } } as const
+      const ws = toggleLevel(setLanguage(setLogView(openTab(open('a', 'b'), followed, { pinned: true }), 'f', { wrap: true, utc: true }), 'f', 'json'), 'f', 'debug')
+      const before = tabIn(ws, 'f')
+
+      const moved = moveTab(ws, 'f', 'newPane')
+
+      expect(tabIn(moved, 'f')).toEqual(before)
+      expect(followIdsOf(moved)).toEqual(new Set(['x']))
+    })
+
+    it('moves a tab to the other Pane, or, with one Pane, into a second unless that would leave the first empty', () => {
+      expect(panesShape(moveToOtherPane(panesOf(1, ['a'], ['b', 'c']), 'c'))).toEqual(['> a [c]', '  [b]'])
+      expect(panesShape(moveToOtherPane(open('a', 'b'), 'a'))).toEqual(['  [b]', '> [a]'])
+      const alone = open('a')
+      expect(moveToOtherPane(alone, 'a')).toBe(alone)
+      expect(canMoveToOtherPane(alone, 'a')).toBe(false)
+      expect(canMoveToOtherPane(open('a', 'b'), 'a')).toBe(true)
+      expect(canMoveToOtherPane(panesOf(1, ['a'], ['b']), 'a')).toBe(true)
+    })
+
+    it('keeps a moved preview tab a preview, pinning the preview tab of the Pane it moves into', () => {
+      const ws = openTab(panesOf(0, ['a', 'b'], ['c']), tab('p'))
+      const previewing = { ...ws, panes: ws.panes.with(1, openTab(open('c'), tab('q')).panes[0]!) }
+
+      expect(panesShape(moveTab(previewing, 'p', 1))).toEqual(['  a [b]', '> c q [p*]'])
+      expect(panesShape(moveTab(previewing, 'a', 1))).toEqual(['  b [p*]', '> c q* [a]'])
     })
   })
 

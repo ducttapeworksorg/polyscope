@@ -297,6 +297,7 @@ export const en = {
   'tabs.closeTab': 'Close',
   'tabs.closeOthers': 'Close Others',
   'tabs.closeAll': 'Close All',
+  'tabs.moveToOtherPane': 'Move to Other Pane',
   'tabs.reload': 'Reload',
   'tabs.minimap': 'Minimap',
   'tabs.follow': 'Follow',
