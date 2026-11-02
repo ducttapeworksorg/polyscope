@@ -212,6 +212,12 @@ body.is-resizing {
   user-select: none;
 }
 
+/* The same, resizing Panes one above the other. */
+body.is-resizing-rows {
+  cursor: row-resize;
+  user-select: none;
+}
+
 /* ---------- Controls ---------- */
 
 .icon-button {
@@ -1497,8 +1503,101 @@ body.is-resizing {
   min-height: 0;
 }
 
-.workbench__panes--sideBySide > .pane + .pane {
-  border-left: 1px solid var(--line);
+.workbench__panes--stacked {
+  flex-direction: column;
+}
+
+/*
+ * Each Pane keeps its minimum, as PaneDivider's paneMinWidth and paneMinHeight, beside the divider's 1px line, however the
+ * window's resized, so long as there's room for both; with less, they share it evenly.
+ */
+.workbench__panes--sideBySide > .pane {
+  min-width: min(480px, calc(50% - 1px));
+}
+
+.workbench__panes--stacked > .pane {
+  min-height: min(160px, calc(50% - 1px));
+}
+
+/* The line between two Panes, a wider handle along it dragged to resize them, and the flip control at its middle. */
+.pane-divider {
+  position: relative;
+  z-index: 4;
+  flex: none;
+  background: var(--line);
+}
+
+.pane-divider--sideBySide {
+  width: 1px;
+}
+
+.pane-divider--stacked {
+  height: 1px;
+}
+
+.pane-divider__handle {
+  position: absolute;
+}
+
+.pane-divider--sideBySide .pane-divider__handle {
+  inset: 0 -4px;
+  cursor: col-resize;
+}
+
+.pane-divider--stacked .pane-divider__handle {
+  inset: -4px 0;
+  cursor: row-resize;
+}
+
+.pane-divider__handle::after {
+  content: '';
+  position: absolute;
+  background: transparent;
+  transition: background-color 120ms ease-out;
+}
+
+.pane-divider--sideBySide .pane-divider__handle::after {
+  inset: 0 3px;
+}
+
+.pane-divider--stacked .pane-divider__handle::after {
+  inset: 3px 0;
+}
+
+.pane-divider__handle:hover::after {
+  background: var(--slate-600);
+  transition-delay: 250ms;
+}
+
+.pane-divider__handle.is-dragging::after,
+.pane-divider__handle:focus-visible::after {
+  background: var(--glint);
+  transition-delay: 0s;
+}
+
+.pane-divider__handle:focus-visible {
+  outline: none;
+}
+
+.pane-divider .pane-divider__flip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--slate-600);
+  border-radius: 50%;
+  background: var(--slate-800);
+  transform: translate(-50%, -50%);
+}
+
+.pane-divider .pane-divider__flip:hover {
+  background: var(--slate-700);
+}
+
+/* One above the other, the flip control shows the arrangement it turns to. */
+.pane-divider--stacked .pane-divider__flip svg {
+  transform: rotate(-90deg);
 }
 
 /* The active Pane, where what's opened goes: a glint along its tab bar. */
@@ -1507,11 +1606,11 @@ body.is-resizing {
 }
 
 /* Another Pane's active tab is shown, but quieter, its Environment colour kept. */
-.workbench__panes--sideBySide > .pane:not(.is-active) .tab.is-active {
+.workbench__panes:not(.workbench__panes--single) > .pane:not(.is-active) .tab.is-active {
   color: var(--text-dim);
 }
 
-.workbench__panes--sideBySide > .pane:not(.is-active) .tab.is-active:not(.has-environment) {
+.workbench__panes:not(.workbench__panes--single) > .pane:not(.is-active) .tab.is-active:not(.has-environment) {
   --tab-marker: var(--slate-600);
 }
 
@@ -1746,7 +1845,8 @@ body.is-resizing {
   }
 
   .tree-row__twisty svg,
-  .sidebar-resizer::after {
+  .sidebar-resizer::after,
+  .pane-divider__handle::after {
     transition: none;
   }
 }

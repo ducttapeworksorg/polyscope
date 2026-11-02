@@ -22,7 +22,9 @@ To read two things side by side, say prod's and staging's logs of one service, r
 - To move a tab you already have open to the other Pane, choose **Move to Other Pane** in its menu, or drag it onto the other Pane's tab bar, where it lands where you drop it. With one Pane, **Move to Other Pane** opens a second Pane for it. <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>\</kbd> moves the active tab into a new Pane. A moved tab keeps what it shows, its Follow and its view settings. A preview tab stays one, and the other Pane's own preview tab is kept, as a tab of its own.
 - <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>\</kbd> does nothing when the active tab is its Pane's only tab, or when there are two Panes already; nor does **Move to Other Pane** show on a lone Pane's only tab.
 - A Pane closes as soon as it has no tabs left, moved out or closed, and the other one becomes active. Disconnecting a Source leaves its tabs, and so their Panes, open.
-- Every launch starts with one Pane.
+- Drag the divider between the Panes to resize them, or double-click it to give them half each again. Each Pane stops at a minimum size that keeps its log toolbar on one line. A narrower window takes its room from the sidebar first, so the Panes keep their minimums while the window allows.
+- The round control on the divider puts the Panes one above the other, or back side by side, keeping their sizes. Right-click the divider for the same, and for **Reset Sizes**. A new second Pane always opens side by side, half each. From the keyboard, <kbd>Tab</kbd> reaches the divider, where arrows resize the Panes, and then its flip control.
+- Every launch starts with one Pane, its sizes and arrangement not kept.
 
 ## Files
 

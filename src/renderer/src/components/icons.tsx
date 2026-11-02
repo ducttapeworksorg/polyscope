@@ -161,6 +161,14 @@ export const MinimapIcon = () => (
   </svg>
 )
 
+/** Two Panes turning from side by side to one above the other: a split square and a curved arrow. */
+export const FlipLayoutIcon = () => (
+  <svg {...base}>
+    <rect x="2" y="2" width="8.5" height="8.5" rx="1.25" />
+    <path d="M6.25 2v8.5M13.5 6.5v3.5a3.5 3.5 0 0 1-3.5 3.5H6.5M8.25 11.75l-1.75 1.75 1.75 1.75" />
+  </svg>
+)
+
 export const PlusIcon = () => (
   <svg {...base}>
     <path d="M8 3v10M3 8h10" />

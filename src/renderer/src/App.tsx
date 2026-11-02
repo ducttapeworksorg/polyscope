@@ -1,8 +1,9 @@
-import { useEffect, useRef, type CSSProperties } from 'react'
+import { Fragment, useEffect, useRef, type CSSProperties } from 'react'
 import type { ConnectionState } from '@shared/core-api'
 import { ApertureMark } from './components/icons'
 import { SaveCopies } from './components/SaveCopies'
 import { SidebarResizer, sidebarMinWidth, useSidebarWidth, workbenchMinWidth } from './components/SidebarResizer'
+import { PaneDivider, panesMinWidth } from './components/PaneDivider'
 import { SourcesPane } from './components/SourcesPane'
 import { StatusBar } from './components/StatusBar'
 import { Tabs } from './components/Tabs'
@@ -22,9 +23,12 @@ import {
   closeOtherTabs,
   closeTab,
   cycleTab,
+  flipLayout,
   moveTab,
   moveToOtherPane,
   pinTab,
+  resetPaneSizes,
+  resizePanes,
   setLanguage,
   type Pane,
   type Workspace
@@ -94,8 +98,9 @@ export function App() {
 
   const activeEnvironment = activeTab ? environmentOf(environments, activeTab.source) : undefined
 
-  // A narrower window takes its room from the sidebar first, down to the sidebar's own minimum.
-  const layout = { '--sidebar-width': `max(${sidebarMinWidth}px, min(${sidebarWidth}px, 100vw - ${workbenchMinWidth}px))` } as CSSProperties
+  // A narrower window takes its room from the sidebar first, down to the sidebar's own minimum, two Panes keeping theirs.
+  const workbenchMin = panesMinWidth(workspace.layout.kind) ?? workbenchMinWidth
+  const layout = { '--sidebar-width': `max(${sidebarMinWidth}px, min(${sidebarWidth}px, 100vw - ${workbenchMin}px))` } as CSSProperties
 
   const severalPanes = workspace.panes.length > 1
 
@@ -109,7 +114,6 @@ export function App() {
     const share = workspace.layout.kind === 'single' ? 1 : index === 0 ? workspace.layout.ratio : 1 - workspace.layout.ratio
     return (
       <section
-        key={pane.id}
         className={`pane ${severalPanes && active ? 'is-active' : ''}`}
         style={{ flexGrow: share }}
         aria-label={severalPanes ? t('pane.label', { number: index + 1 }) : undefined}
@@ -173,10 +177,25 @@ export function App() {
         onFollowFile={(source, node) => void tabsModel.followFile(source, node)}
         onSaveFile={(source, node) => void saveCopy(source, node.path, node.name)}
       />
-      <SidebarResizer width={sidebarWidth} onResize={setSidebarWidth} />
+      <SidebarResizer width={sidebarWidth} workbenchMin={workbenchMin} onResize={setSidebarWidth} />
 
       <main className="workbench">
-        <div ref={panesRef} className={`workbench__panes workbench__panes--${workspace.layout.kind}`}>{workspace.panes.map(renderPane)}</div>
+        <div ref={panesRef} className={`workbench__panes workbench__panes--${workspace.layout.kind}`}>
+          {workspace.panes.map((pane, index) => (
+            <Fragment key={pane.id}>
+              {index > 0 && workspace.layout.kind !== 'single' && (
+                <PaneDivider
+                  kind={workspace.layout.kind}
+                  ratio={workspace.layout.ratio}
+                  onResize={(ratio, room) => setWorkspace((ws) => resizePanes(ws, ratio, room))}
+                  onReset={() => setWorkspace(resetPaneSizes)}
+                  onFlip={() => setWorkspace(flipLayout)}
+                />
+              )}
+              {renderPane(pane, index)}
+            </Fragment>
+          ))}
+        </div>
         <SaveCopies saves={saveCopies.saves} onCancel={saveCopies.cancel} onDismiss={saveCopies.dismiss} />
       </main>
 

@@ -341,15 +341,46 @@ export function openToSide(ws: Workspace, tab: Pick<OpenTab, 'key' | 'source' | 
   return openInPane(withNewPane(ws, next), next, tab, pinned)
 }
 
+/** How a lone Pane is split in two: side by side, half each, however the last split was left. */
+const newSplit: Layout = { kind: 'sideBySide', ratio: 0.5 }
+
 /** Adds an empty Pane at `index`, side by side with the other if it was alone, with an id none of the others has. */
 function withNewPane(ws: Workspace, index: number): Workspace {
   const id = Math.max(...ws.panes.map((pane) => pane.id)) + 1
   return {
     panes: ws.panes.toSpliced(index, 0, { ...emptyPane, id }),
     activePane: ws.activePane >= index ? ws.activePane + 1 : ws.activePane,
-    layout: ws.layout.kind === 'single' ? { kind: 'sideBySide', ratio: 0.5 } : ws.layout
+    layout: ws.layout.kind === 'single' ? newSplit : ws.layout
   }
 }
+
+/** Flips two Panes side by side to one above the other, and back, keeping their ratio; a lone Pane has nothing to flip. */
+export function flipLayout(ws: Workspace): Workspace {
+  const { layout } = ws
+  if (layout.kind === 'single') return ws
+  return { ...ws, layout: { kind: layout.kind === 'sideBySide' ? 'stacked' : 'sideBySide', ratio: layout.ratio } }
+}
+
+/** The room two Panes share along their split, in pixels, and the least either may have of it. */
+export interface PaneRoom {
+  size: number
+  min: number
+}
+
+/** Gives the first of two Panes `ratio` of the room; a lone Pane has it all already. */
+const withRatio = (ws: Workspace, ratio: number): Workspace => (ws.layout.kind === 'single' ? ws : { ...ws, layout: { ...ws.layout, ratio } })
+
+/**
+ * Gives the first of two Panes `ratio` of the room, stopping where either would be smaller than its minimum; with too
+ * little room for both minimums, they share it evenly.
+ */
+export function resizePanes(ws: Workspace, ratio: number, { size, min }: PaneRoom): Workspace {
+  const least = min / size
+  return withRatio(ws, least > 0.5 ? 0.5 : Math.min(1 - least, Math.max(least, ratio)))
+}
+
+/** Gives two Panes half the room each. */
+export const resetPaneSizes = (ws: Workspace): Workspace => withRatio(ws, 0.5)
 
 /** A Pane without one of its tabs; if it was active, the tab taking its place (or, at the end, the one before) becomes active. */
 function paneWithout(pane: Pane, key: string): Pane {

@@ -15,6 +15,9 @@ import {
   closeTab,
   cycleTab,
   emptyWorkspace,
+  flipLayout,
+  resetPaneSizes,
+  resizePanes,
   endFollow,
   followIdsOf,
   largeFileIdsOf,
@@ -901,6 +904,62 @@ describe('Panes', () => {
     it('marks its pod or Log Stream gone', () => {
       expect(tabIn(markPodGone(panesOf(1, ['a'], ['c']), 'a', 'web-1'), 'a')).toMatchObject({ podGone: 'web-1' })
       expect(tabIn(markLogStreamGone(panesOf(1, ['a'], ['c']), 'a'), 'a')).toMatchObject({ logStreamGone: true })
+    })
+  })
+
+  describe('the layout', () => {
+    it('flips side by side to one above the other and back, keeping the Panes, their tabs and the ratio', () => {
+      const ws = { ...panesOf(1, ['a', 'b'], ['c']), layout: { kind: 'sideBySide', ratio: 0.3 } } satisfies Workspace
+
+      const stacked = flipLayout(ws)
+      expect(stacked.layout).toEqual({ kind: 'stacked', ratio: 0.3 })
+      expect(panesShape(stacked)).toEqual(panesShape(ws))
+      expect(flipLayout(stacked)).toEqual(ws)
+    })
+
+    it('leaves a lone Pane’s layout as it is', () => {
+      const ws = open('a')
+
+      expect(flipLayout(ws)).toBe(ws)
+    })
+
+    describe('resizing', () => {
+      const room = { size: 1000, min: 200 }
+
+      it('sets the first Pane’s share of the room', () => {
+        expect(resizePanes(panesOf(0, ['a'], ['b']), 0.7, room).layout).toEqual({ kind: 'sideBySide', ratio: 0.7 })
+      })
+
+      it('stops where either Pane would be smaller than its minimum', () => {
+        expect(resizePanes(panesOf(0, ['a'], ['b']), 0.1, room).layout).toEqual({ kind: 'sideBySide', ratio: 0.2 })
+        expect(resizePanes(panesOf(0, ['a'], ['b']), 0.95, room).layout).toEqual({ kind: 'sideBySide', ratio: 0.8 })
+      })
+
+      it('splits the room evenly when it’s too small for both minimums', () => {
+        expect(resizePanes(panesOf(0, ['a'], ['b']), 0.7, { size: 300, min: 200 }).layout).toEqual({ kind: 'sideBySide', ratio: 0.5 })
+      })
+
+      it('resets to 50/50, side by side or one above the other', () => {
+        const stacked = flipLayout(resizePanes(panesOf(0, ['a'], ['b']), 0.7, room))
+
+        expect(resetPaneSizes(stacked).layout).toEqual({ kind: 'stacked', ratio: 0.5 })
+      })
+
+      it('leaves a lone Pane’s layout as it is', () => {
+        const ws = open('a')
+
+        expect(resizePanes(ws, 0.7, room)).toBe(ws)
+        expect(resetPaneSizes(ws)).toBe(ws)
+      })
+    })
+
+    it('starts a new split side by side at 50/50, however the last was left', () => {
+      const last = flipLayout(resizePanes(openToSide(open('a'), tab('b')), 0.7, { size: 1000, min: 200 }))
+      const alone = closeTab(last, 'b')
+
+      expect(alone.layout).toEqual({ kind: 'single' })
+      expect(openToSide(alone, tab('c')).layout).toEqual(sideBySide)
+      expect(moveTab(open('a', 'b'), 'b', 'newPane').layout).toEqual(sideBySide)
     })
   })
 
