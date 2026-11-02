@@ -154,6 +154,73 @@ test('move tabs between Panes with Ctrl+\\, by dragging them, and from their men
   await expect(second.getByRole('tab')).toHaveText(['other.log'])
 })
 
+test('resize Panes by their divider, reset it, and flip them one above the other and back', async () => {
+  const window = await app.firstWindow()
+  await writeFile(join(dir, 'root', 'logs', 'other.log'), 'INFO other\n')
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  await window.getByRole('treeitem', { name: /^app\.log/ }).click()
+  await window.getByRole('treeitem', { name: /^other\.log/ }).click({ button: 'right' })
+  await window.getByRole('menu', { name: 'Actions for other.log' }).getByRole('menuitem', { name: 'Open to the Side' }).click()
+  const first = window.getByRole('region', { name: 'Pane 1' })
+  const second = window.getByRole('region', { name: 'Pane 2' })
+  const divider = window.getByRole('separator', { name: 'Resize Panes' })
+  const box = async (pane: typeof first) => (await pane.boundingBox())!
+
+  // A new split is side by side, half each.
+  expect((await box(second)).x).toBeGreaterThan((await box(first)).x)
+  expect((await box(first)).width).toBeCloseTo((await box(second)).width, -1)
+
+  // Dragging the divider resizes the Panes; dragged far past the first's minimum, it stops there.
+  const line = (await divider.boundingBox())!
+  // Taken above the flip control, at its middle.
+  const middle = { x: line.x + line.width / 2, y: line.y + line.height / 4 }
+  await window.mouse.move(middle.x, middle.y)
+  await window.mouse.down()
+  await window.mouse.move(middle.x - 2000, middle.y, { steps: 5 })
+  await window.mouse.up()
+  expect(Math.round((await box(first)).width)).toBe(480)
+  expect((await box(second)).width).toBeGreaterThan(480)
+
+  // Double-clicking it shares the room evenly again.
+  // Along the divider, away from the flip control at its middle.
+  const offControl = { x: 4, y: 40 }
+  await divider.dblclick({ position: offControl })
+  expect((await box(first)).width).toBeCloseTo((await box(second)).width, -1)
+
+  // The flip control puts them one above the other, keeping their ratio, and its menu puts them back.
+  await divider.focus()
+  await window.keyboard.press('ArrowLeft')
+  await expect(divider).toHaveAttribute('aria-valuenow', '45')
+  await window.keyboard.press('Tab')
+  const flip = window.getByRole('button', { name: 'Put One Above the Other' })
+  await expect(flip).toBeFocused()
+  await window.keyboard.press('Enter')
+  await expect(divider).toHaveAttribute('aria-orientation', 'horizontal')
+  await expect(divider).toHaveAttribute('aria-valuenow', '45')
+  expect((await box(second)).y).toBeGreaterThan((await box(first)).y)
+  expect((await box(first)).x).toBeCloseTo((await box(second)).x, 0)
+  expect((await box(first)).height / ((await box(first)).height + (await box(second)).height)).toBeCloseTo(0.45, 1)
+  // One above the other, along the divider runs across.
+  await divider.click({ button: 'right', position: { x: offControl.y, y: offControl.x } })
+  await window.getByRole('menu', { name: 'Pane layout' }).getByRole('menuitem', { name: 'Put Side by Side' }).click()
+  await expect(divider).toHaveAttribute('aria-orientation', 'vertical')
+  expect((await box(second)).x).toBeGreaterThan((await box(first)).x)
+
+  // A narrower window keeps both Panes at their minimum, the sidebar giving up its room first.
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.unmaximize())
+  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.isMaximized())).toBe(false)
+  await expect
+    .poll(async () => {
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setContentSize(1220, 700))
+      return first.evaluate((pane) => pane.ownerDocument.defaultView!.innerWidth)
+    })
+    .toBe(1220)
+  expect(Math.round((await box(first)).width)).toBeGreaterThanOrEqual(480)
+  expect(Math.round((await box(second)).width)).toBeGreaterThanOrEqual(480)
+})
+
 test('filter a log by Log Level, hiding an error with its stack trace and keeping line numbers', async () => {
   const window = await app.firstWindow()
   const log = ['INFO starting', 'ERROR request failed', '    at Handler.handle(Handler.java:42)', 'WARN retrying', 'DEBUG attempt 2']

@@ -292,6 +292,11 @@ export const en = {
   'saveCopy.dismiss': 'Dismiss',
 
   'pane.label': 'Pane {number}',
+  'panes.resize': 'Resize Panes',
+  'panes.menuLabel': 'Pane layout',
+  'panes.flip.stacked': 'Put One Above the Other',
+  'panes.flip.sideBySide': 'Put Side by Side',
+  'panes.reset': 'Reset Sizes',
   'tabs.label': 'Open files and logs',
   'tabs.close': 'Close {name}',
   'tabs.closeTab': 'Close',

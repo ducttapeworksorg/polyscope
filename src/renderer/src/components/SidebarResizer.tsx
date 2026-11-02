@@ -4,15 +4,15 @@ import { t } from '../i18n'
 export const defaultSidebarWidth = 288
 export const sidebarMinWidth = 240
 const maxWidth = 640
-/** The workbench keeps at least this much of the window, however wide the sidebar is dragged. */
+/** The workbench keeps at least this much of the window, however wide the sidebar is dragged, more with Panes side by side. */
 export const workbenchMinWidth = 360
 const keyStep = 16
 
 const storageKey = 'polyscope.sidebarWidth'
 
-/** The widest the sidebar may be in the window as it is now. */
-const widest = () => Math.max(sidebarMinWidth, Math.min(maxWidth, window.innerWidth - workbenchMinWidth))
-const clampWidth = (width: number) => Math.round(Math.min(widest(), Math.max(sidebarMinWidth, width)))
+/** The widest the sidebar may be in the window as it is now, leaving the workbench `workbenchMin`. */
+const widest = (workbenchMin: number) => Math.max(sidebarMinWidth, Math.min(maxWidth, window.innerWidth - workbenchMin))
+const clampWidth = (width: number, workbenchMin: number) => Math.round(Math.min(widest(workbenchMin), Math.max(sidebarMinWidth, width)))
 
 /** The sidebar's width as the user last left it, remembered on this machine. */
 export function useSidebarWidth() {
@@ -29,6 +29,8 @@ export function useSidebarWidth() {
 
 interface Props {
   width: number
+  /** The least the workbench keeps of the window. */
+  workbenchMin: number
   onResize(width: number): void
 }
 
@@ -36,7 +38,7 @@ interface Props {
  * The sidebar's right edge, dragged to resize it. From the keyboard, arrows step it and Home/End
  * jump to its limits; a double-click puts it back to its default width.
  */
-export function SidebarResizer({ width, onResize }: Props) {
+export function SidebarResizer({ width, workbenchMin, onResize }: Props) {
   const [drag, setDrag] = useState<{ startX: number; startWidth: number } | null>(null)
 
   const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
@@ -48,7 +50,7 @@ export function SidebarResizer({ width, onResize }: Props) {
   }
 
   const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
-    if (drag) onResize(clampWidth(drag.startWidth + event.clientX - drag.startX))
+    if (drag) onResize(clampWidth(drag.startWidth + event.clientX - drag.startX, workbenchMin))
   }
 
   const endDrag = () => {
@@ -60,7 +62,7 @@ export function SidebarResizer({ width, onResize }: Props) {
     const next = { ArrowLeft: width - keyStep, ArrowRight: width + keyStep, Home: sidebarMinWidth, End: maxWidth }[event.key]
     if (next === undefined) return
     event.preventDefault()
-    onResize(clampWidth(next))
+    onResize(clampWidth(next, workbenchMin))
   }
 
   return (
@@ -69,9 +71,9 @@ export function SidebarResizer({ width, onResize }: Props) {
       role="separator"
       aria-orientation="vertical"
       aria-label={t('sidebar.resize')}
-      aria-valuenow={Math.min(width, widest())}
+      aria-valuenow={Math.min(width, widest(workbenchMin))}
       aria-valuemin={sidebarMinWidth}
-      aria-valuemax={widest()}
+      aria-valuemax={widest(workbenchMin)}
       tabIndex={0}
       title={t('sidebar.resize')}
       onPointerDown={onPointerDown}
