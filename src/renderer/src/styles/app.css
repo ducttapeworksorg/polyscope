@@ -1578,6 +1578,15 @@ body.is-resizing {
   text-overflow: ellipsis;
 }
 
+/* Where a tab dragged over from another Pane would land: before this tab, or after the last. */
+.tab.is-drop-before {
+  box-shadow: inset 2px 0 0 var(--glint);
+}
+
+.tabs__list.is-drop-end > .tab:last-child {
+  box-shadow: inset -2px 0 0 var(--glint);
+}
+
 /* The preview tab: the next file opened replaces it, until it's pinned. */
 .tab.is-preview .tab__label {
   font-style: italic;

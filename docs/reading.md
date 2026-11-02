@@ -19,7 +19,9 @@ To read two things side by side, say prod's and staging's logs of one service, r
 - The Pane you last clicked or moved into is the active one. Its tab bar has a glint along the top, and the other Pane's active tab is dimmed.
 - Clicking a file or log in the sidebar, or <kbd>Space</kbd>/<kbd>Enter</kbd> on it, opens it in the active Pane. The status bar describes the active Pane's tab, and the tab shortcuts below act within it.
 - A file or log is open in only one tab at a time. Opening one that's open already, from the sidebar or with **Open to the Side**, brings up its tab in whichever Pane holds it.
-- A Pane closes as soon as it has no tabs left, and the other one becomes active. Disconnecting a Source leaves its tabs, and so their Panes, open.
+- To move a tab you already have open to the other Pane, choose **Move to Other Pane** in its menu, or drag it onto the other Pane's tab bar, where it lands where you drop it. With one Pane, **Move to Other Pane** opens a second Pane for it. <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>\</kbd> moves the active tab into a new Pane. A moved tab keeps what it shows, its Follow and its view settings. A preview tab stays one, and the other Pane's own preview tab is kept, as a tab of its own.
+- <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>\</kbd> does nothing when the active tab is its Pane's only tab, or when there are two Panes already; nor does **Move to Other Pane** show on a lone Pane's only tab.
+- A Pane closes as soon as it has no tabs left, moved out or closed, and the other one becomes active. Disconnecting a Source leaves its tabs, and so their Panes, open.
 - Every launch starts with one Pane.
 
 ## Files
@@ -148,3 +150,4 @@ Polyscope can be used without a mouse. On macOS, use <kbd>⌘</kbd> for the shor
 | <kbd>Enter</kbd> | Open it in a tab of its own |
 | <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> | Next / previous tab in the active Pane (also <kbd>Ctrl</kbd>+<kbd>PageDown</kbd> / <kbd>PageUp</kbd>) |
 | <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>W</kbd> or <kbd>Ctrl</kbd>+<kbd>F4</kbd> | Close the active Pane's tab |
+| <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>\</kbd> | Move the active tab into a new Pane |

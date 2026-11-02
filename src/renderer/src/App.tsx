@@ -13,7 +13,22 @@ import { useSaveCopies } from './components/use-save-copies'
 import { useAppVersion, useUpdateStatus } from './components/use-update-status'
 import { environmentOf } from './environments'
 import { t } from './i18n'
-import { activatePane, activateTab, activeTabIn, closeAllTabs, closeOtherTabs, closeTab, cycleTab, pinTab, setLanguage, type Pane, type Workspace } from './workspace'
+import {
+  activatePane,
+  activateTab,
+  activeTabIn,
+  canMoveToOtherPane,
+  closeAllTabs,
+  closeOtherTabs,
+  closeTab,
+  cycleTab,
+  moveTab,
+  moveToOtherPane,
+  pinTab,
+  setLanguage,
+  type Pane,
+  type Workspace
+} from './workspace'
 
 /** Where the Pane with `id` now is, as Panes before it may have closed; -1 if it's closed itself. */
 const indexOfPane = (ws: Workspace, id: number) => ws.panes.findIndex((pane) => pane.id === id)
@@ -109,6 +124,10 @@ export function App() {
           minimap={settings.showMinimap}
           onToggleMinimap={() => void sourcesModel.toggleMinimap()}
           panelId={panelId}
+          onMoveToOtherPane={(key) => setWorkspace((ws) => moveToOtherPane(ws, key))}
+          canMoveToOtherPane={(key) => canMoveToOtherPane(workspace, key)}
+          onMoveToNewPane={(key) => setWorkspace((ws) => moveTab(ws, key, 'newPane'))}
+          onDropTab={(key, at) => setWorkspace((ws) => moveTab(ws, key, indexOfPane(ws, pane.id), at))}
         />
         <TabView
           {...(active && { viewerRef })}

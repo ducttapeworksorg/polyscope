@@ -338,10 +338,64 @@ export function openToSide(ws: Workspace, tab: Pick<OpenTab, 'key' | 'source' | 
   if (!activePaneOf(ws).tabs.length) return openInPane(ws, ws.activePane, tab, pinned)
   const next = ws.activePane + 1
   if (ws.panes.length >= maxPanes) return openInPane(ws, next % ws.panes.length, tab, pinned)
+  return openInPane(withNewPane(ws, next), next, tab, pinned)
+}
+
+/** Adds an empty Pane at `index`, side by side with the other if it was alone, with an id none of the others has. */
+function withNewPane(ws: Workspace, index: number): Workspace {
   const id = Math.max(...ws.panes.map((pane) => pane.id)) + 1
-  const layout: Layout = ws.layout.kind === 'single' ? { kind: 'sideBySide', ratio: 0.5 } : ws.layout
-  const added: Workspace = { panes: ws.panes.toSpliced(next, 0, { ...emptyPane, id }), activePane: next, layout }
-  return openInPane(added, next, tab, pinned)
+  return {
+    panes: ws.panes.toSpliced(index, 0, { ...emptyPane, id }),
+    activePane: ws.activePane >= index ? ws.activePane + 1 : ws.activePane,
+    layout: ws.layout.kind === 'single' ? { kind: 'sideBySide', ratio: 0.5 } : ws.layout
+  }
+}
+
+/** A Pane without one of its tabs; if it was active, the tab taking its place (or, at the end, the one before) becomes active. */
+function paneWithout(pane: Pane, key: string): Pane {
+  const at = pane.tabs.findIndex((open) => open.key === key)
+  const tabs = pane.tabs.toSpliced(at, 1)
+  const activeKey = key !== pane.activeKey ? pane.activeKey : (tabs[Math.min(at, tabs.length - 1)]?.key ?? null)
+  return { ...pane, tabs, activeKey }
+}
+
+/** Where a tab is moved to: the Pane at an index, or a new Pane right after its own. */
+export type MoveTarget = number | 'newPane'
+
+/**
+ * Moves a tab, as it is, to another Pane: at `at` among its tabs or, by default, right after its active tab. There it's
+ * active, and that Pane is too; a Pane it leaves with no tabs closes. A preview tab moved in pins the Pane's own, which
+ * keeps one preview tab. Moving a tab into a new Pane is refused, giving the same Workspace, when it's its Pane's only
+ * tab, which would leave an empty Pane behind, or when the layout has no room for another Pane.
+ */
+export function moveTab(ws: Workspace, key: string, to: MoveTarget, at?: number): Workspace {
+  const from = paneIndexOf(ws, key)
+  if (from < 0 || to === from) return ws
+  if (to === 'newPane') return canMoveToNewPane(ws, key) ? moveTab(withNewPane(ws, from + 1), key, from + 1) : ws
+  const target = ws.panes[to]
+  if (!target) return ws
+  const moved = ws.panes[from]!.tabs.find((open) => open.key === key)!
+  const kept = moved.pinned ? target.tabs : target.tabs.map((open) => (open.pinned ? open : { ...open, pinned: true }))
+  const after = target.tabs.findIndex((open) => open.key === target.activeKey) + 1
+  const tabs = kept.toSpliced(Math.min(at ?? (after || kept.length), kept.length), 0, moved)
+  const left = withPane(ws, from, paneWithout(ws.panes[from]!, key))
+  return withoutEmptyPanes({ ...withPane(left, to, { ...target, tabs, activeKey: key }), activePane: to })
+}
+
+/** The Pane a tab's Move to Other Pane moves it to: the next, wrapping around, or, with one Pane, a new one. */
+const otherPaneOf = (ws: Workspace, key: string): MoveTarget => (ws.panes.length > 1 ? (paneIndexOf(ws, key) + 1) % ws.panes.length : 'newPane')
+
+/** Moves a tab to the other Pane; with one Pane, into a second, unless that would leave the first empty. */
+export const moveToOtherPane = (ws: Workspace, key: string): Workspace => moveTab(ws, key, otherPaneOf(ws, key))
+
+/** Whether `moveToOtherPane` would move a tab. */
+export const canMoveToOtherPane = (ws: Workspace, key: string): boolean =>
+  paneIndexOf(ws, key) >= 0 && (ws.panes.length > 1 || canMoveToNewPane(ws, key))
+
+/** Whether a tab can move into a new Pane: it isn't its Pane's only tab, and the layout has room for another Pane. */
+export function canMoveToNewPane(ws: Workspace, key: string): boolean {
+  const from = paneIndexOf(ws, key)
+  return from >= 0 && ws.panes[from]!.tabs.length > 1 && ws.panes.length < maxPanes
 }
 
 /** Activates a tab, and the Pane holding it. */
@@ -372,11 +426,7 @@ export const pinTab = (ws: Workspace, key: string): Workspace => updateTab(ws, k
 export function closeTab(ws: Workspace, key: string): Workspace {
   const index = paneIndexOf(ws, key)
   if (index < 0) return ws
-  const pane = ws.panes[index]!
-  const at = pane.tabs.findIndex((open) => open.key === key)
-  const tabs = pane.tabs.toSpliced(at, 1)
-  const activeKey = key !== pane.activeKey ? pane.activeKey : (tabs[Math.min(at, tabs.length - 1)]?.key ?? null)
-  return withoutEmptyPanes(withPane(ws, index, { ...pane, tabs, activeKey }))
+  return withoutEmptyPanes(withPane(ws, index, paneWithout(ws.panes[index]!, key)))
 }
 
 /** Closes every tab but one in its Pane, which it's left active in, the Pane becoming active too. */

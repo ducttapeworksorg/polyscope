@@ -110,6 +110,40 @@ test('open a file to the side, in a second Pane the status bar follows, which cl
   await expect(statusBar).toContainText('20 B')
 })
 
+test('move tabs between Panes with Ctrl+\\, by dragging them, and from their menu', async () => {
+  const window = await app.firstWindow()
+  await writeFile(join(dir, 'root', 'logs', 'other.log'), 'INFO other\n')
+  await addSource(window, 'Fixture', join(dir, 'root'))
+  await window.getByRole('treeitem', { name: 'Fixture' }).click()
+  await window.getByRole('treeitem', { name: 'logs' }).click()
+  await window.getByRole('treeitem', { name: /^app\.log/ }).click()
+  await window.getByRole('tab', { name: 'app.log' }).dblclick()
+  await window.getByRole('treeitem', { name: /^other\.log/ }).click()
+  const first = window.getByRole('region', { name: 'Pane 1' })
+  const second = window.getByRole('region', { name: 'Pane 2' })
+
+  // Ctrl+\ moves the active tab into a new Pane, which becomes the active one.
+  await window.getByTestId('editor').click()
+  await window.keyboard.press('Control+Backslash')
+  await expect(first.getByRole('tab')).toHaveText(['app.log'])
+  await expect(second.getByRole('tab', { name: 'other.log' })).toHaveAttribute('aria-selected', 'true')
+  await expect(second.getByRole('tabpanel', { name: 'other.log' })).toContainText('INFO other')
+  await expect(second).toHaveAttribute('aria-current', 'true')
+
+  // Dragging the first Pane's last tab onto the second's tab bar moves it there, and the first Pane closes.
+  await first.getByRole('tab', { name: 'app.log' }).dragTo(second.getByRole('tablist'))
+  await expect(window.getByRole('region', { name: /^Pane/ })).toHaveCount(0)
+  await expect(window.getByRole('tab')).toHaveText(['other.log', 'app.log'])
+  await expect(window.getByRole('tab', { name: 'app.log' })).toHaveAttribute('aria-selected', 'true')
+  await expect(window.getByRole('tabpanel', { name: 'app.log' })).toContainText('INFO hello from polyscope')
+
+  // Move to Other Pane, with one Pane, opens a second for the tab.
+  await window.getByRole('tab', { name: 'other.log' }).click({ button: 'right' })
+  await window.getByRole('menu', { name: 'Actions for other.log' }).getByRole('menuitem', { name: 'Move to Other Pane' }).click()
+  await expect(first.getByRole('tab')).toHaveText(['app.log'])
+  await expect(second.getByRole('tab')).toHaveText(['other.log'])
+})
+
 test('filter a log by Log Level, hiding an error with its stack trace and keeping line numbers', async () => {
   const window = await app.firstWindow()
   const log = ['INFO starting', 'ERROR request failed', '    at Handler.handle(Handler.java:42)', 'WARN retrying', 'DEBUG attempt 2']
